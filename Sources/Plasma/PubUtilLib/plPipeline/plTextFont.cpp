@@ -74,6 +74,8 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #       include <CoreGraphics/CoreGraphics.h>
 #       include <CoreText/CoreText.h>
 #   endif
+#elif defined(__EMSCRIPTEN__)
+#   include "plFileSystem.h"
 #elif defined(HS_BUILD_FOR_UNIX)
 #   include <fontconfig/fontconfig.h>
 #endif
@@ -181,6 +183,28 @@ uint16_t  *plTextFont::IInitFontTexture()
     
     fTextureWidth *= 2;
     fTextureHeight *= 2;
+#elif defined(__EMSCRIPTEN__)
+    // A browser has no system font database (no fontconfig): the face is looked up by
+    // name as a file in the virtual file system's /fonts directory ("<face>.ttf", then
+    // "<face>.otf"). A missing font fails like an unmatched fontconfig pattern.
+    plFileName fontPath;
+    for (const char* ext : {".ttf", ".otf"}) {
+        plFileName candidate = plFileName::Join("/fonts", fFace + ext);
+        if (plFileInfo(candidate).Exists()) {
+            fontPath = candidate;
+            break;
+        }
+    }
+    if (!fontPath.IsValid()) {
+        ftError = FT_Done_FreeType(library);
+        ASSERT(ftError == FT_Err_Ok);
+        return nullptr;
+    }
+
+    ftError = FT_New_Face(library, fontPath.AsString().c_str(), 0, &face);
+    ASSERT(ftError == FT_Err_Ok);
+
+    FT_UInt freeTypeDPI = 96;
 #else
     FcPattern* pattern = FcNameParse((FcChar8*)fFace.c_str());
     FcConfigSubstitute(nullptr, pattern, FcMatchPattern);

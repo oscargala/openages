@@ -80,7 +80,7 @@ target_link_libraries(plPipeline
         "$<$<AND:$<PLATFORM_ID:Darwin>,$<VERSION_LESS:${CMAKE_OSX_DEPLOYMENT_TARGET},10.9>>:-framework ApplicationServices>"
         "$<$<AND:$<PLATFORM_ID:Darwin>,$<VERSION_GREATER_EQUAL:${CMAKE_OSX_DEPLOYMENT_TARGET},10.9>>:-framework CoreGraphics>"
         "$<$<AND:$<PLATFORM_ID:Darwin>,$<VERSION_GREATER_EQUAL:${CMAKE_OSX_DEPLOYMENT_TARGET},10.9>>:-framework CoreText>"
-        $<$<AND:$<NOT:$<PLATFORM_ID:Windows>>,$<NOT:$<PLATFORM_ID:Darwin>>>:Fontconfig::Fontconfig>
+        $<$<AND:$<NOT:$<PLATFORM_ID:Windows>>,$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Emscripten>>>:Fontconfig::Fontconfig>
     INTERFACE
         pnFactory
 )

@@ -153,6 +153,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #ifdef PLASMA_PIPELINE_METAL
     #include "pfMetalPipeline/plMetalPipeline.h"
 #endif
+#ifdef PLASMA_PIPELINE_WGPU
+    #include "pfWGPUPipeline/plWGPUPipeline.h"
+    #include "pfWGPUPipeline/plWGPUTexturePack.h" // the HD texture pack
+#endif
 #include "pfJournalBook/pfJournalBook.h"
 #include "pfLocalizationMgr/pfLocalizationMgr.h"
 #include "pfMoviePlayer/plMoviePlayer.h"
@@ -162,6 +166,18 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #ifdef HS_BUILD_FOR_UNIX
 #    include <dlfcn.h> // For ModDLL loading
+#endif
+
+#ifdef __EMSCRIPTEN__
+// plEmscriptenPresentYield (the browser presents a frame when the client
+// thread's task ends; native presents inside EndRender)
+#    include "emscripten/plEmscriptenFrameLoop.h"
+#endif
+
+#ifdef PLASMA_TEST_HOOKS
+// Harness builds only: the test harness's pins of the camera, the avatar, the field of view, the
+// game clock and the physics accumulator (testhooks/client) run at three points of IUpdate and IDraw.
+#    include "emscripten/plEmscriptenTestHooks.h"
 #endif
 
 #define MSG_LOADING_BAR
@@ -214,6 +230,10 @@ plClient::plClient()
     // create network mgr before console runs
     plNetClientMgr::SetInstance(new plNetClientMgr);
     plAgeLoader::SetInstance(new plAgeLoader);
+#ifdef PLASMA_PIPELINE_WGPU
+    // the HD texture pack's fetch starts when the client joins an Age (plAgeLoader::UpdateAge)
+    plAgeLoader::fAgeDataHook = plWGPUTexturePack::PrefetchAge;
+#endif
 
     // Use it to parse the init directory
     plFileName initFolder = plFileSystem::GetInitPath();
@@ -495,6 +515,12 @@ plPipeline* plClient::ICreatePipeline(hsDisplayHndl disp, hsWindowHndl hWnd, con
     if (renderer == hsG3DDeviceSelector::kDevTypeMetal2 ||
         renderer == hsG3DDeviceSelector::kDevTypeMetal3)
         return new plMetalPipeline(disp, hWnd, devMode);
+#endif
+
+#ifdef PLASMA_PIPELINE_WGPU
+    // the browser's WebGPU device (hsG3DDeviceSelector::kDevTypeWebGPU).
+    if (renderer == hsG3DDeviceSelector::kDevTypeWebGPU)
+        return new plWGPUPipeline(disp, hWnd, devMode);
 #endif
 
     return new plNullPipeline(disp, hWnd, devMode);
@@ -1098,6 +1124,12 @@ void plClient::ILoadNextRoom()
 
         fRoomsLoading.push_back(req->loc); // flag the location as currently loading
 
+#ifdef PLASMA_PIPELINE_WGPU
+        // The optional HD texture pack of this room's Age is read here, while the room loads (the loading screen),
+        // never in the texture upload path.
+        plWGPUTexturePack::PrepareRoom(req->loc);
+#endif
+
         // PageInPage is not guaranteed to finish synchronously, just FYI
         plResManager *mgr = (plResManager *)hsgResMgr::ResMgr();
         mgr->PageInRoom(req->loc, plSceneNode::Index(), pRefMsg);
@@ -1344,6 +1376,13 @@ void plClient::IProgressMgrCallbackProc(plOperationProgress * progress)
     {
         fInstance->IDraw();
         lastDrawTime = currTime;
+#ifdef __EMSCRIPTEN__
+        // Native presents this frame inside IDraw's EndRender, in the middle of
+        // the load; in the browser it reaches the canvas only when the client thread's task
+        // ends, so the load suspends here to end the task, and resumes at once (JSPI). The
+        // throttle above paces the draws, as it does natively.
+        plEmscriptenPresentYield();
+#endif
     }
 }
 
@@ -1637,6 +1676,9 @@ plProfile_CreateTimer("EndRender", "Render", EndRender);
 bool plClient::IUpdate()
 {
     plProfile_BeginTiming(UpdateTime);
+#ifdef PLASMA_PIPELINE_WGPU
+    plWGPUTexturePack::Pump(); // verifies a running HD texture pack fetch, a few ms per frame
+#endif
     
     // reset timer on first frame if realtime and not clamping, to avoid initial large delta
     if (hsTimer::GetSysSeconds()==0 && hsTimer::IsRealTime() && hsTimer::GetTimeClamp()==0)
@@ -1650,6 +1692,12 @@ bool plClient::IUpdate()
         fInputManager->Update();
 
     hsTimer::IncSysSeconds();
+#ifdef PLASMA_TEST_HOOKS
+    // harness builds: the physics accumulator pin, before plNetClientMgr::Update, which may reach the fixed time's
+    // freeze (LoadAge), and before this frame's Advance
+    if (plEmscriptenTestHooks* testHooks = plEmscriptenTestHooks::Get())
+        testHooks->AfterIncSysSeconds();
+#endif
     plClientUnifiedTime::SetSysTime();  // keep a unified time, based on sysSeconds
     // Time may have been clamped in IncSysSeconds, depending on hsTimer's current mode.
 
@@ -1664,6 +1712,11 @@ bool plClient::IUpdate()
 
     // update python 
     //plCaptureRender::Update(fPipeline);
+#if defined(__EMSCRIPTEN__) && defined(PLASMA_PIPELINE_WGPU)
+    // the browser's ExtractMipMap readbacks complete before the captures go out
+    if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline))
+        wgpuPipe->CompletePendingCaptures();
+#endif
     plCaptureRender::Update();
     cyMisc::Update(currTime);
 
@@ -1757,9 +1810,22 @@ bool plClient::IDraw()
     if (fDone)
         return true;
 
+#ifdef PLASMA_TEST_HOOKS
+    // harness builds: the virtual camera's pin, before the progress check and every reader of the frame
+    plEmscriptenTestHooks* testHooks = plEmscriptenTestHooks::Get();
+    if (testHooks)
+        testHooks->BeforeDraw(fPipeline);
+#endif
+
     if (plProgressMgr::GetInstance()->IsActive())
         return IDrawProgress();
-        
+
+#ifdef PLASMA_TEST_HOOKS
+    // harness builds: the fixed time, avatar, field-of-view and camera pins
+    if (testHooks)
+        testHooks->BeforeDrawScene(fPipeline);
+#endif
+
     plProfile_Extern(VisEval);
     plProfile_BeginTiming(VisEval);
     plGlobalVisMgr::Instance()->Eval(fPipeline->GetViewPositionWorld());
@@ -1911,6 +1977,12 @@ bool plClient::IPlayIntroMovie(const char* movieName, float endDelay, float posX
                 fPipeline->RenderScreenElements();
                 fPipeline->EndRender();
             }
+#ifdef __EMSCRIPTEN__
+            // Once per frame of the movie loop, the frame drawn above reaches the
+            // canvas: the loop suspends until the next animation frame (JSPI). Native presents
+            // inside EndRender, which also paces this loop.
+            plEmscriptenFrameYield();
+#endif
 
             if (done)
                 return true;

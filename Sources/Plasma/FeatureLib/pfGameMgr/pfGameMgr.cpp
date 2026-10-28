@@ -65,6 +65,11 @@ pfGameMgr::~pfGameMgr()
     NetCliGameSetRecvGameMgrMsgHandler(nullptr);
 }
 
+void pfGameMgr::InstallRecvHandler()
+{
+    NetCliGameSetRecvGameMgrMsgHandler(RecvGameMgrMsg);
+}
+
 // ===========================================================================
 
 template<>

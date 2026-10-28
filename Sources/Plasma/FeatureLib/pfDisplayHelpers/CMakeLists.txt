@@ -1,6 +1,7 @@
 set(pfDisplayHelpers_SOURCES
     $<$<PLATFORM_ID:Darwin>:plMacDisplayHelper.mm>
     $<$<PLATFORM_ID:Windows>:plWinDisplayHelper.cpp>
+    $<$<PLATFORM_ID:Emscripten>:plEmscriptenDisplayHelper.cpp>
     $<$<BOOL:${USE_WAYLAND}>:plWaylandDisplayHelper.cpp>
     $<$<BOOL:${USE_X11}>:plX11DisplayHelper.cpp>
 )
@@ -8,6 +9,7 @@ set(pfDisplayHelpers_SOURCES
 set(pfDisplayHelpers_HEADERS
     $<$<PLATFORM_ID:Darwin>:plMacDisplayHelper.h>
     $<$<PLATFORM_ID:Windows>:plWinDisplayHelper.h>
+    $<$<PLATFORM_ID:Emscripten>:plEmscriptenDisplayHelper.h>
     $<$<BOOL:${USE_WAYLAND}>:plWaylandDisplayHelper.h>
     $<$<BOOL:${USE_X11}>:plX11DisplayHelper.h>
 

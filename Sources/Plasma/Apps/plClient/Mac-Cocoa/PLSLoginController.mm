@@ -40,21 +40,16 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-#include <regex>
-
 #include "PLSLoginController.h"
 
-#include "hsEndian.h"
 #include "NSString+StringTheory.h"
 #include "pfPasswordStore/pfPasswordStore.h"
 #include "PLSServerStatus.h"
+#include "plClient/plClientLogin.h"
 #include "pnNetBase/pnNbSrvs.h"
 #include "plNetGameLib/plNetGameLib.h"
 #include "plProduct.h"
 #include "plNetClient/plNetClientMgr.h"
-#include "pnEncryption/plChallengeHash.h"
-
-#define FAKE_PASS_STRING @"********"
 
 static NSOperationQueue* _loginQueue = nil;
 
@@ -118,7 +113,7 @@ static NSOperationQueue* _loginQueue = nil;
     [[NSUserDefaults standardUserDefaults] setObject:settingsDictionary forKey:serverName];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
-    if (self.password && ![self.password isEqualToString:FAKE_PASS_STRING]) {
+    if (self.password && ![self.password isEqualToString:@FAKE_PASS_STRING]) {
         ST::string username = [self.username STString];
         ST::string password = [self.password STString];
 
@@ -146,41 +141,12 @@ static NSOperationQueue* _loginQueue = nil;
     }
 }
 
-- (void)storeHash:(ShaDigest&)namePassHash
-{
-    //  Hash username and password before sending over the 'net.
-    //  -- Legacy compatibility: @gametap (and other usernames with domains in them) need
-    //     to be hashed differently.
-    ST::string username = [self.username STString];
-    ST::string password = [self.password STString];
-    static const std::regex re_domain("[^@]+@([^.]+\\.)*([^.]+)\\.[^.]+");
-    std::cmatch match;
-    std::regex_search(username.c_str(), match, re_domain);
-    if (match.empty() || ST::string(match[2].str()).compare_i("gametap") == 0) {
-        plChecksum shasum(
-            plChecksum::Type::kSHA1,
-            password.size(),
-            reinterpret_cast<const uint8_t*>(password.c_str())
-        );
-        uint32_t* dest = reinterpret_cast<uint32_t*>(namePassHash);
-        const uint32_t* from = reinterpret_cast<const uint32_t*>(shasum.GetValue());
-        dest[0] = hsToBE32(from[0]);
-        dest[1] = hsToBE32(from[1]);
-        dest[2] = hsToBE32(from[2]);
-        dest[3] = hsToBE32(from[3]);
-        dest[4] = hsToBE32(from[4]);
-    } else {
-        //  Domain-based Usernames...
-        CryptHashPassword(username, password, namePassHash);
-    }
-}
-
 - (void)makeCurrent
 {
-    ShaDigest hash;
-    [self storeHash:hash];
-
     ST::string username = [self.username STString];
+    ShaDigest hash;
+    StoreHash(username, [self.password STString], hash);
+
     NetCommSetAccountUsernamePassword(username, hash);
     NetCommSetAuthTokenAndOS(nullptr, u"mac");
 }

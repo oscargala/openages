@@ -61,6 +61,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "plClient.h"
 #include "plClientLoader.h"
+#include "plClientLogin.h"
 #include "res/resource.h"
 
 #include "pnEncryption/plChallengeHash.h"
@@ -152,8 +153,6 @@ HINSTANCE               gHInst = nullptr;      // Instance of this app
 static const unsigned   AUTH_LOGIN_TIMER    = 1;
 static const unsigned   AUTH_FAILED_TIMER   = 2;
 
-#define FAKE_PASS_STRING "********"
-
 //============================================================================
 // External patcher file (directly starting plClient is not allowed)
 //============================================================================
@@ -177,9 +176,6 @@ struct LoginDialogParam {
 static bool AuthenticateNetClientComm(ENetError* result, HWND parentWnd);
 static void SaveUserPass (LoginDialogParam *pLoginParam, char *password);
 static void LoadUserPass (LoginDialogParam *pLoginParam);
-static void AuthFailedStrings (ENetError authError,
-                                         const char **ppStr1, const char **ppStr2,
-                                         const wchar_t **ppWStr);
 
 void DebugMsgF(const char* format, ...);
 
@@ -496,53 +492,6 @@ static void DebugInit()
 #endif // defined(HS_DEBUGGING) || !defined(PLASMA_EXTERNAL_RELEASE)
 }
 
-static void AuthFailedStrings (ENetError authError,
-                                         const char **ppStr1, const char **ppStr2,
-                                         const wchar_t **ppWStr)
-{
-  *ppStr1 = nullptr;
-  *ppStr2 = nullptr;
-  *ppWStr = nullptr;
-
-    switch (plLocalization::GetLanguage())
-    {
-        case plLocalization::kEnglish:
-        default:
-            *ppStr1 = "Authentication Failed. Please try again.";
-
-            switch (authError)
-            {
-                case kNetErrAccountNotFound:
-                    *ppStr2 = "Account Not Found.";
-                    break;
-                case kNetErrAccountNotActivated:
-                    *ppStr2 = "Account Not Activated.";
-                    break;
-                case kNetErrConnectFailed:
-                    *ppStr2 = "Unable to connect to Myst Online.";
-                    break;
-                case kNetErrDisconnected:
-                    *ppStr2 = "Disconnected from Myst Online.";
-                    break;
-                case kNetErrAuthenticationFailed:
-                    *ppStr2 = "Incorrect password.\n\nMake sure CAPS LOCK is not on.";
-                    break;
-                case kNetErrGTServerError:
-                case kNetErrGameTapConnectionFailed:
-                    *ppStr2 = "Unable to connect to GameTap, please try again in a few minutes.";
-                    break;
-                case kNetErrAccountBanned:
-                    *ppStr2 = "Your account has been banned from accessing Myst Online.  If you are unsure as to why this happened please contact customer support.";
-                    break;
-                default:
-                    *ppWStr =  NetErrorToString (authError);
-                    break;
-            }
-            break;
-    }
-}
-
-
 INT_PTR CALLBACK AuthFailedDialogProc( HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam )
 {
     switch( uMsg )
@@ -621,36 +570,6 @@ INT_PTR CALLBACK UruTOSDialogProc( HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
     return FALSE;
 }
 
-static void StoreHash(const ST::string& username, const ST::string& password, LoginDialogParam *pLoginParam)
-{
-    //  Hash username and password before sending over the 'net.
-    //  -- Legacy compatibility: @gametap (and other usernames with domains in them) need
-    //     to be hashed differently.
-    static const std::regex re_domain("[^@]+@([^.]+\\.)*([^.]+)\\.[^.]+");
-    std::cmatch match;
-    std::regex_search(username.c_str(), match, re_domain);
-    if (match.empty() || ST::string(match[2].str()).compare_i("gametap") == 0) {
-        //  Plain Usernames...
-        plChecksum shasum(
-            plChecksum::Type::kSHA1,
-            password.size(),
-            reinterpret_cast<const uint8_t*>(password.c_str())
-        );
-        uint32_t* dest = reinterpret_cast<uint32_t*>(pLoginParam->namePassHash);
-        const uint32_t* from = reinterpret_cast<const uint32_t*>(shasum.GetValue());
-
-        dest[0] = hsToBE32(from[0]);
-        dest[1] = hsToBE32(from[1]);
-        dest[2] = hsToBE32(from[2]);
-        dest[3] = hsToBE32(from[3]);
-        dest[4] = hsToBE32(from[4]);
-    }
-    else {
-        //  Domain-based Usernames...
-        CryptHashPassword(username, password, pLoginParam->namePassHash);
-    }
-}
-
 static void SaveUserPass(LoginDialogParam* pLoginParam, wchar_t* password)
 {
     ST::string theUser = pLoginParam->username;
@@ -667,7 +586,7 @@ static void SaveUserPass(LoginDialogParam* pLoginParam, wchar_t* password)
     // then we've already loaded the hash.
     if (thePass.compare(FAKE_PASS_STRING) != 0)
     {
-        StoreHash(theUser, thePass, pLoginParam);
+        StoreHash(theUser, thePass, pLoginParam->namePassHash);
 
         pfPasswordStore* store = pfPasswordStore::Instance();
         if (pLoginParam->remember)
@@ -705,7 +624,7 @@ static void LoadUserPass(LoginDialogParam *pLoginParam)
         pfPasswordStore* store = pfPasswordStore::Instance();
         ST::string password = store->GetPassword(pLoginParam->username);
         if (!password.empty())
-            StoreHash(pLoginParam->username, password, pLoginParam);
+            StoreHash(pLoginParam->username, password, pLoginParam->namePassHash);
         pLoginParam->focus = IDOK;
     }
     else if (!pLoginParam->username[0])

@@ -60,6 +60,12 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plNetGameLib/plNetGameLib.h"
 #include "plStatusLog/plStatusLog.h"
 
+#ifdef __EMSCRIPTEN__
+// The browser storage budget the application sets (pfPatcher::SetStorageBudget), shared by every patcher. Without one,
+// no manifest is checked against the storage before its files are fetched.
+static pfPatcher::StorageBudgetFunc s_storageBudget;
+#endif
+
 template<typename... _Args>
 static inline void PatcherLogGreen(const char* format, _Args&&... args)
 {
@@ -187,6 +193,12 @@ struct pfPatcherWorker final
     uint64_t fCurrBytes;
     uint64_t fTotalBytes;
 
+#ifdef __EMSCRIPTEN__
+    // the storage this patch may still use (taken at its first manifest) and the bytes its manifests so far will write
+    int64_t  fBrowserAvailable = -2;
+    uint64_t fBrowserNeeded = 0;
+#endif
+
     pfPatcherWorker();
     ~pfPatcherWorker();
 
@@ -246,6 +258,9 @@ public:
     pfPatcherStream(pfPatcherWorker* parent, const pfPatcherQueuedFile& file)
         : fParent(parent), fFilename(file.fClientPath.Normalize()), fFlags(file.fFlags), fBytesWritten(), fDLStartTime(), plZlibStream()
     {
+#ifdef __EMSCRIPTEN__
+        fExpectedSize = file.fFileSize;
+#endif
         // ugh. eap removed the compressed flag in his fail manifests
         if (file.fServerPath.GetFileExt().compare_i("gz") == 0) {
             fFlags |= kFlagZipped;
@@ -305,6 +320,16 @@ public:
     bool IsSelfPatch() const { return hsCheckBits(fFlags, kSelfPatch); }
     bool RequiresSfxCache() const { return hsCheckBits(fFlags, kSndFlagCacheSplit) || hsCheckBits(fFlags, kSndFlagCacheStereo); }
     void Unlink() const { plFileSystem::Unlink(fFilename); }
+
+#ifdef __EMSCRIPTEN__
+    // A file download whose file is not on disk at the manifest size after Close (a storage write failed:
+    // plEmscriptenStdio.cpp removes such a file at fclose). Native ignores the write result
+    // (RcvdFileDownloadChunkTrans::Post in plNglFile.cpp) and relies on the next run's IHashFile; the browser's quota
+    // is small and routinely reached, so the download fails here instead, through the failed-download branch native
+    // already has.
+    int64_t fExpectedSize = -1;
+    bool    WrittenShort() const { return fExpectedSize >= 0 && plFileInfo(fFilename).FileSize() != fExpectedSize; }
+#endif
 };
 
 // ===================================================
@@ -355,6 +380,39 @@ void pfPatcherWorker::IGotAuthFileList(ENetError result, const std::vector<NetCl
 void pfPatcherWorker::IHandleManifestDownload(const ST::string& group, const std::vector<NetCliFileManifestEntry>& manifest)
 {
     PatcherLogGreen("\tDownloaded Manifest '{}'", group);
+#ifdef __EMSCRIPTEN__
+    // Before this manifest's files are hashed and fetched: do they fit the browser's storage? The
+    // budget is asked once per patch; each manifest adds its full size, or, when that does not fit, the size of the
+    // files not already present at the manifest size (what IHashFile would enqueue at most). Sound-cache expansion
+    // (IDecompressSound) is not known from the manifest and is not counted. A shortfall ends the patch through
+    // EndPatch, as a failed manifest download does (IFileManifestDownloadCB), before any file is written.
+    if (s_storageBudget) {
+        if (fBrowserAvailable == -2)
+            fBrowserAvailable = s_storageBudget();
+        uint64_t total = 0;
+        for (const auto& entry : manifest)
+            total += entry.fileSize;
+        if (fBrowserAvailable >= 0 && fBrowserNeeded + total > uint64_t(fBrowserAvailable)) {
+            total = 0;
+            for (const auto& entry : manifest) {
+                plFileName path = plFileName(ST::string::from_utf16(entry.clientName)).Normalize();
+                if (plFileInfo(path).FileSize() != int64_t(entry.fileSize))
+                    total += entry.fileSize;
+            }
+        }
+        fBrowserNeeded += total;
+        PatcherLogWhite("\tBrowser storage: '{}' needs {} (patch so far {}), available {}", group,
+                        plFileSystem::ConvertFileSize(total), plFileSystem::ConvertFileSize(fBrowserNeeded),
+                        fBrowserAvailable >= 0 ? plFileSystem::ConvertFileSize(fBrowserAvailable) : ST_LITERAL("unknown"));
+        if (fBrowserAvailable >= 0 && fBrowserNeeded > uint64_t(fBrowserAvailable)) {
+            PatcherLogRed("\tNot enough browser storage for Manifest '{}'", group);
+            EndPatch(kNetErrInternalError, ST::format("Not enough browser storage for {}: {} needed, {} available", group,
+                                                      plFileSystem::ConvertFileSize(fBrowserNeeded),
+                                                      plFileSystem::ConvertFileSize(fBrowserAvailable)));
+            return;
+        }
+    }
+#endif
     {
         hsLockGuard(fFileMut);
         for (const auto& entry : manifest)
@@ -394,6 +452,14 @@ void pfPatcherWorker::IFileThingDownloadCB(ENetError result, const plFileName& f
     // zlib decompression not being complete.
     stream->Close();
 
+    // the message that ends the patch if this download failed
+    ST::string failure = filename.AsString();
+#ifdef __EMSCRIPTEN__
+    if (IS_NET_SUCCESS(result) && stream->WrittenShort()) {
+        result = kNetErrInternalError;
+        failure = ST::format("Not enough browser storage to write {}", stream->GetFileName());
+    }
+#endif
     if (IS_NET_SUCCESS(result)) {
         PatcherLogGreen("\tDownloaded File '{}'", stream->GetFileName());
         WhitelistFile(stream->GetFileName(), true);
@@ -412,7 +478,7 @@ void pfPatcherWorker::IFileThingDownloadCB(ENetError result, const plFileName& f
     } else {
         PatcherLogRed("\tDownloaded Failed: File '{}'", stream->GetFileName());
         stream->Unlink();
-        EndPatch(result, filename.AsString());
+        EndPatch(result, failure);
     }
 
     delete stream;
@@ -744,6 +810,13 @@ void pfPatcher::OnSelfPatch(FileDownloadFunc cb)
 {
     fWorker->fSelfPatch = std::move(cb);
 }
+
+#ifdef __EMSCRIPTEN__
+void pfPatcher::SetStorageBudget(StorageBudgetFunc cb)
+{
+    s_storageBudget = std::move(cb);
+}
+#endif
 
 // ===================================================
 

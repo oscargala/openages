@@ -44,6 +44,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "NSString+StringTheory.h"
 #include "PLSServerStatus.h"
+#include "plClient/plClientLogin.h"
 #include "pnNetBase/pnNbError.h"
 #include "pnNetBase/pnNbSrvs.h"
 #include "plProduct.h"
@@ -59,8 +60,6 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 @property(strong) PLSLoginParameters* loginParameters;
 
 @end
-
-#define FAKE_PASS_STRING @"********"
 
 @implementation PLSLoginWindowController
 
@@ -79,7 +78,7 @@ static void* StatusTextDidChangeContext = &StatusTextDidChangeContext;
     [self.loginParameters load];
 
     if (self.loginParameters.rememberPassword) {
-        [self.passwordTextField setStringValue:FAKE_PASS_STRING];
+        [self.passwordTextField setStringValue:@FAKE_PASS_STRING];
     }
 
     [super windowDidLoad];

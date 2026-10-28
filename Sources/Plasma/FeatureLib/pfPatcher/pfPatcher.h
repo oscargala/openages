@@ -147,6 +147,19 @@ public:
     /** This is called when the current application has been updated. */
     void OnSelfPatch(FileDownloadFunc cb);
 
+#ifdef __EMSCRIPTEN__
+    /** Represents a function that returns how many bytes the browser's storage may still take,
+     *  or a negative value if that is unknown.
+     */
+    typedef std::function<int64_t()> StorageBudgetFunc;
+
+    /** Set the browser storage budget of every patcher. A patch asks it once, at its first manifest,
+     *  and fails before it downloads the files of a manifest that would not fit.
+     *  \remarks Set it before any patcher starts. It will be called from the network thread.
+     */
+    static void SetStorageBudget(StorageBudgetFunc cb);
+#endif
+
     void RequestGameCode(bool python = true, bool sdl = true);
     void RequestManifest(const ST::string& mfs);
     void RequestManifest(const std::vector<ST::string>& mfs);

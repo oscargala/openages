@@ -72,7 +72,17 @@ public:
     void Init()
     {
         hsAssert(fClient == nullptr, "trying to init the client more than once?");
+#ifdef __EMSCRIPTEN__
+        // In the browser the loader's work runs on the calling thread (the
+        // client thread), not on a thread of its own: WebGPU objects belong to the worker
+        // that creates them, and Run() creates the pipeline (InitPipeline) and its
+        // resources. The same calls in the same order; IsInited() is true on return and
+        // Wait() returns at once.
+        Run();
+        OnQuit();
+#else
         Start();
+#endif
     }
 
     /**

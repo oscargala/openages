@@ -44,7 +44,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 bool hsMessageBox_SuppressPrompts = false;
 
-#if !defined(HS_BUILD_FOR_APPLE) && !defined(HS_BUILD_FOR_WIN32)
+#if !defined(HS_BUILD_FOR_APPLE) && !defined(HS_BUILD_FOR_WIN32) && !defined(__EMSCRIPTEN__)
 #include <string_theory/string>
 #include <string_theory/format>
 

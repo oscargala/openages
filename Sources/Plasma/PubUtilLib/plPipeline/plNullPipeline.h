@@ -46,6 +46,24 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "pl3DPipeline.h"
 
+#ifdef __EMSCRIPTEN__
+#include "plPlates.h"
+
+// The null pipeline is the browser client's other pipeline (an internal build's "-Renderer
+// null", Apps/plClient/emscripten/main.cpp), so it must host everything a real pipeline hosts.
+// Every pipeline creates a plate manager in its constructor (plGLPipeline, plMetalPipeline,
+// plDXPipeline); plPlateManager::Instance() dereferences it unconditionally
+// (plDTProgressMgr::Activate, the loading screen). Like plGLPlateManager it draws nothing.
+class plNullPlateManager : public plPlateManager
+{
+public:
+    plNullPlateManager(plPipeline* pipe) : plPlateManager(pipe) {}
+
+protected:
+    void IDrawToDevice(plPipeline* pipe) override {}
+};
+#endif
+
 class plNullPipelineDevice
 {
 public:
@@ -66,7 +84,16 @@ class plNullPipeline : public pl3DPipeline<plNullPipelineDevice>
 {
 public:
     plNullPipeline(hsDisplayHndl display, hsWindowHndl window, const hsG3DDeviceModeRecord *devModeRec)
-        : pl3DPipeline(devModeRec) { }
+        : pl3DPipeline(devModeRec)
+    {
+#ifdef __EMSCRIPTEN__
+        fPlateMgr = new plNullPlateManager(this);
+#endif
+    }
+
+#ifdef __EMSCRIPTEN__
+    ~plNullPipeline() { delete fPlateMgr; }
+#endif
 
     CLASSNAME_REGISTER(plNullPipeline);
     GETINTERFACE_ANY(plNullPipeline, plPipeline);
