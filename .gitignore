@@ -18,6 +18,8 @@ cmake_install.cmake
 install_manifest.txt
 build/
 build-*/
+# The browser build scripts (web/build) are sources, not build output
+!/web/build/
 Docs/Doxygen/
 out/
 .vs/

@@ -1,0 +1,16 @@
+--- a/Modules/posixmodule.c	2026-10-22 20:55:14
++++ b/Modules/posixmodule.c	2026-10-22 20:55:14
+@@ -7482,6 +7482,13 @@
+ #define INITFUNC initnt
+ #define MODNAME "nt"
+ 
++#elif defined(PY2_OS_MODULE_NT)
++/* This file's POSIX implementation, registered under the name Cyan's client gives the os
++   module (PC/config.c: "nt"), so that MOULa's os.py takes its nt branch and ntpath. MOULa's posixpath.py
++   (2011 import) has no curdir/pardir/sep, so its os.py cannot import over a module named posix. */
++#define INITFUNC initnt
++#define MODNAME "nt"
++
+ #elif defined(PYOS_OS2)
+ #define INITFUNC initos2
+ #define MODNAME "os2"

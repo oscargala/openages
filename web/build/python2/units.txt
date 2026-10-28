@@ -1,0 +1,111 @@
+# CPython 2.3.3 translation units for the wasm32-emscripten static library.
+# Basis: Cypython-2.3.3 PCbuild/pythoncore_static.vcxproj (Cyan's static project), with these substitutions:
+#   Python/import_pack.c, PC/PlasmaPack.cpp -> Python/import.c (stock import; the pak is served by a PEP 302
+#                                             finder on sys.meta_path)
+#   PC/config.c                             -> python2/config.c (the module set)
+#   PC/getpathp.c                           -> Modules/getpath.c (the Unix variant)
+#   PC/dl_nt.c, Python/dynload_win.c        -> Python/dynload_stub.c (no dynamic loading)
+#   Modules/signalmodule.c                  -> Parser/intrcheck.c, Python/sigcheck.c (the Unix build's
+#                                             SIGNAL_OBJS without the signal module)
+#   Python/thread.c, Modules/threadmodule.c -> left out (no WITH_THREAD)
+#   PC/import_nt.c, PC/msvcrtmodule.c       -> left out (Windows only)
+#   Modules/main.c, Parser/myreadline.c     -> kept (Py_Main / PyOS_Readline are part of the C API)
+# Builtin modules not in config.c are left out: audioop, cmath, imageop, md5 (md5c.c, md5module.c), regex (regexmodule.c, regexpr.c), rgbimg, rotor, sha, xreadlines, _hotshot,
+# xxsubtype, yuvconvert.c.
+Parser/acceler.c
+Parser/bitset.c
+Parser/grammar1.c
+Parser/intrcheck.c
+Parser/listnode.c
+Parser/metagrammar.c
+Parser/myreadline.c
+Parser/node.c
+Parser/parser.c
+Parser/parsetok.c
+Parser/tokenizer.c
+Objects/abstract.c
+Objects/boolobject.c
+Objects/bufferobject.c
+Objects/cellobject.c
+Objects/classobject.c
+Objects/cobject.c
+Objects/complexobject.c
+Objects/descrobject.c
+Objects/dictobject.c
+Objects/enumobject.c
+Objects/fileobject.c
+Objects/floatobject.c
+Objects/frameobject.c
+Objects/funcobject.c
+Objects/intobject.c
+Objects/iterobject.c
+Objects/listobject.c
+Objects/longobject.c
+Objects/methodobject.c
+Objects/moduleobject.c
+Objects/object.c
+Objects/obmalloc.c
+Objects/rangeobject.c
+Objects/sliceobject.c
+Objects/stringobject.c
+Objects/structseq.c
+Objects/tupleobject.c
+Objects/typeobject.c
+Objects/unicodectype.c
+Objects/unicodeobject.c
+Objects/weakrefobject.c
+Python/bltinmodule.c
+Python/ceval.c
+Python/codecs.c
+Python/compile.c
+Python/dynload_stub.c
+Python/errors.c
+Python/exceptions.c
+Python/frozen.c
+Python/future.c
+Python/getargs.c
+Python/getcompiler.c
+Python/getcopyright.c
+Python/getmtime.c
+Python/getopt.c
+Python/getplatform.c
+Python/getversion.c
+Python/graminit.c
+Python/import.c
+Python/importdl.c
+Python/marshal.c
+Python/modsupport.c
+Python/mysnprintf.c
+Python/mystrtoul.c
+Python/pyfpe.c
+Python/pystate.c
+Python/pythonrun.c
+Python/sigcheck.c
+Python/structmember.c
+Python/symtable.c
+Python/sysmodule.c
+Python/traceback.c
+Modules/getbuildinfo.c
+Modules/getpath.c
+Modules/main.c
+Modules/gcmodule.c
+Modules/_codecsmodule.c
+Modules/_localemodule.c
+Modules/_randommodule.c
+Modules/_sre.c
+Modules/_weakref.c
+Modules/arraymodule.c
+Modules/binascii.c
+Modules/cPickle.c
+Modules/cStringIO.c
+Modules/errnomodule.c
+Modules/itertoolsmodule.c
+Modules/mathmodule.c
+Modules/operator.c
+Modules/pcremodule.c
+Modules/pypcre.c
+Modules/posixmodule.c
+Modules/stropmodule.c
+Modules/structmodule.c
+Modules/timemodule.c
+Modules/zipimport.c

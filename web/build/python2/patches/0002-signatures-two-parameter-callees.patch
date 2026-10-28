@@ -1,0 +1,871 @@
+--- a/Modules/_localemodule.c	2026-10-22 20:41:37
++++ b/Modules/_localemodule.c	2026-10-22 20:44:42
+@@ -237,7 +237,7 @@
+ "() -> dict. Returns numeric and monetary locale-specific parameters.");
+ 
+ static PyObject*
+-PyLocale_localeconv(PyObject* self)
++PyLocale_localeconv(PyObject* self, PyObject *unused)
+ {
+     PyObject* result;
+     struct lconv *l;
+--- a/Modules/_randommodule.c	2026-10-22 20:41:37
++++ b/Modules/_randommodule.c	2026-10-22 20:44:42
+@@ -135,7 +135,7 @@
+  * The orginal code credited Isaku Wada for this algorithm, 2002/01/09.
+  */
+ static PyObject *
+-random_random(RandomObject *self)
++random_random(RandomObject *self, PyObject *unused)
+ {
+ 	unsigned long a=genrand_int32(self)>>5, b=genrand_int32(self)>>6;
+     	return PyFloat_FromDouble((a*67108864.0+b)*(1.0/9007199254740992.0));
+@@ -309,7 +309,7 @@
+ }
+ 
+ static PyObject *
+-random_getstate(RandomObject *self)
++random_getstate(RandomObject *self, PyObject *unused)
+ {
+ 	PyObject *state;
+ 	PyObject *element;
+--- a/Modules/cPickle.c	2026-10-22 20:41:37
++++ b/Modules/cPickle.c	2026-10-22 20:44:42
+@@ -2922,7 +2922,7 @@
+ }
+ 
+ static PyObject *
+-Pickler_get_pers_func(Picklerobject *p)
++Pickler_get_pers_func(Picklerobject *p, void *closure)
+ {
+ 	if (p->pers_func == NULL)
+ 		PyErr_SetString(PyExc_AttributeError, "persistent_id");
+@@ -2932,7 +2932,7 @@
+ }
+ 
+ static int
+-Pickler_set_pers_func(Picklerobject *p, PyObject *v)
++Pickler_set_pers_func(Picklerobject *p, PyObject *v, void *closure)
+ {
+ 	if (v == NULL) {
+ 		PyErr_SetString(PyExc_TypeError,
+@@ -2946,7 +2946,7 @@
+ }
+ 
+ static int
+-Pickler_set_inst_pers_func(Picklerobject *p, PyObject *v)
++Pickler_set_inst_pers_func(Picklerobject *p, PyObject *v, void *closure)
+ {
+ 	if (v == NULL) {
+ 		PyErr_SetString(PyExc_TypeError,
+@@ -2960,7 +2960,7 @@
+ }
+ 
+ static PyObject *
+-Pickler_get_memo(Picklerobject *p)
++Pickler_get_memo(Picklerobject *p, void *closure)
+ {
+ 	if (p->memo == NULL)
+ 		PyErr_SetString(PyExc_AttributeError, "memo");
+@@ -2970,7 +2970,7 @@
+ }
+ 
+ static int
+-Pickler_set_memo(Picklerobject *p, PyObject *v)
++Pickler_set_memo(Picklerobject *p, PyObject *v, void *closure)
+ {
+ 	if (v == NULL) {
+ 		PyErr_SetString(PyExc_TypeError,
+@@ -2988,7 +2988,7 @@
+ }
+ 
+ static PyObject *
+-Pickler_get_error(Picklerobject *p)
++Pickler_get_error(Picklerobject *p, void *closure)
+ {
+ 	/* why is this an attribute on the Pickler? */
+ 	Py_INCREF(PicklingError);
+--- a/Objects/complexobject.c	2026-10-22 20:41:37
++++ b/Objects/complexobject.c	2026-10-22 20:44:42
+@@ -631,7 +631,7 @@
+ }
+ 
+ static PyObject *
+-complex_conjugate(PyObject *self)
++complex_conjugate(PyObject *self, PyObject *unused)
+ {
+ 	Py_complex c;
+ 	c = ((PyComplexObject *)self)->cval;
+@@ -640,7 +640,7 @@
+ }
+ 
+ static PyObject *
+-complex_getnewargs(PyComplexObject *v)
++complex_getnewargs(PyComplexObject *v, PyObject *unused)
+ {
+ 	return Py_BuildValue("(D)", &v->cval);
+ }
+--- a/Objects/descrobject.c	2026-10-22 20:41:37
++++ b/Objects/descrobject.c	2026-10-22 20:44:42
+@@ -726,42 +726,42 @@
+ }
+ 
+ static PyObject *
+-proxy_keys(proxyobject *pp)
++proxy_keys(proxyobject *pp, PyObject *unused)
+ {
+ 	return PyMapping_Keys(pp->dict);
+ }
+ 
+ static PyObject *
+-proxy_values(proxyobject *pp)
++proxy_values(proxyobject *pp, PyObject *unused)
+ {
+ 	return PyMapping_Values(pp->dict);
+ }
+ 
+ static PyObject *
+-proxy_items(proxyobject *pp)
++proxy_items(proxyobject *pp, PyObject *unused)
+ {
+ 	return PyMapping_Items(pp->dict);
+ }
+ 
+ static PyObject *
+-proxy_iterkeys(proxyobject *pp)
++proxy_iterkeys(proxyobject *pp, PyObject *unused)
+ {
+ 	return PyObject_CallMethod(pp->dict, "iterkeys", NULL);
+ }
+ 
+ static PyObject *
+-proxy_itervalues(proxyobject *pp)
++proxy_itervalues(proxyobject *pp, PyObject *unused)
+ {
+ 	return PyObject_CallMethod(pp->dict, "itervalues", NULL);
+ }
+ 
+ static PyObject *
+-proxy_iteritems(proxyobject *pp)
++proxy_iteritems(proxyobject *pp, PyObject *unused)
+ {
+ 	return PyObject_CallMethod(pp->dict, "iteritems", NULL);
+ }
+ static PyObject *
+-proxy_copy(proxyobject *pp)
++proxy_copy(proxyobject *pp, PyObject *unused)
+ {
+ 	return PyObject_CallMethod(pp->dict, "copy", NULL);
+ }
+@@ -915,7 +915,7 @@
+ };
+ 
+ static PyObject *
+-wrapper_name(wrapperobject *wp)
++wrapper_name(wrapperobject *wp, void *closure)
+ {
+ 	char *s = wp->descr->d_base->name;
+ 
+@@ -923,7 +923,7 @@
+ }
+ 
+ static PyObject *
+-wrapper_doc(wrapperobject *wp)
++wrapper_doc(wrapperobject *wp, void *closure)
+ {
+ 	char *s = wp->descr->d_base->doc;
+ 
+--- a/Objects/dictobject.c	2026-10-22 20:41:37
++++ b/Objects/dictobject.c	2026-10-22 20:45:00
+@@ -879,7 +879,7 @@
+ };
+ 
+ static PyObject *
+-dict_keys(register dictobject *mp)
++dict_keys(register dictobject *mp, PyObject *unused)
+ {
+ 	register PyObject *v;
+ 	register int i, j, n;
+@@ -908,7 +908,7 @@
+ }
+ 
+ static PyObject *
+-dict_values(register dictobject *mp)
++dict_values(register dictobject *mp, PyObject *unused)
+ {
+ 	register PyObject *v;
+ 	register int i, j, n;
+@@ -937,7 +937,7 @@
+ }
+ 
+ static PyObject *
+-dict_items(register dictobject *mp)
++dict_items(register dictobject *mp, PyObject *unused)
+ {
+ 	register PyObject *v;
+ 	register int i, j, n;
+@@ -1214,7 +1214,7 @@
+ }
+ 
+ static PyObject *
+-dict_copy(register dictobject *mp)
++dict_copy(register dictobject *mp, PyObject *unused)
+ {
+ 	return PyDict_Copy((PyObject*)mp);
+ }
+@@ -1268,7 +1268,7 @@
+ 		PyErr_BadInternalCall();
+ 		return NULL;
+ 	}
+-	return dict_keys((dictobject *)mp);
++	return dict_keys((dictobject *)mp, NULL);
+ }
+ 
+ PyObject *
+@@ -1278,7 +1278,7 @@
+ 		PyErr_BadInternalCall();
+ 		return NULL;
+ 	}
+-	return dict_values((dictobject *)mp);
++	return dict_values((dictobject *)mp, NULL);
+ }
+ 
+ PyObject *
+@@ -1288,7 +1288,7 @@
+ 		PyErr_BadInternalCall();
+ 		return NULL;
+ 	}
+-	return dict_items((dictobject *)mp);
++	return dict_items((dictobject *)mp, NULL);
+ }
+ 
+ /* Subroutine which returns the smallest key in a for which b's value
+@@ -1548,7 +1548,7 @@
+ 
+ 
+ static PyObject *
+-dict_clear(register dictobject *mp)
++dict_clear(register dictobject *mp, PyObject *unused)
+ {
+ 	PyDict_Clear((PyObject *)mp);
+ 	Py_INCREF(Py_None);
+@@ -1600,7 +1600,7 @@
+ }
+ 
+ static PyObject *
+-dict_popitem(dictobject *mp)
++dict_popitem(dictobject *mp, PyObject *unused)
+ {
+ 	int i = 0;
+ 	dictentry *ep;
+@@ -1714,19 +1714,19 @@
+ }
+ 
+ static PyObject *
+-dict_iterkeys(dictobject *dict)
++dict_iterkeys(dictobject *dict, PyObject *unused)
+ {
+ 	return dictiter_new(dict, select_key);
+ }
+ 
+ static PyObject *
+-dict_itervalues(dictobject *dict)
++dict_itervalues(dictobject *dict, PyObject *unused)
+ {
+ 	return dictiter_new(dict, select_value);
+ }
+ 
+ static PyObject *
+-dict_iteritems(dictobject *dict)
++dict_iteritems(dictobject *dict, PyObject *unused)
+ {
+ 	return dictiter_new(dict, select_item);
+ }
+--- a/Objects/fileobject.c	2026-10-22 20:41:37
++++ b/Objects/fileobject.c	2026-10-22 20:51:18
+@@ -389,7 +389,7 @@
+ }
+ 
+ static PyObject *
+-file_close(PyFileObject *f)
++file_close(PyFileObject *f, PyObject *unused)
+ {
+ 	int sts = 0;
+ 	if (f->f_fp != NULL) {
+@@ -649,7 +649,7 @@
+ #endif /* HAVE_FTRUNCATE */
+ 
+ static PyObject *
+-file_tell(PyFileObject *f)
++file_tell(PyFileObject *f, PyObject *unused)
+ {
+ 	Py_off_t pos;
+ 
+@@ -682,7 +682,7 @@
+ }
+ 
+ static PyObject *
+-file_fileno(PyFileObject *f)
++file_fileno(PyFileObject *f, PyObject *unused)
+ {
+ 	if (f->f_fp == NULL)
+ 		return err_closed();
+@@ -690,7 +690,7 @@
+ }
+ 
+ static PyObject *
+-file_flush(PyFileObject *f)
++file_flush(PyFileObject *f, PyObject *unused)
+ {
+ 	int res;
+ 
+@@ -710,7 +710,7 @@
+ }
+ 
+ static PyObject *
+-file_isatty(PyFileObject *f)
++file_isatty(PyFileObject *f, PyObject *unused)
+ {
+ 	long res;
+ 	if (f->f_fp == NULL)
+@@ -1591,6 +1591,14 @@
+ 		return err_closed();
+ 	Py_INCREF(f);
+ 	return (PyObject *)f;
++}
++
++/* file_getiter is tp_iter (one parameter) and the METH_NOARGS xreadlines method,
++   which CPython calls as meth(self, NULL). */
++static PyObject *
++file_xreadlines(PyFileObject *f, PyObject *unused)
++{
++	return file_getiter(f);
+ }
+ 
+ PyDoc_STRVAR(readline_doc,
+@@ -1689,7 +1697,7 @@
+ 	{"tell",      (PyCFunction)file_tell,     METH_NOARGS,  tell_doc},
+ 	{"readinto",  (PyCFunction)file_readinto, METH_VARARGS, readinto_doc},
+ 	{"readlines", (PyCFunction)file_readlines,METH_VARARGS, readlines_doc},
+-	{"xreadlines",(PyCFunction)file_getiter,  METH_NOARGS, xreadlines_doc},
++	{"xreadlines",(PyCFunction)file_xreadlines,  METH_NOARGS, xreadlines_doc},
+ 	{"writelines",(PyCFunction)file_writelines, METH_O,    writelines_doc},
+ 	{"flush",     (PyCFunction)file_flush,    METH_NOARGS,  flush_doc},
+ 	{"close",     (PyCFunction)file_close,    METH_NOARGS,  close_doc},
+@@ -1912,7 +1920,7 @@
+ 	assert(PyFile_Check(self));
+ 	if (foself->f_fp != NULL) {
+ 		/* Have to close the existing file first. */
+-		PyObject *closeresult = file_close(foself);
++		PyObject *closeresult = file_close(foself, NULL);
+ 		if (closeresult == NULL)
+ 			return -1;
+ 		Py_DECREF(closeresult);
+--- a/Objects/floatobject.c	2026-10-22 20:41:37
++++ b/Objects/floatobject.c	2026-10-22 20:44:42
+@@ -761,7 +761,7 @@
+ }
+ 
+ static PyObject *
+-float_getnewargs(PyFloatObject *v)
++float_getnewargs(PyFloatObject *v, PyObject *unused)
+ {
+ 	return Py_BuildValue("(d)", v->ob_fval);
+ }
+--- a/Objects/frameobject.c	2026-10-22 20:41:37
++++ b/Objects/frameobject.c	2026-10-22 20:44:42
+@@ -65,7 +65,7 @@
+  *    iterator needs to be on the stack.
+  */
+ static int
+-frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
++frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno, void *closure)
+ {
+ 	int new_lineno = 0;		/* The new value of f_lineno */
+ 	int new_lasti = 0;		/* The new value of f_lasti */
+@@ -486,6 +486,14 @@
+ 			*p = NULL;
+ 		}
+ 	}
++}
++
++/* tp_clear is called as an inquiry (int result). */
++static int
++frame_clear_inquiry(PyFrameObject *self)
++{
++	frame_clear(self);
++	return 0;
+ }
+ 
+ 
+@@ -513,7 +521,7 @@
+ 	Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,/* tp_flags */
+ 	0,             				/* tp_doc */
+  	(traverseproc)frame_traverse,		/* tp_traverse */
+-	(inquiry)frame_clear,			/* tp_clear */
++	(inquiry)frame_clear_inquiry,			/* tp_clear */
+ 	0,					/* tp_richcompare */
+ 	0,					/* tp_weaklistoffset */
+ 	0,					/* tp_iter */
+--- a/Objects/funcobject.c	2026-10-22 20:41:37
++++ b/Objects/funcobject.c	2026-10-22 20:44:42
+@@ -174,7 +174,7 @@
+ }
+ 
+ static PyObject *
+-func_get_dict(PyFunctionObject *op)
++func_get_dict(PyFunctionObject *op, void *closure)
+ {
+ 	if (restricted())
+ 		return NULL;
+@@ -188,7 +188,7 @@
+ }
+ 
+ static int
+-func_set_dict(PyFunctionObject *op, PyObject *value)
++func_set_dict(PyFunctionObject *op, PyObject *value, void *closure)
+ {
+ 	PyObject *tmp;
+ 
+@@ -214,7 +214,7 @@
+ }
+ 
+ static PyObject *
+-func_get_code(PyFunctionObject *op)
++func_get_code(PyFunctionObject *op, void *closure)
+ {
+ 	if (restricted())
+ 		return NULL;
+@@ -223,7 +223,7 @@
+ }
+ 
+ static int
+-func_set_code(PyFunctionObject *op, PyObject *value)
++func_set_code(PyFunctionObject *op, PyObject *value, void *closure)
+ {
+ 	PyObject *tmp;
+ 
+@@ -244,7 +244,7 @@
+ }
+ 
+ static PyObject *
+-func_get_defaults(PyFunctionObject *op)
++func_get_defaults(PyFunctionObject *op, void *closure)
+ {
+ 	if (restricted())
+ 		return NULL;
+@@ -257,7 +257,7 @@
+ }
+ 
+ static int
+-func_set_defaults(PyFunctionObject *op, PyObject *value)
++func_set_defaults(PyFunctionObject *op, PyObject *value, void *closure)
+ {
+ 	PyObject *tmp;
+ 
+--- a/Objects/intobject.c	2026-10-22 20:41:37
++++ b/Objects/intobject.c	2026-10-22 20:44:42
+@@ -968,7 +968,7 @@
+ }
+ 
+ static PyObject *
+-int_getnewargs(PyIntObject *v)
++int_getnewargs(PyIntObject *v, PyObject *unused)
+ {
+ 	return Py_BuildValue("(l)", v->ob_ival);
+ }
+--- a/Objects/listobject.c	2026-10-22 20:41:37
++++ b/Objects/listobject.c	2026-10-22 20:44:42
+@@ -1779,7 +1779,7 @@
+ }
+ 
+ static PyObject *
+-listreverse(PyListObject *self)
++listreverse(PyListObject *self, PyObject *unused)
+ {
+ 	if (self->ob_size > 1)
+ 		reverse_slice(self->ob_item, self->ob_item + self->ob_size);
+--- a/Objects/longobject.c	2026-10-22 20:41:37
++++ b/Objects/longobject.c	2026-10-22 20:44:42
+@@ -2807,7 +2807,7 @@
+ }
+ 
+ static PyObject *
+-long_getnewargs(PyLongObject *v)
++long_getnewargs(PyLongObject *v, PyObject *unused)
+ {
+ 	return Py_BuildValue("(N)", _PyLong_Copy(v));
+ }
+--- a/Objects/stringobject.c	2026-10-22 20:41:37
++++ b/Objects/stringobject.c	2026-10-22 20:44:42
+@@ -1827,7 +1827,7 @@
+ Return a copy of the string S converted to lowercase.");
+ 
+ static PyObject *
+-string_lower(PyStringObject *self)
++string_lower(PyStringObject *self, PyObject *unused)
+ {
+ 	char *s = PyString_AS_STRING(self), *s_new;
+ 	int i, n = PyString_GET_SIZE(self);
+@@ -1855,7 +1855,7 @@
+ Return a copy of the string S converted to uppercase.");
+ 
+ static PyObject *
+-string_upper(PyStringObject *self)
++string_upper(PyStringObject *self, PyObject *unused)
+ {
+ 	char *s = PyString_AS_STRING(self), *s_new;
+ 	int i, n = PyString_GET_SIZE(self);
+@@ -1884,7 +1884,7 @@
+ characters, all remaining cased characters have lowercase.");
+ 
+ static PyObject*
+-string_title(PyStringObject *self)
++string_title(PyStringObject *self, PyObject *unused)
+ {
+ 	char *s = PyString_AS_STRING(self), *s_new;
+ 	int i, n = PyString_GET_SIZE(self);
+@@ -1919,7 +1919,7 @@
+ capitalized.");
+ 
+ static PyObject *
+-string_capitalize(PyStringObject *self)
++string_capitalize(PyStringObject *self, PyObject *unused)
+ {
+ 	char *s = PyString_AS_STRING(self), *s_new;
+ 	int i, n = PyString_GET_SIZE(self);
+@@ -2012,7 +2012,7 @@
+ converted to lowercase and vice versa.");
+ 
+ static PyObject *
+-string_swapcase(PyStringObject *self)
++string_swapcase(PyStringObject *self, PyObject *unused)
+ {
+ 	char *s = PyString_AS_STRING(self), *s_new;
+ 	int i, n = PyString_GET_SIZE(self);
+@@ -2739,7 +2739,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-string_isspace(PyStringObject *self)
++string_isspace(PyStringObject *self, PyObject *unused)
+ {
+     register const unsigned char *p
+         = (unsigned char *) PyString_AS_STRING(self);
+@@ -2770,7 +2770,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-string_isalpha(PyStringObject *self)
++string_isalpha(PyStringObject *self, PyObject *unused)
+ {
+     register const unsigned char *p
+         = (unsigned char *) PyString_AS_STRING(self);
+@@ -2801,7 +2801,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-string_isalnum(PyStringObject *self)
++string_isalnum(PyStringObject *self, PyObject *unused)
+ {
+     register const unsigned char *p
+         = (unsigned char *) PyString_AS_STRING(self);
+@@ -2832,7 +2832,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-string_isdigit(PyStringObject *self)
++string_isdigit(PyStringObject *self, PyObject *unused)
+ {
+     register const unsigned char *p
+         = (unsigned char *) PyString_AS_STRING(self);
+@@ -2863,7 +2863,7 @@
+ at least one cased character in S, False otherwise.");
+ 
+ static PyObject*
+-string_islower(PyStringObject *self)
++string_islower(PyStringObject *self, PyObject *unused)
+ {
+     register const unsigned char *p
+         = (unsigned char *) PyString_AS_STRING(self);
+@@ -2897,7 +2897,7 @@
+ at least one cased character in S, False otherwise.");
+ 
+ static PyObject*
+-string_isupper(PyStringObject *self)
++string_isupper(PyStringObject *self, PyObject *unused)
+ {
+     register const unsigned char *p
+         = (unsigned char *) PyString_AS_STRING(self);
+@@ -3047,7 +3047,7 @@
+ #undef SPLIT_APPEND
+ 
+ static PyObject *
+-string_getnewargs(PyStringObject *v)
++string_getnewargs(PyStringObject *v, PyObject *unused)
+ {
+ 	return Py_BuildValue("(s#)", v->ob_sval, v->ob_size);
+ }
+--- a/Objects/structseq.c	2026-10-22 20:41:37
++++ b/Objects/structseq.c	2026-10-22 20:44:42
+@@ -242,7 +242,7 @@
+ }
+ 
+ static PyObject *
+-structseq_reduce(PyStructSequence* self)
++structseq_reduce(PyStructSequence* self, PyObject *unused)
+ {
+ 	PyObject* tup;
+ 	PyObject* dict;
+--- a/Objects/tupleobject.c	2026-10-22 20:41:37
++++ b/Objects/tupleobject.c	2026-10-22 20:44:42
+@@ -588,7 +588,7 @@
+ }
+ 
+ static PyObject *
+-tuple_getnewargs(PyTupleObject *v)
++tuple_getnewargs(PyTupleObject *v, PyObject *unused)
+ {
+ 	return Py_BuildValue("(N)", tupleslice(v, 0, v->ob_size));
+ 
+--- a/Objects/typeobject.c	2026-10-22 20:41:37
++++ b/Objects/typeobject.c	2026-10-22 20:44:42
+@@ -1273,7 +1273,7 @@
+ }
+ 
+ static PyObject *
+-mro_external(PyObject *self)
++mro_external(PyObject *self, PyObject *unused)
+ {
+ 	PyTypeObject *type = (PyTypeObject *)self;
+ 
+--- a/Objects/unicodeobject.c	2026-10-22 20:41:37
++++ b/Objects/unicodeobject.c	2026-10-22 20:44:42
+@@ -4354,7 +4354,7 @@
+ characters, all remaining cased characters have lower case.");
+ 
+ static PyObject*
+-unicode_title(PyUnicodeObject *self)
++unicode_title(PyUnicodeObject *self, PyObject *unused)
+ {
+     return fixup(self, fixtitle);
+ }
+@@ -4366,7 +4366,7 @@
+ have upper case.");
+ 
+ static PyObject*
+-unicode_capitalize(PyUnicodeObject *self)
++unicode_capitalize(PyUnicodeObject *self, PyObject *unused)
+ {
+     return fixup(self, fixcapitalize);
+ }
+@@ -4873,7 +4873,7 @@
+ at least one cased character in S, False otherwise.");
+ 
+ static PyObject*
+-unicode_islower(PyUnicodeObject *self)
++unicode_islower(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -4907,7 +4907,7 @@
+ at least one cased character in S, False otherwise.");
+ 
+ static PyObject*
+-unicode_isupper(PyUnicodeObject *self)
++unicode_isupper(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -4943,7 +4943,7 @@
+ Return False otherwise.");
+ 
+ static PyObject*
+-unicode_istitle(PyUnicodeObject *self)
++unicode_istitle(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -4989,7 +4989,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-unicode_isspace(PyUnicodeObject *self)
++unicode_isspace(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -5018,7 +5018,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-unicode_isalpha(PyUnicodeObject *self)
++unicode_isalpha(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -5047,7 +5047,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-unicode_isalnum(PyUnicodeObject *self)
++unicode_isalnum(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -5076,7 +5076,7 @@
+ False otherwise.");
+ 
+ static PyObject*
+-unicode_isdecimal(PyUnicodeObject *self)
++unicode_isdecimal(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -5105,7 +5105,7 @@
+ and there is at least one character in S, False otherwise.");
+ 
+ static PyObject*
+-unicode_isdigit(PyUnicodeObject *self)
++unicode_isdigit(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -5134,7 +5134,7 @@
+ False otherwise.");
+ 
+ static PyObject*
+-unicode_isnumeric(PyUnicodeObject *self)
++unicode_isnumeric(PyUnicodeObject *self, PyObject *unused)
+ {
+     register const Py_UNICODE *p = PyUnicode_AS_UNICODE(self);
+     register const Py_UNICODE *e;
+@@ -5201,7 +5201,7 @@
+ Return a copy of the string S converted to lowercase.");
+ 
+ static PyObject*
+-unicode_lower(PyUnicodeObject *self)
++unicode_lower(PyUnicodeObject *self, PyObject *unused)
+ {
+     return fixup(self, fixlower);
+ }
+@@ -5679,7 +5679,7 @@
+ and vice versa.");
+ 
+ static PyObject*
+-unicode_swapcase(PyUnicodeObject *self)
++unicode_swapcase(PyUnicodeObject *self, PyObject *unused)
+ {
+     return fixup(self, fixswapcase);
+ }
+@@ -5708,7 +5708,7 @@
+ Return a copy of S converted to uppercase.");
+ 
+ static PyObject*
+-unicode_upper(PyUnicodeObject *self)
++unicode_upper(PyUnicodeObject *self, PyObject *unused)
+ {
+     return fixup(self, fixupper);
+ }
+@@ -5829,7 +5829,7 @@
+ 
+ 
+ static PyObject *
+-unicode_getnewargs(PyUnicodeObject *v)
++unicode_getnewargs(PyUnicodeObject *v, PyObject *unused)
+ {
+ 	return Py_BuildValue("(u#)", v->str, v->length);
+ }
+--- a/Python/bltinmodule.c	2026-10-22 20:41:37
++++ b/Python/bltinmodule.c	2026-10-22 20:44:42
+@@ -663,7 +663,7 @@
+ 
+ 
+ static PyObject *
+-builtin_globals(PyObject *self)
++builtin_globals(PyObject *self, PyObject *unused)
+ {
+ 	PyObject *d;
+ 
+@@ -1077,7 +1077,7 @@
+ 
+ 
+ static PyObject *
+-builtin_locals(PyObject *self)
++builtin_locals(PyObject *self, PyObject *unused)
+ {
+ 	PyObject *d;
+ 
+--- a/Python/sysmodule.c	2026-10-22 20:41:37
++++ b/Python/sysmodule.c	2026-10-22 20:44:42
+@@ -220,7 +220,7 @@
+ #ifdef Py_USING_UNICODE
+ 
+ static PyObject *
+-sys_getdefaultencoding(PyObject *self)
++sys_getdefaultencoding(PyObject *self, PyObject *unused)
+ {
+ 	return PyString_FromString(PyUnicode_GetDefaultEncoding());
+ }
+@@ -251,7 +251,7 @@
+ );
+ 
+ static PyObject *
+-sys_getfilesystemencoding(PyObject *self)
++sys_getfilesystemencoding(PyObject *self, PyObject *unused)
+ {
+ 	if (Py_FileSystemDefaultEncoding)
+ 		return PyString_FromString(Py_FileSystemDefaultEncoding);
+@@ -467,7 +467,7 @@
+ );
+ 
+ static PyObject *
+-sys_getrecursionlimit(PyObject *self)
++sys_getrecursionlimit(PyObject *self, PyObject *unused)
+ {
+ 	return PyInt_FromLong(Py_GetRecursionLimit());
+ }
+@@ -687,9 +687,16 @@
+ extern PyObject *_Py_GetDXProfile(PyObject *,  PyObject *);
+ #endif
+ 
++/* METH_NOARGS is called as meth(self, NULL). */
++static PyObject *
++PyEval_GetCallStats_noargs(PyObject *self, PyObject *unused)
++{
++	return PyEval_GetCallStats(self);
++}
++
+ static PyMethodDef sys_methods[] = {
+ 	/* Might as well keep this in alphabetic order */
+-	{"callstats", (PyCFunction)PyEval_GetCallStats, METH_NOARGS,
++	{"callstats", (PyCFunction)PyEval_GetCallStats_noargs, METH_NOARGS,
+ 	 callstats_doc},
+ 	{"displayhook",	sys_displayhook, METH_O, displayhook_doc},
+ 	{"exc_info",	sys_exc_info, METH_NOARGS, exc_info_doc},
+--- a/Python/traceback.c	2026-10-22 20:41:37
++++ b/Python/traceback.c	2026-10-22 20:44:42
+@@ -64,6 +64,14 @@
+ 	Py_XDECREF(tb->tb_frame);
+ 	tb->tb_next = NULL;
+ 	tb->tb_frame = NULL;
++}
++
++/* tp_clear is called as an inquiry (int result). */
++static int
++tb_clear_inquiry(tracebackobject *self)
++{
++	tb_clear(self);
++	return 0;
+ }
+ 
+ PyTypeObject PyTraceBack_Type = {
+@@ -90,7 +98,7 @@
+ 	Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,/* tp_flags */
+ 	0,             				/* tp_doc */
+  	(traverseproc)tb_traverse,		/* tp_traverse */
+-	(inquiry)tb_clear,			/* tp_clear */
++	(inquiry)tb_clear_inquiry,			/* tp_clear */
+ 	0,					/* tp_richcompare */
+ 	0,					/* tp_weaklistoffset */
+ 	0,					/* tp_iter */

@@ -4,24 +4,36 @@
     "description": "Cyan Worlds' Plasma game engine",
     "dependencies": [
       "asio",
-      "curl",
+      {
+        "name": "curl",
+        "platform": "!emscripten"
+      },
       "expat",
       {
         "name": "fontconfig",
-        "platform": "!(osx | windows)"
+        "platform": "!(osx | windows | emscripten)"
       },
       "freetype",
       {
         "name": "libarchive",
         "platform": "osx"
       },
-      "libepoxy",
+      {
+        "name": "libepoxy",
+        "platform": "!emscripten"
+      },
       "libjpeg-turbo",
       "libogg",
       "libpng",
       "libvorbis",
-      "libvpx",
-      "libwebm",
+      {
+        "name": "libvpx",
+        "platform": "!emscripten"
+      },
+      {
+        "name": "libwebm",
+        "platform": "!emscripten"
+      },
       {
         "name": "openal-soft",
         "features": [
@@ -29,7 +41,8 @@
             "name": "pipewire",
             "platform": "linux"
           }
-        ]
+        ],
+        "platform": "!emscripten"
       },
       "openssl",
       "opus",
@@ -38,7 +51,8 @@
         "name": "python3",
         "features": [
           "deprecated-win7-support"
-        ]
+        ],
+        "platform": "!emscripten"
       },
       "speex",
       "string-theory",

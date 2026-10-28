@@ -1,0 +1,119 @@
+--- a/Modules/posixmodule.c	2026-10-22 21:39:27
++++ b/Modules/posixmodule.c	2026-10-22 21:39:27
+@@ -301,7 +301,88 @@
+ #	define FSTAT fstat
+ #	define STRUCT_STAT struct stat
+ #endif
++
++#ifdef PY2_OS_MODULE_NT
++/* Windows path separators for the nt module.  Cyan's client ran this module on
++   Windows, where the C library takes '\\' and '/' alike, and MOULa's scripts build paths with
++   backslashes (PtGetUserPath() + "\\Avatars\\", ntpath.join).  The Emscripten file system takes
++   only '/', so every path-taking call that Windows' nt module also offers (access, chdir, chmod,
++   listdir, lstat, mkdir, open, remove/unlink, rename, rmdir, stat, utime) passes its path through
++   plasma_r7_path, which copies it with '\\' replaced by '/'.  The Python-level argument is not
++   changed, so error messages carry the path as the script wrote it, as on Windows. */
++#include <stdarg.h>
++
++static int
++plasma_r7_path(const char *in, char *out)
++{
++	size_t i, n = strlen(in);
++	if (n > MAXPATHLEN) {
++		errno = ENAMETOOLONG;
++		return -1;
++	}
++	for (i = 0; i <= n; ++i)
++		out[i] = (in[i] == '\\') ? '/' : in[i];
++	return 0;
++}
+ 
++static int plasma_r7_access(const char *p, int m)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : access(q, m); }
++static int plasma_r7_chdir(const char *p)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : chdir(q); }
++static int plasma_r7_chmod(const char *p, mode_t m)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : chmod(q, m); }
++static DIR *plasma_r7_opendir(const char *p)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? NULL : opendir(q); }
++static int plasma_r7_lstat(const char *p, struct stat *b)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : lstat(q, b); }
++static int plasma_r7_stat(const char *p, struct stat *b)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : stat(q, b); }
++static int plasma_r7_mkdir(const char *p, mode_t m)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : mkdir(q, m); }
++static int plasma_r7_open(const char *p, int flag, ...)
++{
++	char q[MAXPATHLEN + 1];
++	int mode = 0;
++	if (flag & O_CREAT) {
++		va_list ap;
++		va_start(ap, flag);
++		mode = va_arg(ap, int);
++		va_end(ap);
++	}
++	return plasma_r7_path(p, q) ? -1 : open(q, flag, mode);
++}
++static int plasma_r7_unlink(const char *p)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : unlink(q); }
++static int plasma_r7_rename(const char *p1, const char *p2)
++{
++	char q1[MAXPATHLEN + 1], q2[MAXPATHLEN + 1];
++	return (plasma_r7_path(p1, q1) || plasma_r7_path(p2, q2)) ? -1 : rename(q1, q2);
++}
++static int plasma_r7_rmdir(const char *p)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : rmdir(q); }
++static int plasma_r7_utime(const char *p, const struct utimbuf *t)
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : utime(q, t); }
++#ifdef HAVE_UTIMES
++static int plasma_r7_utimes(const char *p, const struct timeval t[2])
++{ char q[MAXPATHLEN + 1]; return plasma_r7_path(p, q) ? -1 : utimes(q, t); }
++#define utimes plasma_r7_utimes
++#endif
++
++#define access plasma_r7_access
++#define chdir plasma_r7_chdir
++#define chmod plasma_r7_chmod
++#define opendir plasma_r7_opendir
++#define lstat plasma_r7_lstat
++#undef STAT
++#define STAT plasma_r7_stat
++#define mkdir plasma_r7_mkdir
++#define open plasma_r7_open
++#define unlink plasma_r7_unlink
++#define rename plasma_r7_rename
++#define rmdir plasma_r7_rmdir
++#define utime plasma_r7_utime
++#endif /* PY2_OS_MODULE_NT */
++
+ #if defined(MAJOR_IN_MKDEV)
+ #include <sys/mkdev.h>
+ #else
+--- a/Objects/fileobject.c	2026-10-22 21:39:27
++++ b/Objects/fileobject.c	2026-10-22 21:39:42
+@@ -207,9 +207,25 @@
+ 		}
+ #endif
+ 		if (NULL == f->f_fp && NULL != name) {
++#ifdef PY2_OS_MODULE_NT
++			/* file() and open() take Windows paths as on Cyan's
++			   client; the Emscripten file system takes only '/' (see posixmodule.c).
++			   f_name keeps the path as written, for error messages and repr. */
++			size_t r7i, r7n = strlen(name);
++			char *r7name = PyMem_Malloc(r7n + 1);
++			if (r7name == NULL)
++				return PyErr_NoMemory();
++			for (r7i = 0; r7i <= r7n; ++r7i)
++				r7name[r7i] = (name[r7i] == '\\') ? '/' : name[r7i];
+ 			Py_BEGIN_ALLOW_THREADS
++			f->f_fp = fopen(r7name, mode);
++			Py_END_ALLOW_THREADS
++			PyMem_Free(r7name);
++#else
++			Py_BEGIN_ALLOW_THREADS
+ 			f->f_fp = fopen(name, mode);
+ 			Py_END_ALLOW_THREADS
++#endif
+ 		}
+ 	}
+ 	if (f->f_fp == NULL) {

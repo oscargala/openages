@@ -1,0 +1,99 @@
+# Pinned inputs of the browser (wasm32-emscripten) build of plClient and plClient-py2.
+#
+# Every file the build scripts or the CI workflow download is listed here with
+# its URL and SHA-256, and every git input with its commit. web/build/sources.sh reads this file:
+# it downloads to a temporary name, checks the SHA-256 and only then renames the file into
+# place, so a changed or truncated download stops the build instead of entering it.
+#
+# Format: one record per line, "<name> <key>=<value> ...", values without spaces.
+#   url     where the file comes from          file    the name it is stored under
+#   sha256  of the file's bytes                version the upstream version
+#   commit  a git commit                       tree    the git tree id of path at commit
+#   path    a directory inside the repository  manifest-sha256  see web/build/tree-hash.py
+#
+# What is pinned elsewhere, and why:
+# - vcpkg ports. Every archive and patch a port downloads carries a SHA-512 in the port's own
+#   files; vcpkg checks it before use. The ports come from the vcpkg submodule at the commit
+#   below (also the root vcpkg.json's builtin-baseline) and from Scripts/Ports, so pinning the
+#   commit pins them. PhysX's port keeps its patches in Scripts/Ports/physx, its pull request 569
+#   commits included (upstream's port has kept them there since it stopped downloading them).
+# - GitHub Actions: by full commit SHA in .github/workflows/web.yml.
+# - The formatters of the port's own Python and JavaScript (ruff 0.17.1, prettier 3.9.10, eslint 10.13.0): in
+#   web/build/formatters, in pip's and npm's own lock formats (requirements.txt with the SHA-256 of every file of the
+#   release, package-lock.json with every package's integrity hash), which install.sh installs from. They check the
+#   source tree and never enter a build.
+
+# --- Toolchain --------------------------------------------------------------------------------
+# Emscripten 6.0.12. The version of the emsdk record is the one pin of the Emscripten release
+# build-deps.sh, build-client.sh and python2/build.sh (web/build/common.sh),
+# movie-codecs.py and the CMake toolchain (cmake/emscripten/Toolchain.cmake) read it and refuse any
+# other emcc version. On a workstation, install it with emsdk ("./emsdk install 6.0.12 &&
+# ./emsdk activate 6.0.12"); the CI workflow checks out emsdk at this commit (one after the 6.0.12
+# tag 35ff8a6d) and places the two downloads below into emsdk/downloads/ before
+# "EMSDK_KEEP_DOWNLOADS=1 emsdk install", so emsdk uses them as they are.
+#
+# The client depends on this release beyond its public API. Before changing the pin, revalidate:
+# - emscripten/plEmscriptenCwd.cpp, which builds on WasmFS internals (system/lib/wasmfs backend.h, paths.h,
+#   virtual.h) and wraps getcwd and chdir (this release's getcwd answers "/" in a directory on a mount);
+# - emscripten/plEmscriptenFetchBackend.js, which replaces src/lib/libwasmfs_fetch.js by defining the
+#   same library symbols, and the OpenAL overrides emscripten/plEmscriptenOpenAL*.js (src/lib/libopenal.js);
+# - the other functions plClient links with -Wl,--wrap (__syscall_poll, fopen, fclose):
+#   plEmscriptenPoll.cpp and plEmscriptenStdio.cpp work around this release's WasmFS behaviour;
+# - main.cpp's Finish, which calls musl's internal __funcs_on_exit, and main()'s explicit runtime
+#   keepalive around this release's JSPI;
+# - pnAsyncCore's resolver flags (pnAcDns.cpp: this release's getaddrinfo refuses AI_ADDRCONFIG) and
+#   its WebSocket backend's placeholder addresses (pnAcSocketEmscripten.cpp);
+# - plClient's non-LTO link (its CMakeLists.txt: this release's ThinLTO system libraries fail to link
+#   with WasmFS);
+# - the deps prefix and the movie codec package, which are rebuilt with the new release.
+# (Paths under emscripten/ are in Sources/Plasma/Apps/plClient/.)
+emsdk version=6.0.12 url=https://github.com/emscripten-core/emsdk.git commit=8f685c26ee9f672081e61e22c6aa60fa972d00a9 release=6e9f6885cb17a3d6c8fd488a5cff730f50aba61d
+emsdk-6.0.12-linux-x86_64 version=6.0.12 url=https://storage.googleapis.com/webassembly/emscripten-releases-builds/linux/6e9f6885cb17a3d6c8fd488a5cff730f50aba61d/wasm-binaries.tar.xz file=6e9f6885cb17a3d6c8fd488a5cff730f50aba61d-wasm-binaries.tar.xz sha256=7b073a102b07eca5a0fe344037681e53162639f3540432456874c0446a5e8fa7
+emsdk-node-24.19.0-linux-x86_64 version=24.19.0 url=https://storage.googleapis.com/webassembly/emscripten-releases-builds/deps/node-v24.19.0-linux-x64.tar.xz file=node-v24.19.0-linux-x64.tar.xz sha256=14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647
+# CMake and Ninja for the CI runner. A workstation uses its own (CMake >= 3.27); the workflow
+# installs these exact versions, the ones the macOS reference builds used.
+cmake-4.4.3-linux-x86_64 version=4.4.3 url=https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-linux-x86_64.tar.gz file=cmake-4.4.3-linux-x86_64.tar.gz sha256=d6c83076c575bc00b823522ac974bda66d0af05d6ddc30e739c12385cf32c6cc
+ninja-1.13.2-linux-x86_64 version=1.13.2 url=https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip file=ninja-linux.zip sha256=5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6
+
+# --- vcpkg ------------------------------------------------------------------------------------
+# The registry: the vcpkg submodule. build-deps.sh refuses a VCPKG_ROOT at another commit.
+vcpkg url=https://github.com/microsoft/vcpkg.git commit=9e593bb18ea69cc5095e012465dcd675a822ed0d
+# The vcpkg tool release that commit names in scripts/vcpkg-tool-metadata.txt (whose SHA-512s
+# these files also match). build-deps.sh installs the one for the host into the deps prefix.
+vcpkg-tool-macos version=2026-07-27 url=https://github.com/microsoft/vcpkg-tool/releases/download/2026-07-27/vcpkg-macos file=vcpkg-macos sha256=352a52151f57e51b0298bdd6f6a825cd4413d3b88d258f456193daf783b3ceec
+vcpkg-tool-linux-x86_64 version=2026-07-27 url=https://github.com/microsoft/vcpkg-tool/releases/download/2026-07-27/vcpkg-glibc file=vcpkg-glibc sha256=7e97ef6bcd58f74d079f40d086b801a0222c5d15e4ea0d8d507a538033493d04
+vcpkg-tool-linux-arm64 version=2026-07-27 url=https://github.com/microsoft/vcpkg-tool/releases/download/2026-07-27/vcpkg-glibc-arm64 file=vcpkg-glibc-arm64 sha256=d7a07b1df2ba45841669effa9890870fa96e74665f12409bb9b0436cc5408ed2
+
+# --- Host tools for the speex port --------------------------------------------------------------
+# speex's port runs autoreconf, which needs these. build-deps.sh builds them into the deps
+# prefix on every host, so neither Homebrew nor a distribution package is involved.
+m4 version=1.4.21 url=https://ftpmirror.gnu.org/gnu/m4/m4-1.4.21.tar.xz file=m4-1.4.21.tar.xz sha256=f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66
+autoconf version=2.72 url=https://ftpmirror.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz file=autoconf-2.72.tar.xz sha256=ba885c1319578d6c94d46e9b0dceb4014caafe2490e437a0dbca3f270a223f5a
+automake version=1.17 url=https://ftpmirror.gnu.org/gnu/automake/automake-1.17.tar.xz file=automake-1.17.tar.xz sha256=8920c1fc411e13b90bf704ef9db6f29d540e76d232cb3b2c9f4dc4cc599bd990
+libtool version=2.6.2 url=https://ftpmirror.gnu.org/gnu/libtool/libtool-2.6.2.tar.xz file=libtool-2.6.2.tar.xz sha256=2ef1067c16c97db930fd740cc9bc3d3ba9a583804ae5ac42cc3e8719e49e191e
+autoconf-archive version=2024.10.16 url=https://ftpmirror.gnu.org/gnu/autoconf-archive/autoconf-archive-2024.10.16.tar.xz file=autoconf-archive-2024.10.16.tar.xz sha256=7bcd5d001916f3a50ed7436f4f700e3d2b1bade3ed803219c592d62502a57363
+
+# --- CPython 3.12.9 (the default flavour) -------------------------------------------------------
+python-3.12.9 version=3.12.9 url=https://www.python.org/ftp/python/3.12.9/Python-3.12.9.tar.xz file=Python-3.12.9.tar.xz sha256=7220835d9f90b37c006e9842a8dff4580aaca4318674f947302b8d28f3f81112
+
+# --- CPython 2.3.3 (the py2 flavour) ------------------------------------------------------------
+# The pin is the Cypython-2.3.3 tree of OpenUru's CWE-ou-minkata repository at commit
+# 7978641e0cd7. The url is given for reference only: the build never contacts it. python.org's
+# Python-2.3.3 release cannot stand in for the tree: of the tree's 442 files, 49 carry code
+# changes against the release and 16 are not in the release at all.
+cypython-2.3.3 version=2.3.3 url=https://foundry.openuru.org/gitblit/r/CWE-ou-minkata.git commit=7978641e0cd72b6332ba1fd8cf6bcc2298eecc65 path=Build/VS2010/SDKs/XPlatform/Cypython-2.3.3 tree=fec9818b5bc2089fcaf50cee74bcf0594cd0495e manifest-sha256=01e531aa8c203f9936fe467c05382e5e5a91c2332333725b3fa9215e93b3694f
+# The commit, path and tree above belong together: the vendored proof holds the commit object and
+# the trees on the path, and web/build/commit-proof.py follows them by their git ids.
+# python2/build.sh checks it, then the tree, before every step, and refuses any other pin.
+cypython-2.3.3-proof file=web/build/python2/cypython-ou-minkata-proof.txt sha256=a26f7dea857afb92ac1c6c3301001f561a4603f0c0299a85e30eaf96949a3950
+# How the build obtains exactly that tree (web/build/python2/build.sh fetch): Cyan's 2011
+# CyanWorlds.com Engine release, which the H-uru/Plasma repository carries as its first commit;
+# every CRLF line ending converted to LF; then the vendored OpenUru delta (six source edits and
+# three Visual Studio project files). The result must match the tree and manifest above.
+cypython-2.3.3-cwe url=https://github.com/H-uru/Plasma.git commit=b970ae4bad024af47080456aba88c2548e5ea182 path=MOULOpenSourceClientPlugin/Plasma20/SDKs/XPlatform/Cypython-2.3.3 tree=9bb9ef4606d75d533ec105c6733df0566c91842a
+cypython-2.3.3-ou-delta file=web/build/python2/cypython-ou-minkata.patch sha256=11e959a2a7f4f7f3b5b191c3b2e3c59f801a2080527fc5c24366fb52906289f1
+
+# --- Movie codecs -------------------------------------------------------------------------------
+# movie-codecs.py also checks the SHA-512 it records in movie-codecs.json.
+libvpx version=1.15.2 url=https://github.com/webmproject/libvpx/archive/v1.15.2.tar.gz file=webmproject-libvpx-v1.15.2.tar.gz sha256=26fcd3db88045dee380e581862a6ef106f49b74b6396ee95c2993a260b4636aa
+libwebm version=1.0.0.32 url=https://github.com/webmproject/libwebm/archive/libwebm-1.0.0.32.tar.gz file=webmproject-libwebm-libwebm-1.0.0.32.tar.gz sha256=7fd5e085bda9f8031cf2ad2a1e52d9b7b29cba9c0b96ad2ce794ce89e4249eb8

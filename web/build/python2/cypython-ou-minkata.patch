@@ -1,0 +1,796 @@
+OpenUru CWE-ou-minkata's changes to Cyan's Cypython-2.3.3 tree.
+
+python2/build.sh fetch rebuilds the py2 flavour's pinned CPython 2.3.3 source,
+OpenUru CWE-ou-minkata 7978641e0cd7 Build/VS2010/SDKs/XPlatform/Cypython-2.3.3 (git tree
+fec9818b5bc2089fcaf50cee74bcf0594cd0495e), without contacting OpenUru:
+  1. Cyan's tree: H-uru/Plasma b970ae4bad02 (the 2011 CyanWorlds.com Engine release),
+     MOULOpenSourceClientPlugin/Plasma20/SDKs/XPlatform/Cypython-2.3.3, git tree 9bb9ef46;
+  2. every CRLF line ending converted to LF, as OpenUru's repository stores the tree;
+  3. this patch: OpenUru's own edits, which are
+     - WRITE_RESTRICTED renamed PY_WRITE_RESTRICTED (structmember.h and its four users),
+     - a signal-handling switch for the Visual Studio 2005 runtime in Python/pythonrun.c,
+     - PY_UNICODE_TYPE no longer defined in pyconfig_static/pyconfig.h,
+     - three Visual Studio 2010 project files for a static pythoncore.
+Generated with "git diff --full-index" from step 2's tree to the pinned tree; build.sh applies
+it with "git apply" and then checks the git tree id and the SHA-256 manifest in
+web/build/sources.lock. The source files remain under the Python Software Foundation licence
+(Cypython-2.3.3/LICENSE).
+
+diff --git a/Objects/funcobject.c b/Objects/funcobject.c
+index 6c6381794668308e78ff8d76be4882e9a387ea2a..6a7ef7327d7ba73f7bd35b9d167d91418d2f87db 100644
+--- a/Objects/funcobject.c
++++ b/Objects/funcobject.c
+@@ -153,13 +153,13 @@ PyFunction_SetClosure(PyObject *op, PyObject *closure)
+ static PyMemberDef func_memberlist[] = {
+         {"func_closure",  T_OBJECT,     OFF(func_closure),
+ 	 RESTRICTED|READONLY},
+-        {"func_doc",      T_OBJECT,     OFF(func_doc), WRITE_RESTRICTED},
+-        {"__doc__",       T_OBJECT,     OFF(func_doc), WRITE_RESTRICTED},
++        {"func_doc",      T_OBJECT,     OFF(func_doc), PY_WRITE_RESTRICTED},
++        {"__doc__",       T_OBJECT,     OFF(func_doc), PY_WRITE_RESTRICTED},
+         {"func_globals",  T_OBJECT,     OFF(func_globals),
+ 	 RESTRICTED|READONLY},
+         {"func_name",     T_OBJECT,     OFF(func_name),         READONLY},
+         {"__name__",      T_OBJECT,     OFF(func_name),         READONLY},
+-        {"__module__",    T_OBJECT,     OFF(func_module), WRITE_RESTRICTED},
++        {"__module__",    T_OBJECT,     OFF(func_module), PY_WRITE_RESTRICTED},
+         {NULL}  /* Sentinel */
+ };
+ 
+diff --git a/Objects/methodobject.c b/Objects/methodobject.c
+index c772373eb8fbf5ba9ee76f0705d9478df2e69826..9881770d7470973c3db384047fb945b7a15705e5 100644
+--- a/Objects/methodobject.c
++++ b/Objects/methodobject.c
+@@ -189,7 +189,7 @@ static PyGetSetDef meth_getsets [] = {
+ #define OFF(x) offsetof(PyCFunctionObject, x)
+ 
+ static PyMemberDef meth_members[] = {
+-	{"__module__",    T_OBJECT,     OFF(m_module), WRITE_RESTRICTED},
++	{"__module__",    T_OBJECT,     OFF(m_module), PY_WRITE_RESTRICTED},
+ 	{NULL}
+ };
+ 
+diff --git a/PCbuild/pythoncore_static.vcxproj b/PCbuild/pythoncore_static.vcxproj
+new file mode 100644
+index 0000000000000000000000000000000000000000..5a4c018e7b7c66e1eee859269f108d34a87552d8
+--- /dev/null
++++ b/PCbuild/pythoncore_static.vcxproj
+@@ -0,0 +1,285 @@
++﻿<?xml version="1.0" encoding="utf-8"?>
++<Project DefaultTargets="Build" ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
++  <ItemGroup Label="ProjectConfigurations">
++    <ProjectConfiguration Include="Debug_Internal|Win32">
++      <Configuration>Debug_Internal</Configuration>
++      <Platform>Win32</Platform>
++    </ProjectConfiguration>
++    <ProjectConfiguration Include="Debug|Win32">
++      <Configuration>Debug</Configuration>
++      <Platform>Win32</Platform>
++    </ProjectConfiguration>
++    <ProjectConfiguration Include="Release_Internal|Win32">
++      <Configuration>Release_Internal</Configuration>
++      <Platform>Win32</Platform>
++    </ProjectConfiguration>
++    <ProjectConfiguration Include="Release|Win32">
++      <Configuration>Release</Configuration>
++      <Platform>Win32</Platform>
++    </ProjectConfiguration>
++  </ItemGroup>
++  <PropertyGroup Label="Globals">
++    <ProjectGuid>{A32201A8-0255-4863-97B8-4A569C18C624}</ProjectGuid>
++    <Keyword>Win32Proj</Keyword>
++  </PropertyGroup>
++  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
++  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release_Internal|Win32'" Label="Configuration">
++    <ConfigurationType>StaticLibrary</ConfigurationType>
++    <CharacterSet>MultiByte</CharacterSet>
++    <WholeProgramOptimization>false</WholeProgramOptimization>
++  </PropertyGroup>
++  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
++    <ConfigurationType>StaticLibrary</ConfigurationType>
++    <CharacterSet>MultiByte</CharacterSet>
++    <WholeProgramOptimization>false</WholeProgramOptimization>
++  </PropertyGroup>
++  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_Internal|Win32'" Label="Configuration">
++    <ConfigurationType>StaticLibrary</ConfigurationType>
++    <CharacterSet>MultiByte</CharacterSet>
++  </PropertyGroup>
++  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
++    <ConfigurationType>StaticLibrary</ConfigurationType>
++    <CharacterSet>MultiByte</CharacterSet>
++  </PropertyGroup>
++  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
++  <ImportGroup Label="ExtensionSettings">
++  </ImportGroup>
++  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release_Internal|Win32'" Label="PropertySheets">
++    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
++  </ImportGroup>
++  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
++    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
++  </ImportGroup>
++  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug_Internal|Win32'" Label="PropertySheets">
++    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
++  </ImportGroup>
++  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
++    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
++  </ImportGroup>
++  <PropertyGroup Label="UserMacros" />
++  <PropertyGroup>
++    <_ProjectFileVersion>10.0.30319.1</_ProjectFileVersion>
++    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug_Internal|Win32'">$(Configuration)\</OutDir>
++    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(Configuration)\</OutDir>
++    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug_Internal|Win32'">$(Configuration)\</IntDir>
++    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(Configuration)\</IntDir>
++    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release_Internal|Win32'">$(Configuration)\</OutDir>
++    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(Configuration)\</OutDir>
++    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release_Internal|Win32'">$(Configuration)\</IntDir>
++    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(Configuration)\</IntDir>
++  </PropertyGroup>
++  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug_Internal|Win32'">
++    <ClCompile>
++      <Optimization>Disabled</Optimization>
++      <AdditionalIncludeDirectories>../Include;../PC;../Python;../Modules;../../../../../../Sources/Plasma/CoreLib;../../../../../../Sources/Plasma/FeatureLib/pfPython;../../StaticSDKs/XPlatform/zlib;../pyconfig_static;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
++      <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;BUILD_TYPE=BUILD_TYPE_LIVE;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;Py_NO_ENABLE_SHARED;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++      <MinimalRebuild>false</MinimalRebuild>
++      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
++      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
++      <ForceConformanceInForLoopScope>true</ForceConformanceInForLoopScope>
++      <PrecompiledHeader>
++      </PrecompiledHeader>
++      <WarningLevel>Level3</WarningLevel>
++      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
++      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
++      <ObjectFileName>$(IntDir)</ObjectFileName>
++      <ProgramDataBaseFileName>$(IntDir)vc$(PlatformToolsetVersion).pdb</ProgramDataBaseFileName>
++      <StringPooling>true</StringPooling>
++    </ClCompile>
++    <Lib>
++      <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
++    </Lib>
++  </ItemDefinitionGroup>
++  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
++    <ClCompile>
++      <Optimization>Disabled</Optimization>
++      <AdditionalIncludeDirectories>../Include;../PC;../Python;../Modules;../../../../../../Sources/Plasma/CoreLib;../../../../../../Sources/Plasma/FeatureLib/pfPython;../../StaticSDKs/XPlatform/zlib;../pyconfig_static;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
++      <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;PLASMA_EXTERNAL_RELEASE;BUILD_TYPE=BUILD_TYPE_LIVE;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;Py_NO_ENABLE_SHARED;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++      <MinimalRebuild>false</MinimalRebuild>
++      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
++      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
++      <ForceConformanceInForLoopScope>true</ForceConformanceInForLoopScope>
++      <PrecompiledHeader>
++      </PrecompiledHeader>
++      <WarningLevel>Level3</WarningLevel>
++      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
++      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
++      <ObjectFileName>$(IntDir)</ObjectFileName>
++      <ProgramDataBaseFileName>$(IntDir)vc$(PlatformToolsetVersion).pdb</ProgramDataBaseFileName>
++      <StringPooling>true</StringPooling>
++    </ClCompile>
++    <Lib>
++      <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
++    </Lib>
++  </ItemDefinitionGroup>
++  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release_Internal|Win32'">
++    <ClCompile>
++      <AdditionalIncludeDirectories>../Include;../PC;../Python;../Modules;../../../../../../Sources/Plasma/CoreLib;../../../../../../Sources/Plasma/FeatureLib/pfPython;../../StaticSDKs/XPlatform/zlib;../pyconfig_static;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
++      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;BUILD_TYPE=BUILD_TYPE_LIVE;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;Py_NO_ENABLE_SHARED;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++      <StringPooling>true</StringPooling>
++      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
++      <ForceConformanceInForLoopScope>true</ForceConformanceInForLoopScope>
++      <PrecompiledHeader>
++      </PrecompiledHeader>
++      <WarningLevel>Level3</WarningLevel>
++      <DebugInformationFormat>
++      </DebugInformationFormat>
++      <Optimization>Full</Optimization>
++      <IntrinsicFunctions>true</IntrinsicFunctions>
++      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
++      <ObjectFileName>$(IntDir)</ObjectFileName>
++      <ProgramDataBaseFileName>$(IntDir)vc$(PlatformToolsetVersion).pdb</ProgramDataBaseFileName>
++      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
++      <BufferSecurityCheck>true</BufferSecurityCheck>
++    </ClCompile>
++    <Lib>
++      <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
++    </Lib>
++  </ItemDefinitionGroup>
++  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
++    <ClCompile>
++      <AdditionalIncludeDirectories>../Include;../PC;../Python;../Modules;../../../../../../Sources/Plasma/CoreLib;../../../../../../Sources/Plasma/FeatureLib/pfPython;../../StaticSDKs/XPlatform/zlib;../pyconfig_static;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
++      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;PLASMA_EXTERNAL_RELEASE;BUILD_TYPE=BUILD_TYPE_LIVE;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;Py_NO_ENABLE_SHARED;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++      <StringPooling>true</StringPooling>
++      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
++      <ForceConformanceInForLoopScope>true</ForceConformanceInForLoopScope>
++      <PrecompiledHeader>
++      </PrecompiledHeader>
++      <WarningLevel>Level3</WarningLevel>
++      <DebugInformationFormat>
++      </DebugInformationFormat>
++      <Optimization>Full</Optimization>
++      <IntrinsicFunctions>true</IntrinsicFunctions>
++      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
++      <ObjectFileName>$(IntDir)</ObjectFileName>
++      <ProgramDataBaseFileName>$(IntDir)vc$(PlatformToolsetVersion).pdb</ProgramDataBaseFileName>
++      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
++      <BufferSecurityCheck>true</BufferSecurityCheck>
++    </ClCompile>
++    <Lib>
++      <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
++    </Lib>
++  </ItemDefinitionGroup>
++  <ItemGroup>
++    <ClCompile Include="..\Modules\_codecsmodule.c" />
++    <ClCompile Include="..\Modules\_hotshot.c" />
++    <ClCompile Include="..\Modules\_localemodule.c" />
++    <ClCompile Include="..\Modules\_randommodule.c" />
++    <ClCompile Include="..\Modules\_sre.c" />
++    <ClCompile Include="..\Modules\_weakref.c" />
++    <ClCompile Include="..\Objects\abstract.c" />
++    <ClCompile Include="..\Parser\acceler.c" />
++    <ClCompile Include="..\Modules\arraymodule.c" />
++    <ClCompile Include="..\Modules\audioop.c" />
++    <ClCompile Include="..\Modules\binascii.c" />
++    <ClCompile Include="..\Parser\bitset.c" />
++    <ClCompile Include="..\Python\bltinmodule.c" />
++    <ClCompile Include="..\Objects\boolobject.c" />
++    <ClCompile Include="..\Objects\bufferobject.c" />
++    <ClCompile Include="..\Objects\cellobject.c" />
++    <ClCompile Include="..\Python\ceval.c" />
++    <ClCompile Include="..\Objects\classobject.c" />
++    <ClCompile Include="..\Modules\cmathmodule.c" />
++    <ClCompile Include="..\Objects\cobject.c" />
++    <ClCompile Include="..\Python\codecs.c" />
++    <ClCompile Include="..\Python\compile.c" />
++    <ClCompile Include="..\Objects\complexobject.c" />
++    <ClCompile Include="..\PC\config.c" />
++    <ClCompile Include="..\Modules\cPickle.c" />
++    <ClCompile Include="..\Modules\cStringIO.c" />
++    <ClCompile Include="..\Objects\descrobject.c" />
++    <ClCompile Include="..\Objects\dictobject.c" />
++    <ClCompile Include="..\Pc\dl_nt.c" />
++    <ClCompile Include="..\Python\dynload_win.c" />
++    <ClCompile Include="..\Objects\enumobject.c" />
++    <ClCompile Include="..\Modules\errnomodule.c" />
++    <ClCompile Include="..\Python\errors.c" />
++    <ClCompile Include="..\Python\exceptions.c" />
++    <ClCompile Include="..\Objects\fileobject.c" />
++    <ClCompile Include="..\Objects\floatobject.c" />
++    <ClCompile Include="..\Objects\frameobject.c" />
++    <ClCompile Include="..\Python\frozen.c" />
++    <ClCompile Include="..\Objects\funcobject.c" />
++    <ClCompile Include="..\Python\future.c" />
++    <ClCompile Include="..\Modules\gcmodule.c" />
++    <ClCompile Include="..\Python\getargs.c" />
++    <ClCompile Include="..\Modules\getbuildinfo.c" />
++    <ClCompile Include="..\Python\getcompiler.c" />
++    <ClCompile Include="..\Python\getcopyright.c" />
++    <ClCompile Include="..\Python\getmtime.c" />
++    <ClCompile Include="..\Python\getopt.c" />
++    <ClCompile Include="..\PC\getpathp.c" />
++    <ClCompile Include="..\Python\getplatform.c" />
++    <ClCompile Include="..\Python\getversion.c" />
++    <ClCompile Include="..\Python\graminit.c" />
++    <ClCompile Include="..\Parser\grammar1.c" />
++    <ClCompile Include="..\Modules\imageop.c" />
++    <ClCompile Include="..\PC\import_nt.c" />
++    <ClCompile Include="..\Python\import_pack.c" />
++    <ClCompile Include="..\Python\importdl.c" />
++    <ClCompile Include="..\Objects\intobject.c" />
++    <ClCompile Include="..\Objects\iterobject.c" />
++    <ClCompile Include="..\Modules\itertoolsmodule.c" />
++    <ClCompile Include="..\Parser\listnode.c" />
++    <ClCompile Include="..\Objects\listobject.c" />
++    <ClCompile Include="..\Objects\longobject.c" />
++    <ClCompile Include="..\Modules\main.c" />
++    <ClCompile Include="..\Python\marshal.c" />
++    <ClCompile Include="..\Modules\mathmodule.c" />
++    <ClCompile Include="..\Modules\md5c.c" />
++    <ClCompile Include="..\Modules\md5module.c" />
++    <ClCompile Include="..\Parser\metagrammar.c" />
++    <ClCompile Include="..\Objects\methodobject.c" />
++    <ClCompile Include="..\Python\modsupport.c" />
++    <ClCompile Include="..\Objects\moduleobject.c" />
++    <ClCompile Include="..\PC\msvcrtmodule.c" />
++    <ClCompile Include="..\Parser\myreadline.c" />
++    <ClCompile Include="..\Python\mysnprintf.c" />
++    <ClCompile Include="..\Python\mystrtoul.c" />
++    <ClCompile Include="..\Parser\node.c" />
++    <ClCompile Include="..\Objects\object.c" />
++    <ClCompile Include="..\Objects\obmalloc.c" />
++    <ClCompile Include="..\Modules\operator.c" />
++    <ClCompile Include="..\Parser\parser.c" />
++    <ClCompile Include="..\Parser\parsetok.c" />
++    <ClCompile Include="..\Modules\pcremodule.c" />
++    <ClCompile Include="..\Pc\PlasmaPack.cpp" />
++    <ClCompile Include="..\Modules\posixmodule.c" />
++    <ClCompile Include="..\Python\pyfpe.c" />
++    <ClCompile Include="..\Modules\pypcre.c" />
++    <ClCompile Include="..\Python\pystate.c" />
++    <ClCompile Include="..\Python\pythonrun.c" />
++    <ClCompile Include="..\Objects\rangeobject.c" />
++    <ClCompile Include="..\Modules\regexmodule.c" />
++    <ClCompile Include="..\Modules\regexpr.c" />
++    <ClCompile Include="..\Modules\rgbimgmodule.c" />
++    <ClCompile Include="..\Modules\rotormodule.c" />
++    <ClCompile Include="..\Modules\shamodule.c" />
++    <ClCompile Include="..\Modules\signalmodule.c" />
++    <ClCompile Include="..\Objects\sliceobject.c" />
++    <ClCompile Include="..\Objects\stringobject.c" />
++    <ClCompile Include="..\Modules\stropmodule.c" />
++    <ClCompile Include="..\Python\structmember.c" />
++    <ClCompile Include="..\Modules\structmodule.c" />
++    <ClCompile Include="..\Objects\structseq.c" />
++    <ClCompile Include="..\Python\symtable.c" />
++    <ClCompile Include="..\Python\sysmodule.c" />
++    <ClCompile Include="..\Python\thread.c" />
++    <ClCompile Include="..\Modules\threadmodule.c" />
++    <ClCompile Include="..\Modules\timemodule.c" />
++    <ClCompile Include="..\Parser\tokenizer.c" />
++    <ClCompile Include="..\Python\traceback.c" />
++    <ClCompile Include="..\Objects\tupleobject.c" />
++    <ClCompile Include="..\Objects\typeobject.c" />
++    <ClCompile Include="..\Objects\unicodectype.c" />
++    <ClCompile Include="..\Objects\unicodeobject.c" />
++    <ClCompile Include="..\Objects\weakrefobject.c" />
++    <ClCompile Include="..\Modules\xreadlinesmodule.c" />
++    <ClCompile Include="..\Modules\xxsubtype.c" />
++    <ClCompile Include="..\Modules\yuvconvert.c" />
++    <ClCompile Include="..\Modules\zipimport.c" />
++  </ItemGroup>
++  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
++  <ImportGroup Label="ExtensionTargets">
++  </ImportGroup>
++</Project>
+diff --git a/PCbuild/pythoncore_static.vcxproj.filters b/PCbuild/pythoncore_static.vcxproj.filters
+new file mode 100644
+index 0000000000000000000000000000000000000000..ce387cef78e25e3ec0d8bee7c88d7d506bcdb647
+--- /dev/null
++++ b/PCbuild/pythoncore_static.vcxproj.filters
+@@ -0,0 +1,366 @@
++﻿<?xml version="1.0" encoding="utf-8"?>
++<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
++  <ItemGroup>
++    <Filter Include="Source Files">
++      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
++      <Extensions>cpp;c;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
++    </Filter>
++    <Filter Include="Header Files">
++      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
++      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
++    </Filter>
++  </ItemGroup>
++  <ItemGroup>
++    <ClCompile Include="..\Modules\_codecsmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\_hotshot.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\_localemodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\_randommodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\_sre.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\_weakref.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\abstract.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\acceler.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\arraymodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\audioop.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\binascii.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\bitset.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\bltinmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\boolobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\bufferobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\cellobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\ceval.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\classobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\cmathmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\cobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\codecs.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\compile.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\complexobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\PC\config.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\cPickle.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\cStringIO.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\descrobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\dictobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Pc\dl_nt.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\dynload_win.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\enumobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\errnomodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\errors.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\exceptions.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\fileobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\floatobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\frameobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\frozen.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\funcobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\future.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\gcmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\getargs.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\getbuildinfo.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\getcompiler.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\getcopyright.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\getmtime.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\getopt.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\PC\getpathp.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\getplatform.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\getversion.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\graminit.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\grammar1.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\imageop.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\PC\import_nt.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\import_pack.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\importdl.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\intobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\iterobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\itertoolsmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\listnode.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\listobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\longobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\main.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\marshal.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\mathmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\md5c.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\md5module.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\metagrammar.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\methodobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\modsupport.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\moduleobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\PC\msvcrtmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\myreadline.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\mysnprintf.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\mystrtoul.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\node.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\object.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\obmalloc.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\operator.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\parser.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\parsetok.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\pcremodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Pc\PlasmaPack.cpp">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\posixmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\pyfpe.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\pypcre.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\pystate.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\pythonrun.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\rangeobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\regexmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\regexpr.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\rgbimgmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\rotormodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\shamodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\signalmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\sliceobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\stringobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\stropmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\structmember.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\structmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\structseq.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\symtable.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\sysmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\thread.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\threadmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\timemodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Parser\tokenizer.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Python\traceback.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\tupleobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\typeobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\unicodectype.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\unicodeobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Objects\weakrefobject.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\xreadlinesmodule.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\xxsubtype.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\yuvconvert.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++    <ClCompile Include="..\Modules\zipimport.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
++  </ItemGroup>
++</Project>
+\ No newline at end of file
+diff --git a/PCbuild/pythoncore_static.vcxproj.user b/PCbuild/pythoncore_static.vcxproj.user
+new file mode 100755
+index 0000000000000000000000000000000000000000..ace9a86acb77340247c6d79e985eca55840261de
+--- /dev/null
++++ b/PCbuild/pythoncore_static.vcxproj.user
+@@ -0,0 +1,3 @@
++﻿<?xml version="1.0" encoding="utf-8"?>
++<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
++</Project>
+\ No newline at end of file
+diff --git a/Python/pythonrun.c b/Python/pythonrun.c
+index d8d6e029842366677381ec7fdcc4eedd4dd5ede3..e2cf2349e526fc3dc46913b01fe27d599753eff8 100644
+--- a/Python/pythonrun.c
++++ b/Python/pythonrun.c
+@@ -1693,6 +1693,23 @@ PyOS_getsig(int sig)
+ 	return context.sa_handler;
+ #else
+ 	PyOS_sighandler_t handler;
++/* Special signal handling for the secure CRT in Visual Studio 2005 */
++#if defined(_MSC_VER) && _MSC_VER >= 1400
++    switch (sig) {
++    /* Only these signals are valid */
++    case SIGINT:
++    case SIGILL:
++    case SIGFPE:
++    case SIGSEGV:
++    case SIGTERM:
++    case SIGBREAK:
++    case SIGABRT:
++        break;
++    /* Don't call signal() with other values or it will assert */
++    default:
++        return SIG_ERR;
++    }
++#endif /* _MSC_VER && _MSC_VER >= 1400 */
+ 	handler = signal(sig, SIG_IGN);
+ 	signal(sig, handler);
+ 	return handler;
+diff --git a/Python/structmember.c b/Python/structmember.c
+index 34310b8979d1222de95c9f8e40870ac1e3de01c8..e85cdf15da2253dbc26cc7f6b37cf62d09855ba4 100644
+--- a/Python/structmember.c
++++ b/Python/structmember.c
+@@ -177,7 +177,7 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
+ 		PyErr_SetString(PyExc_TypeError, "readonly attribute");
+ 		return -1;
+ 	}
+-	if ((l->flags & WRITE_RESTRICTED) && PyEval_GetRestricted()) {
++	if ((l->flags & PY_WRITE_RESTRICTED) && PyEval_GetRestricted()) {
+ 		PyErr_SetString(PyExc_RuntimeError, "restricted attribute");
+ 		return -1;
+ 	}
+diff --git a/include/structmember.h b/include/structmember.h
+index 69bdc1b8c87f285b3fccf4432d01dbb2be1e8ad7..2ca0e413ff8dbbb8f00455d0718e7b36d23ef974 100644
+--- a/include/structmember.h
++++ b/include/structmember.h
+@@ -76,8 +76,8 @@ typedef struct PyMemberDef {
+ #define READONLY	1
+ #define RO		READONLY		/* Shorthand */
+ #define READ_RESTRICTED	2
+-#define WRITE_RESTRICTED 4
+-#define RESTRICTED	(READ_RESTRICTED | WRITE_RESTRICTED)
++#define PY_WRITE_RESTRICTED 4
++#define RESTRICTED	(READ_RESTRICTED | PY_WRITE_RESTRICTED)
+ 
+ 
+ /* Obsolete API, for binary backwards compatibility */
+diff --git a/pyconfig_static/pyconfig.h b/pyconfig_static/pyconfig.h
+index 43623fea8575af5b1fa5e62615bee64a100ba774..da82621dd2343132beba7f0388c52bec8bb1aaa0 100644
+--- a/pyconfig_static/pyconfig.h
++++ b/pyconfig_static/pyconfig.h
+@@ -414,9 +414,6 @@ Py_NO_ENABLE_SHARED to find out.  Also support MS_NO_COREDLL for b/w compat */
+ /* Define if you want to have a Unicode type. */
+ #define Py_USING_UNICODE
+ 
+-/* Define as the integral type used for Unicode representation. */
+-#define PY_UNICODE_TYPE unsigned short
+-
+ /* Define as the size of the unicode type. */
+ #define Py_UNICODE_SIZE SIZEOF_SHORT
+ 

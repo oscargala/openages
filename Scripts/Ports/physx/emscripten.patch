@@ -1,0 +1,37 @@
+--- a/physx/source/compiler/cmake/linux/CMakeLists.txt
++++ b/physx/source/compiler/cmake/linux/CMakeLists.txt
+@@ -43,6 +43,12 @@
+        ENDIF()
+ ENDIF()
+ 
++# Emscripten (wasm32) uses the Linux preset. wasm has no SSE2 unless built with
++# -msimd128 -msse2, so PhysX's scalar math path is selected explicitly.
++IF (EMSCRIPTEN)
++	STRING(APPEND PHYSX_CXX_FLAGS " -DPX_SIMD_DISABLED")
++ENDIF()
++
+ # Build debug info for all configurations
+ SET(PHYSX_CXX_FLAGS_DEBUG   "-O0 -g3 -gdwarf-2" CACHE INTERNAL "PhysX Debug CXX Flags")
+ SET(PHYSX_CXX_FLAGS_CHECKED "-O3 -g3 -gdwarf-2" CACHE INTERNAL "PhysX Checked CXX Flags")
+@@ -63,7 +69,7 @@
+ # Controls PX_NVTX for all projects
+ SET(NVTX_FLAG "PX_NVTX=0")
+ 
+-IF(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
++IF(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR EMSCRIPTEN)
+ 	SET(CUDA_FLAG "DISABLE_CUDA_PHYSX")
+ ENDIF()
+ 
+--- a/physx/source/foundation/include/PsHash.h
++++ b/physx/source/foundation/include/PsHash.h
+@@ -87,8 +87,8 @@
+ 	return uint32_t(UINT32_MAX & k);
+ }
+ 
+-#if PX_APPLE_FAMILY
+-// hash for size_t, to make gcc happy
++#if PX_APPLE_FAMILY || PX_EMSCRIPTEN
++// hash for size_t, to make gcc happy (wasm32: size_t is unsigned long, distinct from uint32_t)
+ PX_INLINE uint32_t hash(const size_t key)
+ {
+ #if PX_P64_FAMILY

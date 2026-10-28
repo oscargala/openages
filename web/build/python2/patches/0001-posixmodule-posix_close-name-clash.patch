@@ -1,0 +1,13 @@
+--- a/Modules/posixmodule.c	2026-10-22 20:41:37
++++ b/Modules/posixmodule.c	2026-10-22 20:41:43
+@@ -15,6 +15,10 @@
+ 
+ #include "Python.h"
+ #include "structseq.h"
++
++/* POSIX.1-2024 libcs (musl, Emscripten) declare posix_close(int, int) in <unistd.h>,
++   which Python.h has included; keep this file's static os.close wrapper under another name. */
++#define posix_close py2_posix_close
+ 
+ #if defined(__VMS)
+ #    include <unixio.h>

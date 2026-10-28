@@ -1,3 +1,10 @@
+# PhysX 4.1 has no Emscripten platform. emscripten.patch lets its Linux preset build for wasm32:
+# scalar math (PX_SIMD_DISABLED, wasm has no SSE2), no CUDA, and the size_t overload of
+# Ps::hash (size_t and uint32_t are distinct types on wasm32). Every change is guarded.
+if(VCPKG_TARGET_IS_EMSCRIPTEN)
+    set(EMSCRIPTEN_PATCH emscripten.patch)
+endif()
+
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO NVIDIAGameWorks/PhysX
@@ -11,6 +18,7 @@ vcpkg_from_github(
         fix-m1-mac.patch
         win-arm64.patch
         remove-werror.patch
+        ${EMSCRIPTEN_PATCH}
 )
 
 if(NOT DEFINED RELEASE_CONFIGURATION)
@@ -55,6 +63,9 @@ elseif(VCPKG_TARGET_IS_LINUX OR VCPKG_TARGET_IS_FREEBSD)
     list(APPEND OPTIONS "-DTARGET_BUILD_PLATFORM=linux")
 elseif(VCPKG_TARGET_IS_ANDROID)
     list(APPEND OPTIONS "-DTARGET_BUILD_PLATFORM=android")
+elseif(VCPKG_TARGET_IS_EMSCRIPTEN)
+    # The Linux preset, adapted by emscripten.patch.
+    list(APPEND OPTIONS "-DTARGET_BUILD_PLATFORM=linux")
 else()
     message(FATAL_ERROR "Unhandled or unsupported target platform.")
 endif()

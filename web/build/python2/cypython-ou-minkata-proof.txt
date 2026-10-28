@@ -1,0 +1,48 @@
+# Where the py2 flavour's CPython 2.3.3 source comes from.
+#
+# web/build/sources.lock pins the source as record cypython-2.3.3: the directory
+# Build/VS2010/SDKs/XPlatform/Cypython-2.3.3 of OpenUru's CWE-ou-minkata repository
+# (https://foundry.openuru.org/gitblit/r/CWE-ou-minkata.git) at commit
+# 7978641e0cd72b6332ba1fd8cf6bcc2298eecc65, which is git tree fec9818b5bc2089fcaf50cee74bcf0594cd0495e.
+#
+# The build never contacts that repository. This file holds the git objects that link the commit to
+# the tree: the commit object, then each tree on the path. python2/build.sh checks them
+# with web/build/commit-proof.py before it reads the source: every object must hash to its id, and
+# the path must lead from the commit to the pinned tree. web/build/tree-hash.py then checks that the
+# source directory is that tree. A changed byte, another commit or another path is refused.
+#
+# In any clone of CWE-ou-minkata, "git cat-file commit 7978641e0cd72b6332ba1fd8cf6bcc2298eecc65"
+# prints the commit part below, and "git ls-tree <id>" prints each tree part. To make this file
+# again: web/build/commit-proof.py make <clone> <commit> <path> --header <these lines>.
+commit 7978641e0cd72b6332ba1fd8cf6bcc2298eecc65 293
+tree 1392809a3f3e032bd738a1fb824a782eca6396a3
+parent e4a1e6187104be53c412ca72d363e81fd429a291
+parent c7c96924103e97078c9380cf07e132d44d76d6fc
+author rarified <FoundryMaster@OpenUru.org> 1786484268 -0600
+committer rarified <FoundryMaster@OpenUru.org> 1786484268 -0600
+
+Merge branch 'ticket/60'
+
+tree 1392809a3f3e032bd738a1fb824a782eca6396a3 .
+100644 blob 13bc5e9d110427f8a6e6ce35acd7c933f2131dd5	.editorconfig
+100644 blob 50946c240b6ac0dd2e108b424374f9eca60a97ad	.gitattributes
+100644 blob 9a46107ea837b3f2390408c2c066aea442024637	.gitmodules
+040000 tree a5eaa14f9860bd00f6a5bdb33a0ffd2e5efc2e2d	Build
+100644 blob 50c9ddc75a588939ff7bf1ac8ba87431c1498890	COPYING.txt
+100644 blob 1d6380a043f4d6eaf9e7410200500bdfb165d2d2	CREDITS.txt
+040000 tree a4a5a0de2c5118da432eb0f70edb281909babd9e	Docs
+100644 blob 3f9cae2755f8d4c08c1f95663bc3668eaa328271	README.txt
+040000 tree 1e705d7f16462226f640199c908c52bce20eee5f	Scripts
+040000 tree f8eb7b83e9cf37f2749e9d34c1242c0ca8f800e1	Sources
+tree a5eaa14f9860bd00f6a5bdb33a0ffd2e5efc2e2d Build
+040000 tree 81d9588e7d7f479189dab1f79222465efb37e49b	VS2010
+tree 81d9588e7d7f479189dab1f79222465efb37e49b Build/VS2010
+040000 tree 382b7afa39feb4a0430a62a4692389fef92dcecd	Plasma
+160000 commit 627f0a29ef24e67aa10761d4c1ba89f7d9c05016	SDK-binary
+040000 tree 9a0a9fef9a2118916580bf44eb5d49c97a496c4e	SDKs
+040000 tree b2e6c972a2d45f0f9db79580a2594a53d5333c66	StaticSDKs
+tree 9a0a9fef9a2118916580bf44eb5d49c97a496c4e Build/VS2010/SDKs
+040000 tree 7926ade46e8b825aee0930c0bb7c15f2da06f0d5	Win32
+040000 tree 73b0732a35ac7d2614e9d3721df073d394e192d9	XPlatform
+tree 73b0732a35ac7d2614e9d3721df073d394e192d9 Build/VS2010/SDKs/XPlatform
+040000 tree fec9818b5bc2089fcaf50cee74bcf0594cd0495e	Cypython-2.3.3
