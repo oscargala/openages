@@ -169,6 +169,9 @@ ST::string hsG3DDeviceRecord::GetG3DDeviceTypeName() const
         ST_LITERAL("OpenGL"),
         ST_LITERAL("Metal 2"),
         ST_LITERAL("Metal 3"),
+#ifdef PLASMA_PIPELINE_WGPU
+        ST_LITERAL("WebGPU"),
+#endif
     };
 
     uint32_t devType = GetG3DDeviceType();
@@ -350,6 +353,9 @@ bool hsG3DDeviceSelector::GetRequested(hsG3DDeviceModeRecord *dmr, uint32_t devT
     hsG3DDeviceRecord* iMetal2 = nullptr;
     hsG3DDeviceRecord* iMetal3 = nullptr;
     hsG3DDeviceRecord* iOpenGL = nullptr;
+#ifdef PLASMA_PIPELINE_WGPU
+    hsG3DDeviceRecord* iWebGPU = nullptr;
+#endif
     hsG3DDeviceRecord* device = nullptr;
 
     // Get an index for any 3D devices
@@ -387,6 +393,13 @@ bool hsG3DDeviceSelector::GetRequested(hsG3DDeviceModeRecord *dmr, uint32_t devT
             if (iMetal3 == nullptr || force)
                 iMetal3 = &record;
             break;
+
+#ifdef PLASMA_PIPELINE_WGPU
+        case kDevTypeWebGPU:
+            if (iWebGPU == nullptr || force)
+                iWebGPU = &record;
+            break;
+#endif
         }
     }
 
@@ -399,6 +412,12 @@ bool hsG3DDeviceSelector::GetRequested(hsG3DDeviceModeRecord *dmr, uint32_t devT
         device = iMetal3;
     else if (iMetal2 != nullptr)
         device = iMetal2;
+#ifdef PLASMA_PIPELINE_WGPU
+    // WebGPU ranks above the OpenGL-typed record, which in the browser build is the null
+    // device (plEmscriptenNullDevice.cpp); "-Renderer null" requests that one.
+    else if (iWebGPU != nullptr)
+        device = iWebGPU;
+#endif
     else if (iOpenGL != nullptr)
         device = iOpenGL;
     else

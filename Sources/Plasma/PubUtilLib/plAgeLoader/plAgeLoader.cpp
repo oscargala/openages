@@ -74,6 +74,12 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 // static 
 plAgeLoader* plAgeLoader::fInstance = nullptr;
+#ifdef PLASMA_PIPELINE_WGPU
+void (*plAgeLoader::fAgeDataHook)(const ST::string& ageName) = nullptr;
+#endif
+#ifdef PLASMA_TEST_HOOKS
+void (*plAgeLoader::fLoadAgeTestHook)(const ST::string& ageName) = nullptr;
+#endif
 
 //
 // CONSTRUCT
@@ -165,6 +171,12 @@ bool plAgeLoader::MsgReceive(plMessage* msg)
 //============================================================================
 void plAgeLoader::UpdateAge(const ST::string& ageName)
 {
+#ifdef PLASMA_PIPELINE_WGPU
+    // plNCAgeJoiner::Start updates the Age it joins here, the first point of the join that names the Age, before the
+    // game server join and LoadAge's page-ins; the patcher update itself follows unchanged.
+    if (fAgeDataHook)
+        fAgeDataHook(ageName);
+#endif
     plResPatcher::GetInstance()->Update(ageName);
 }
 
@@ -192,6 +204,12 @@ tl::expected<tl::monostate, ST::string> plAgeLoader::LoadAge(const ST::string& a
     ASSERT(!nc->GetFlagsBit(plNetClientApp::kPlayingGame));
 
     fAgeName = ageName;
+
+#ifdef PLASMA_TEST_HOOKS
+    // Harness builds only (SetLoadAgeTestHook): the test harness's fixed time can start at this Age's load.
+    if (fLoadAgeTestHook)
+        fLoadAgeTestHook(fAgeName);
+#endif
 
     nc->DebugMsg( "Net: Loading age {}", fAgeName);
 

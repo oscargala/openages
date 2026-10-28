@@ -76,6 +76,9 @@ private:
     };
     
     static plAgeLoader* fInstance;
+#ifdef PLASMA_TEST_HOOKS
+    static void (*fLoadAgeTestHook)(const ST::string& ageName); // SetLoadAgeTestHook
+#endif
 
     uint32_t  fFlags;
     plFileNameVec fPendingAgeFniFiles;        // list of age .fni files to be parsed
@@ -99,6 +102,18 @@ public:
     static plAgeLoader* GetInstance();
     static void SetInstance(plAgeLoader* inst);
     static std::unique_ptr<hsStream> GetAgeDescFileStream(const ST::string& ageName);
+
+#ifdef PLASMA_PIPELINE_WGPU
+    // Called by UpdateAge with the Age the client is about to join, before any of its rooms pages in: the browser
+    // client's optional HD texture pack prefetch (plWGPUTexturePack::PrefetchAge, installed by plClient). Null unless
+    // installed.
+    static void (*fAgeDataHook)(const ST::string& ageName);
+#endif
+#ifdef PLASMA_TEST_HOOKS
+    // Harness builds only: a function LoadAge calls first, with the Age's name, before plAgeBeginLoadingMsg and any
+    // page load. The test harness's fixed time at an Age's load sets it; null otherwise.
+    static void SetLoadAgeTestHook(void (*hook)(const ST::string& ageName)) { fLoadAgeTestHook = hook; }
+#endif
 
     void Init();
     void Shutdown();

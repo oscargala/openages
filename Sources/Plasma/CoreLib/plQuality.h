@@ -65,6 +65,7 @@ protected:
     friend class plQualitySlider;
     friend class plDXPipeline;
     friend class plMetalPipeline;
+    friend class plWGPUPipeline;
 
     // Set by the app according to user preference.
     static void SetQuality(int q);

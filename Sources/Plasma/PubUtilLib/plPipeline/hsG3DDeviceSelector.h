@@ -280,6 +280,9 @@ public:
         kDevTypeOpenGL,
         kDevTypeMetal2,
         kDevTypeMetal3,
+#ifdef PLASMA_PIPELINE_WGPU
+        kDevTypeWebGPU,
+#endif
 
         kNumDevTypes
     };

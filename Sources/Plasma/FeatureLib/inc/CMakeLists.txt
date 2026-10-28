@@ -20,6 +20,7 @@ target_link_libraries(pfFeatureInc
         $<$<BOOL:${PLASMA_PIPELINE_DX}>:pfDXPipeline>
         $<$<BOOL:${PLASMA_PIPELINE_GL}>:pfGLPipeline>
         $<$<BOOL:${PLASMA_PIPELINE_METAL}>:pfMetalPipeline>
+        $<$<BOOL:${PLASMA_PIPELINE_WGPU}>:pfWGPUPipeline>
         pfPython
         pfSurface
 )

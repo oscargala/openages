@@ -964,6 +964,11 @@ CLASS_INDEX_LIST_START
     CLASS_INDEX(plMetalPipeline),
     CLASS_INDEX(plAIBrainDestroyedMsg),
     CLASS_INDEX(plAIGoToGoalMsg),
+#ifdef PLASMA_PIPELINE_WGPU
+    // Keep it last: class indices are on the wire, so the ones upstream adds go above it and
+    // keep upstream's numbers. A pipeline is never sent, so its own index may move.
+    CLASS_INDEX(plWGPUPipeline),
+#endif
 CLASS_INDEX_LIST_END
 
 #endif // plCreatableIndex_inc

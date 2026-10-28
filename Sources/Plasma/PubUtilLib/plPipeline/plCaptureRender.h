@@ -72,6 +72,12 @@ protected:
 public:
 
     static bool         Capture(const plKey& ack, uint16_t width=800, uint16_t height=600);
+#ifdef PLASMA_PIPELINE_WGPU
+    // The WebGPU pipeline fills an extracted mipmap after IProcess (its GPU readback completes
+    // before Update). When the readback fails, the stashed message is taken back and the mipmap
+    // released: nothing is sent, as when ExtractMipMap returns null.
+    static void DropFailedCapture(class plMipmap* mipmap);
+#endif
 
 };
 

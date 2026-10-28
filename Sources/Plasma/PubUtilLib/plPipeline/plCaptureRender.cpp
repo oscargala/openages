@@ -207,6 +207,20 @@ void plCaptureRender::Update()
     fProcessed.clear();
 }
 
+#ifdef PLASMA_PIPELINE_WGPU
+void plCaptureRender::DropFailedCapture(plMipmap* mipmap)
+{
+    for (auto it = fProcessed.begin(); it != fProcessed.end(); ++it) {
+        if ((*it)->GetMipmap() == mipmap) {
+            plCaptureRenderMsg* msg = *it;
+            fProcessed.erase(it);
+            hsRefCnt_SafeUnRef(msg); // ~plCaptureRenderMsg unrefs the mipmap once
+            mipmap->UnRef();         // and IProcess's Ref
+            return;
+        }
+    }
+}
+#endif
 
 #else // MF_FRONTBUFF_CAPTURE
 

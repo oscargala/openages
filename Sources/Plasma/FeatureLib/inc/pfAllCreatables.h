@@ -56,6 +56,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "pfGameGUIMgr/pfGameGUIMgrCreatable.h"
 #include "pfGameMgr/pfGameMgrCreatable.h"
+// The py2 flavour (PLASMA_PYTHON_ABI=2) adds its Heek client and GameMgr messages
+#if defined(PLASMA_PYTHON_ABI) && PLASMA_PYTHON_ABI == 2
+    #include "pfGameMgr/pfGameMgr2Creatable.h"
+#endif
 
 #ifdef PLASMA_PIPELINE_GL
     #include "pfGLPipeline/pfGLPipelineCreatable.h"
@@ -65,9 +69,16 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
     #include "pfMetalPipeline/pfMetalPipelineCreatable.h"
 #endif
 
+#ifdef PLASMA_PIPELINE_WGPU
+    #include "pfWGPUPipeline/pfWGPUPipelineCreatable.h"
+#endif
+
 #include "pfJournalBook/pfJournalBookCreatable.h"
 #include "pfMessage/pfMessageCreatable.h"
 #include "pfPython/pfPythonCreatable.h"
+#if defined(PLASMA_PYTHON_ABI) && PLASMA_PYTHON_ABI == 2
+    #include "pfPython/pfPython2Creatable.h"
+#endif
 #include "pfSurface/pfSurfaceCreatable.h"
 
 #endif // pfAllCreatables_inc
