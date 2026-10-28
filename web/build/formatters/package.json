@@ -1,0 +1,11 @@
+{
+  "name": "plasma-web-formatters",
+  "private": true,
+  "description": "The formatter and linter of the port's own JavaScript: prettier and eslint (globals for eslint.config.mjs), at the versions package-lock.json pins. install.sh installs them outside the checkout.",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "prettier": "3.9.10"
+  }
+}

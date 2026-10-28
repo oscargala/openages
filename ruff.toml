@@ -1,0 +1,17 @@
+# ruff format for the port's own Python: the web tools and their tests (web/), and the WGSL generator of the WebGPU
+# pipeline. Upstream's Python (Scripts/, the game's scripts) keeps its own style and is never formatted here.
+# The pinned ruff is web/build/formatters' (install.sh); Docs/Web/Building.md, "Formatting", says how to run it.
+#
+# Formatting only: no lint rule is selected, so `ruff check` reports and changes nothing. In particular there is no
+# import sorting: an import runs code, so moving one can change what runs first.
+include = ["web/**/*.py", "Sources/Plasma/FeatureLib/pfWGPUPipeline/ShaderSrc/gen/*.py"]
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = []
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

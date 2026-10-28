@@ -1,0 +1,14 @@
+# prettier formats only the files listed after "!*/" below: the page's scripts (shell/), its input modules (input/),
+# the gateway Worker and eslint's configuration. Everything else is upstream's, or the lab's, and keeps its own style.
+# That includes the JavaScript emcc links into plClient.js (--js-library and --pre-js files): Emscripten's
+# preprocessor reads those files ({{{ }}} macros and #if lines), and prettier can change what it makes of them (it
+# drops the ';' after a {{{ }}} macro, for one). The page itself, shell/index.html, stays out too: prettier re-wraps
+# long text in every whitespace mode, which renders the same but changes the text nodes the page and its tests read
+# (textContent).
+*
+!*/
+!/eslint.config.mjs
+!/Sources/Plasma/Apps/plClient/emscripten/shell/boot.mjs
+!/Sources/Plasma/Apps/plClient/emscripten/shell/config.mjs
+!/Sources/Plasma/Apps/plClient/emscripten/input/*.mjs
+!/web/deploy/worker/src/*.js

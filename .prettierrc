@@ -1,0 +1,4 @@
+# prettier for the port's own JavaScript; .prettierignore says which files. The pinned prettier is
+# web/build/formatters' (install.sh), and Docs/Web/Building.md, "Formatting", says how to run it.
+printWidth: 120
+singleQuote: true

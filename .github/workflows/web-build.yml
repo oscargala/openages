@@ -1,0 +1,350 @@
+name: Web build
+# The browser client on Ubuntu: plClient and plClient-py2 for wasm32-emscripten, built from the pinned sources in
+# web/build/sources.lock, then the web product's tests (web/tests/run.py) in Chromium. web.yml calls it. A second job
+# checks the format of the port's own Python and JavaScript with the formatters web/build/formatters pins.
+#
+# The WGSL that ShaderSrc/gen/d3d9_to_wgsl.py generates is regenerated first and must equal the committed files.
+# Every cache is keyed on the sources.lock records and the scripts it is built from. The dependency builds record
+# one fixed build time (web/build/common.sh use_build_date), so a cache built on another day holds the same bytes.
+on:
+  workflow_call:
+
+# No secrets, no game data: the job reads public sources only.
+permissions:
+  contents: read
+
+jobs:
+  # ruff, prettier and eslint, as Docs/Web/Building.md ("Formatting") runs them; each takes its files from its own
+  # configuration at the top of the checkout. node is emsdk's 24.19.0 from sources.lock, checked against its SHA-256;
+  # install.sh installs the formatters with pip --require-hashes and npm ci, so every file they install is checked
+  # against its hash too, and no package's install script runs.
+  format:
+    name: Format of the port's Python and JavaScript (ruff, prettier, eslint)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: node and the formatters (web/build/formatters)
+        id: install
+        run: |
+          set -euo pipefail
+          node_txz=$(web/build/sources.sh fetch emsdk-node-24.19.0-linux-x86_64 "$RUNNER_TEMP/downloads")
+          mkdir -p "$RUNNER_TEMP/node"
+          tar -xJf "$node_txz" -C "$RUNNER_TEMP/node" --strip-components 1
+          export PATH="$RUNNER_TEMP/node/bin:$PATH"
+          echo "$RUNNER_TEMP/node/bin" >> "$GITHUB_PATH"
+          PYTHON=python bash web/build/formatters/install.sh "$RUNNER_TEMP/formatters"
+          echo "F=$RUNNER_TEMP/formatters" >> "$GITHUB_ENV"
+
+      # Each check runs whatever the one before it found, so one run reports all three.
+      - name: ruff format --check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: '"$F/venv/bin/ruff" format --no-cache --check'
+
+      - name: prettier --check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node "$F/node_modules/prettier/bin/prettier.cjs" --check .
+
+      - name: eslint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: NODE_PATH="$F/node_modules" node "$F/node_modules/eslint/bin/eslint.js" --max-warnings 0 .
+
+  wasm:
+    name: plClient and plClient-py2 (Emscripten 6.0.12), web tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      HOST_TRIPLET: x64-linux
+      # The wrangler release the Worker's contract test runs (web/deploy/worker/test_contract.py).
+      WRANGLER_VERSION: "4.149.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: WGSL regeneration
+        run: |
+          set -euo pipefail
+          shaders=Sources/Plasma/FeatureLib/pfWGPUPipeline/ShaderSrc
+          python3 -I -B "$shaders/gen/d3d9_to_wgsl.py"
+          if [ -n "$(git status --porcelain -- "$shaders")" ]; then
+            git status --short -- "$shaders"
+            git diff -- "$shaders"
+            echo "::error::the generated WGSL differs from the committed files: run $shaders/gen/d3d9_to_wgsl.py and commit"
+            exit 1
+          fi
+
+      - name: vcpkg submodule
+        run: git submodule update --init --depth 1 vcpkg
+
+      # Everything the build writes lives beside the checkout, never in it.
+      - name: Paths
+        run: |
+          top=$(dirname "$GITHUB_WORKSPACE")
+          out=$top/wasm32-emscripten
+          {
+            echo "OUT=$out"
+            echo "DOWNLOADS=$top/downloads"
+            echo "PLASMA_WASM_DEPS=$out/deps"
+            echo "EMSDK=$top/emsdk"
+            echo "VCPKG_CACHE=$top/vcpkg-binary-cache"
+            echo "HOST_TOOLS=$top/host-tools"
+          } >> "$GITHUB_ENV"
+
+      # Each cache is keyed on the sources.lock records it is built from, so an edit elsewhere in the
+      # lock leaves the other caches valid.
+      - name: Cache keys
+        id: keys
+        run: |
+          set -euo pipefail
+          pins() { grep -E "^($1) " web/build/sources.lock | sha256sum | cut -c1-16; }
+          {
+            echo "emsdk=$(pins 'emsdk|emsdk-6.0.12-linux-x86_64|emsdk-node-24.19.0-linux-x86_64')"
+            echo "tools=$(pins 'm4|autoconf|automake|libtool|autoconf-archive|vcpkg-tool-linux-x86_64')"
+            echo "vcpkg=$(pins 'vcpkg')"
+            echo "built=$(pins 'vcpkg|python-3.12.9|cypython-2.3.3[a-z-]*|libvpx|libwebm')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: CMake and Ninja (sources.lock)
+        run: |
+          set -euo pipefail
+          cmake_tgz=$(web/build/sources.sh fetch cmake-4.4.3-linux-x86_64 "$DOWNLOADS")
+          ninja_zip=$(web/build/sources.sh fetch ninja-1.13.2-linux-x86_64 "$DOWNLOADS")
+          mkdir -p "$HOST_TOOLS/bin"
+          tar -xzf "$cmake_tgz" -C "$HOST_TOOLS"
+          unzip -q -o "$ninja_zip" -d "$HOST_TOOLS/bin"
+          echo "$HOST_TOOLS/cmake-4.4.3-linux-x86_64/bin" >> "$GITHUB_PATH"
+          echo "$HOST_TOOLS/bin" >> "$GITHUB_PATH"
+
+      - name: emsdk cache
+        id: emsdk-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.EMSDK }}
+          key: emsdk-6.0.12-${{ runner.os }}-${{ steps.keys.outputs.emsdk }}
+
+      # emsdk downloads without checking a digest, so its two downloads are placed into emsdk/downloads/
+      # first, verified against sources.lock. With EMSDK_KEEP_DOWNLOADS=1 emsdk uses a file it finds there
+      # instead of downloading it again (emsdk.py download_file). The archives are removed after the install,
+      # so the cache holds the installed SDK only.
+      - name: emsdk 6.0.12 (sources.lock)
+        id: emsdk-install
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sources=$GITHUB_WORKSPACE/web/build/sources.sh
+          url=$("$sources" get emsdk url)
+          commit=$("$sources" get emsdk commit)
+          version=$("$sources" get emsdk version)
+          git init -q "$EMSDK"
+          git -C "$EMSDK" fetch -q --depth 1 "$url" "$commit"
+          git -C "$EMSDK" -c advice.detachedHead=false checkout -q FETCH_HEAD
+          "$sources" fetch emsdk-6.0.12-linux-x86_64 "$EMSDK/downloads"
+          "$sources" fetch emsdk-node-24.19.0-linux-x86_64 "$EMSDK/downloads"
+          cd "$EMSDK"
+          EMSDK_KEEP_DOWNLOADS=1 ./emsdk install "$version"
+          ./emsdk activate "$version"
+          rm -f downloads/*.tar.xz
+
+      - name: Host tools cache (autotools, vcpkg tool)
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.PLASMA_WASM_DEPS }}/tools
+          key: host-tools-${{ env.HOST_TRIPLET }}-${{ steps.keys.outputs.tools }}-${{ hashFiles('web/build/build-deps.sh') }}
+
+      # vcpkg's binary cache is keyed on each package's ABI hash (sources, port files, triplet, compiler), so an older
+      # cache restored by prefix is safe for what the hash covers. The build time is not covered: the ports record the
+      # fixed one of web/build/common.sh, which vcpkg does not hash. v2 holds only archives built with it; a change of
+      # that time, or of another input vcpkg does not hash, takes the next version.
+      - name: vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.VCPKG_CACHE }}
+          key: vcpkg-v2-wasm32-emscripten-plasma-${{ env.HOST_TRIPLET }}-${{ steps.keys.outputs.vcpkg }}-${{ steps.keys.outputs.emsdk }}-${{ hashFiles('vcpkg.json', 'Scripts/Ports/**', 'Scripts/Triplets/**', 'cmake/emscripten/ChainloadToolchain.cmake') }}
+          restore-keys: vcpkg-v2-wasm32-emscripten-plasma-${{ env.HOST_TRIPLET }}-
+
+      - name: Deps (host tools, vcpkg ports)
+        run: |
+          mkdir -p "$VCPKG_CACHE"
+          export VCPKG_BINARY_SOURCES="clear;files,$VCPKG_CACHE,readwrite"
+          bash web/build/build-deps.sh tools vcpkg
+
+      - name: Save the host tools cache
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.PLASMA_WASM_DEPS }}/tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+
+      - name: Save the vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.VCPKG_CACHE }}
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+
+      # The client reads the two CPython prefixes and the movie codecs, nothing else of their builds. Keyed on their
+      # lock records, the vcpkg ports they compile against, the compiler and the scripts that build them.
+      - name: CPython and movie codec cache
+        id: built-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.PLASMA_WASM_DEPS }}/python
+            ${{ env.PLASMA_WASM_DEPS }}/python2
+            ${{ env.PLASMA_WASM_DEPS }}/movies
+          key: deps-built-v1-${{ env.HOST_TRIPLET }}-${{ steps.keys.outputs.built }}-${{ steps.keys.outputs.emsdk }}-${{ hashFiles('web/build/build-deps.sh', 'web/build/common.sh', 'web/build/python2/**', 'web/build/movie-codecs.py', 'vcpkg.json', 'Scripts/Ports/**', 'Scripts/Triplets/**', 'cmake/emscripten/**') }}
+
+      - name: Deps (CPython 3.12.9, CPython 2.3.3, movie codecs, OpenAL config, checks)
+        env:
+          BUILT: ${{ steps.built-cache.outputs.cache-hit }}
+        run: |
+          if [ "$BUILT" = true ]; then
+            bash web/build/build-deps.sh openal check
+          else
+            bash web/build/build-deps.sh python python2 openal movies check
+          fi
+
+      - name: Save the CPython and movie codec cache
+        if: steps.built-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.PLASMA_WASM_DEPS }}/python
+            ${{ env.PLASMA_WASM_DEPS }}/python2
+            ${{ env.PLASMA_WASM_DEPS }}/movies
+          key: ${{ steps.built-cache.outputs.cache-primary-key }}
+
+      # PRODUCT_EMBED_BUILD_TIME=OFF leaves the client's own build clock out of the binaries; the dependencies carry
+      # the fixed build time. One input that is not a source remains: the names ThinLTO gives promoted local symbols
+      # hash each module's source path, so a build in another folder differs in those names.
+      - name: plClient (CPython 3.12)
+        id: py3
+        env:
+          PLASMA_WASM_BUILD: ${{ env.OUT }}/client-py3
+          PLASMA_WASM_CMAKE_ARGS: -DPRODUCT_EMBED_BUILD_TIME=OFF
+        run: bash web/build/build-client.sh clean configure build
+
+      - name: plClient-py2 (CPython 2.3.3)
+        id: py2
+        env:
+          PLASMA_WASM_BUILD: ${{ env.OUT }}/client-py2
+          PLASMA_PYTHON_ABI: "2"
+          PLASMA_WASM_CMAKE_ARGS: -DPRODUCT_EMBED_BUILD_TIME=OFF
+        run: bash web/build/build-client.sh clean configure build
+
+      - name: Collect the clients and their SHA-256
+        run: |
+          set -euo pipefail
+          for flavour in py3:plClient py2:plClient-py2; do
+            dir=$OUT/artifacts/${flavour#*:}
+            mkdir -p "$dir"
+            cp "$OUT/client-${flavour%%:*}/Sources/Plasma/Apps/plClient/${flavour#*:}".{js,wasm} "$dir/"
+            (cd "$dir" && sha256sum ./*.js ./*.wasm | tee SHA256SUMS)
+          done
+          {
+            echo '### Client hashes (SHA-256)'
+            echo '```'
+            cat "$OUT"/artifacts/*/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plClient
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plClient
+          path: ${{ env.OUT }}/artifacts/plClient
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload plClient-py2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plClient-py2
+          path: ${{ env.OUT }}/artifacts/plClient-py2
+          retention-days: 7
+          if-no-files-found: error
+
+      # The tests run under Python 3.13 with web/tests/requirements.txt, node from emsdk (the pinned 24.19.0), the
+      # pinned wrangler, and Playwright's Chromium with the system libraries it needs. The builds above keep the
+      # runner's own Python.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Web test prerequisites
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r web/tests/requirements.txt
+          python -m playwright install --with-deps chromium
+          node_bin=$(ls -d "$EMSDK"/node/*/bin)
+          export PATH="$node_bin:$PATH"
+          echo "$node_bin" >> "$GITHUB_PATH"
+          npm install --prefix "$RUNNER_TEMP/wrangler" --no-audit --no-fund --no-save "wrangler@$WRANGLER_VERSION"
+          echo "PLASMA_WRANGLER=$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" >> "$GITHUB_ENV"
+          echo "node $(node --version), wrangler $("$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" --version | tail -1)"
+
+      # --require all: a missing prerequisite fails the run instead of skipping the checks that need it.
+      - name: Web tests (web/tests/run.py)
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: python web/tests/run.py --require all --build-dir "$OUT/client-py3" --out "$OUT/web-tests"
+
+      - name: Upload the web test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-tests
+          path: ${{ env.OUT }}/web-tests
+          retention-days: 7
+          if-no-files-found: warn
+
+      # A client must not name the machine that built it: no path under the runner's home, the checkout, the build
+      # folder, emsdk or the temporary folder. Run after the tests and whatever they gave, once both clients exist.
+      - name: Host paths in the clients
+        if: ${{ !cancelled() && steps.py3.outcome == 'success' && steps.py2.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          bad=0
+          for f in "$OUT"/client-py3/Sources/Plasma/Apps/plClient/plClient.{js,wasm} \
+                   "$OUT"/client-py2/Sources/Plasma/Apps/plClient/plClient-py2.{js,wasm}; do
+            for s in "$HOME/" "$GITHUB_WORKSPACE" "$OUT" "$EMSDK" "$RUNNER_TEMP"; do
+              # grep exits 1 when it finds nothing, which pipefail would turn into a failure
+              n=$({ grep -a -o -F -- "$s" "$f" || true; } | wc -l)
+              echo "${f##*/}: $n x $s"
+              [ "$n" -eq 0 ] || bad=1
+            done
+          done
+          [ "$bad" -eq 0 ] || { echo "::error::a client carries a path of this runner"; exit 1; }
+
+      - name: Upload the build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-logs
+          path: |
+            ${{ env.PLASMA_WASM_DEPS }}/logs
+            ${{ env.PLASMA_WASM_DEPS }}/build/vcpkg-buildtrees/*/*.log
+            ${{ env.PLASMA_WASM_DEPS }}/build/python2-wasm/warnings.log
+            ${{ env.PLASMA_WASM_DEPS }}/build/movies/*.log
+            ${{ env.OUT }}/client-py3/logs
+            ${{ env.OUT }}/client-py2/logs
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Saved last, so it holds the Emscripten system libraries the builds above compiled on first use.
+      - name: Save the emsdk cache
+        if: always() && steps.emsdk-install.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.EMSDK }}
+          key: ${{ steps.emsdk-cache.outputs.cache-primary-key }}

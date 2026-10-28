@@ -1,0 +1,1015 @@
+{
+ "recorded_from": "origin/main 03a6a2e18",
+ "python": "3.13.15",
+ "answers": [
+  {
+   "name": "whole",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "head",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "range first 100",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 100",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 0-99/3145733"
+   ],
+   "body_bytes": 100,
+   "body_sha256": "06897766a571985b4ffc0d2d943a4b8358faf00a1e45d534971c76ff64086fbb"
+  },
+  {
+   "name": "range across a chunk boundary",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 16",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 1048570-1048585/3145733"
+   ],
+   "body_bytes": 16,
+   "body_sha256": "5110e2f7a99e22162d0959ab620c74aed10034682dbfd8b7261ea897f91fcfc0"
+  },
+  {
+   "name": "range across two chunk boundaries",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 1050001",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 1048000-2098000/3145733"
+   ],
+   "body_bytes": 1050001,
+   "body_sha256": "19ab85dc8629dd1b844d6d919b23fe66474e588225063cdf2e0ed1d84353b15e"
+  },
+  {
+   "name": "range suffix",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 100",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 3145633-3145732/3145733"
+   ],
+   "body_bytes": 100,
+   "body_sha256": "ea49986eeed9fe3adee5ae11f7a37b7888d6af434fb1ffd3f0192d508692c6f6"
+  },
+  {
+   "name": "range suffix longer than the file",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 0-3145732/3145733"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "range open",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 3145000-3145732/3145733"
+   ],
+   "body_bytes": 733,
+   "body_sha256": "6045df0c6af2af06d939539aa90484cf8c13c50053fea625d52ffe08aa5e8a0d"
+  },
+  {
+   "name": "range first byte",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 1",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 0-0/3145733"
+   ],
+   "body_bytes": 1,
+   "body_sha256": "5a6e7a4754af8e7f47fc9493040d853e7b01e39d537cb1dd353c93b7ae58eb3d"
+  },
+  {
+   "name": "range last byte",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 1",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 3145732-3145732/3145733"
+   ],
+   "body_bytes": 1,
+   "body_sha256": "13598656f10fa962b75f6c4587a61a067c14c1ef7dc9ca3703da76bae4c1beb1"
+  },
+  {
+   "name": "range end past the file",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 33",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 3145700-3145732/3145733"
+   ],
+   "body_bytes": 33,
+   "body_sha256": "9e6b46eb0389d98b5c448e24f530e58068f8a9d053ff77f992d5d4ce84c5848d"
+  },
+  {
+   "name": "range past the end",
+   "status": "HTTP/1.1 416 Range Not Satisfiable",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: text/plain",
+    "Content-Length: 0",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes */3145733"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "range reversed",
+   "status": "HTTP/1.1 416 Range Not Satisfiable",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: text/plain",
+    "Content-Length: 0",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes */3145733"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "range several",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "range other unit",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "range malformed",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "range empty",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "head with range",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-none-match strong",
+   "status": "HTTP/1.1 304 Not Modified",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-none-match weak",
+   "status": "HTTP/1.1 304 Not Modified",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-none-match list",
+   "status": "HTTP/1.1 304 Not Modified",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-none-match other",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "if-none-match star",
+   "status": "HTTP/1.1 304 Not Modified",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "head if-none-match",
+   "status": "HTTP/1.1 304 Not Modified",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-none-match before range",
+   "status": "HTTP/1.1 304 Not Modified",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-match other",
+   "status": "HTTP/1.1 412 Precondition Failed",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 0",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-match weak",
+   "status": "HTTP/1.1 412 Precondition Failed",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 0",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-match star",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "if-match with range",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 10",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 10-19/3145733"
+   ],
+   "body_bytes": 10,
+   "body_sha256": "d0058bc29fc759c785ee1ca3a1ccc1b9b816e9e0f31a30ca42e8bda9e45963ac"
+  },
+  {
+   "name": "if-match before if-none-match",
+   "status": "HTTP/1.1 412 Precondition Failed",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 0",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "if-range strong",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 10",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 10-19/3145733"
+   ],
+   "body_bytes": 10,
+   "body_sha256": "d0058bc29fc759c785ee1ca3a1ccc1b9b816e9e0f31a30ca42e8bda9e45963ac"
+  },
+  {
+   "name": "if-range other",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "if-range weak",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "if-range date",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 3145733",
+    "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 3145733,
+   "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+  },
+  {
+   "name": "accept-encoding",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 512",
+    "ETag: \"sha256-96380ccd8a91db9ba442aa1ac0cc0e864fb643a627c1e858c2234c0081513d5e\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 512,
+   "body_sha256": "96380ccd8a91db9ba442aa1ac0cc0e864fb643a627c1e858c2234c0081513d5e"
+  },
+  {
+   "name": "small whole",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 512",
+    "ETag: \"sha256-96380ccd8a91db9ba442aa1ac0cc0e864fb643a627c1e858c2234c0081513d5e\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 512,
+   "body_sha256": "96380ccd8a91db9ba442aa1ac0cc0e864fb643a627c1e858c2234c0081513d5e"
+  },
+  {
+   "name": "small range",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 12",
+    "ETag: \"sha256-96380ccd8a91db9ba442aa1ac0cc0e864fb643a627c1e858c2234c0081513d5e\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes 500-511/512"
+   ],
+   "body_bytes": 12,
+   "body_sha256": "0128466970f9067a731aa16e53711c1e2ebdfdee7fec69deac985332a18609ac"
+  },
+  {
+   "name": "empty whole",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 0",
+    "ETag: \"sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "empty range",
+   "status": "HTTP/1.1 416 Range Not Satisfiable",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: text/plain",
+    "Content-Length: 0",
+    "ETag: \"sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: private, no-cache",
+    "X-Plasma-Asset-Cache: chunks-v1",
+    "Content-Range: bytes */0"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "missing",
+   "status": "HTTP/1.1 404 Not Found",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: text/plain",
+    "Content-Length: 10",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: no-store"
+   ],
+   "body_bytes": 10,
+   "body_sha256": "709009e02c8e364113b28205aadde30cce270d709073f28153c85fdc5036c96d"
+  },
+  {
+   "name": "build",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: text/javascript",
+    "Content-Length: 18",
+    "ETag: \"sha256-5a33b8633b5a4332aa6b3cb4b2593f7b90dde9f57d01331d5183178a83a096d4\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: no-cache"
+   ],
+   "body_bytes": 18,
+   "body_sha256": "5a33b8633b5a4332aa6b3cb4b2593f7b90dde9f57d01331d5183178a83a096d4"
+  },
+  {
+   "name": "build revalidated",
+   "status": "HTTP/1.1 304 Not Modified",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: text/javascript",
+    "ETag: \"sha256-5a33b8633b5a4332aa6b3cb4b2593f7b90dde9f57d01331d5183178a83a096d4\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: no-cache"
+   ],
+   "body_bytes": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "name": "manifest",
+   "status": "HTTP/1.1 200 OK",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 164",
+    "ETag: \"sha256-ccf5a1959fdbf58675d581ed75a3c3c0540836ce1606e367e9d22bfa0e63d546\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: no-store"
+   ],
+   "body_bytes": 164,
+   "body_sha256": "ccf5a1959fdbf58675d581ed75a3c3c0540836ce1606e367e9d22bfa0e63d546"
+  },
+  {
+   "name": "manifest range",
+   "status": "HTTP/1.1 206 Partial Content",
+   "headers": [
+    "Server: <server>",
+    "Date: <date>",
+    "X-Content-Type-Options: nosniff",
+    "Content-Type: application/octet-stream",
+    "Content-Length: 4",
+    "ETag: \"sha256-ccf5a1959fdbf58675d581ed75a3c3c0540836ce1606e367e9d22bfa0e63d546\"",
+    "Accept-Ranges: bytes",
+    "Cross-Origin-Opener-Policy: same-origin",
+    "Cross-Origin-Embedder-Policy: require-corp",
+    "Cross-Origin-Resource-Policy: same-origin",
+    "Cache-Control: no-store",
+    "Content-Range: bytes 2-5/164"
+   ],
+   "body_bytes": 4,
+   "body_sha256": "1cc061ceadb92ada1df6a23920d7b4a8e10b520db8d0ddbcdfce2ad64a096712"
+  },
+  {
+   "name": "pipeline",
+   "answers": [
+    {
+     "name": "range first 100",
+     "status": "HTTP/1.1 206 Partial Content",
+     "headers": [
+      "Server: <server>",
+      "Date: <date>",
+      "X-Content-Type-Options: nosniff",
+      "Content-Type: application/octet-stream",
+      "Content-Length: 100",
+      "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+      "Accept-Ranges: bytes",
+      "Cross-Origin-Opener-Policy: same-origin",
+      "Cross-Origin-Embedder-Policy: require-corp",
+      "Cross-Origin-Resource-Policy: same-origin",
+      "Cache-Control: private, no-cache",
+      "X-Plasma-Asset-Cache: chunks-v1",
+      "Content-Range: bytes 0-99/3145733"
+     ],
+     "body_bytes": 100,
+     "body_sha256": "06897766a571985b4ffc0d2d943a4b8358faf00a1e45d534971c76ff64086fbb"
+    },
+    {
+     "name": "small whole",
+     "status": "HTTP/1.1 200 OK",
+     "headers": [
+      "Server: <server>",
+      "Date: <date>",
+      "X-Content-Type-Options: nosniff",
+      "Content-Type: application/octet-stream",
+      "Content-Length: 512",
+      "ETag: \"sha256-96380ccd8a91db9ba442aa1ac0cc0e864fb643a627c1e858c2234c0081513d5e\"",
+      "Accept-Ranges: bytes",
+      "Cross-Origin-Opener-Policy: same-origin",
+      "Cross-Origin-Embedder-Policy: require-corp",
+      "Cross-Origin-Resource-Policy: same-origin",
+      "Cache-Control: private, no-cache",
+      "X-Plasma-Asset-Cache: chunks-v1"
+     ],
+     "body_bytes": 512,
+     "body_sha256": "96380ccd8a91db9ba442aa1ac0cc0e864fb643a627c1e858c2234c0081513d5e"
+    },
+    {
+     "name": "range suffix",
+     "status": "HTTP/1.1 206 Partial Content",
+     "headers": [
+      "Server: <server>",
+      "Date: <date>",
+      "X-Content-Type-Options: nosniff",
+      "Content-Type: application/octet-stream",
+      "Content-Length: 100",
+      "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+      "Accept-Ranges: bytes",
+      "Cross-Origin-Opener-Policy: same-origin",
+      "Cross-Origin-Embedder-Policy: require-corp",
+      "Cross-Origin-Resource-Policy: same-origin",
+      "Cache-Control: private, no-cache",
+      "X-Plasma-Asset-Cache: chunks-v1",
+      "Content-Range: bytes 3145633-3145732/3145733"
+     ],
+     "body_bytes": 100,
+     "body_sha256": "ea49986eeed9fe3adee5ae11f7a37b7888d6af434fb1ffd3f0192d508692c6f6"
+    },
+    {
+     "name": "if-none-match strong",
+     "status": "HTTP/1.1 304 Not Modified",
+     "headers": [
+      "Server: <server>",
+      "Date: <date>",
+      "X-Content-Type-Options: nosniff",
+      "Content-Type: application/octet-stream",
+      "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+      "Accept-Ranges: bytes",
+      "Cross-Origin-Opener-Policy: same-origin",
+      "Cross-Origin-Embedder-Policy: require-corp",
+      "Cross-Origin-Resource-Policy: same-origin",
+      "Cache-Control: private, no-cache",
+      "X-Plasma-Asset-Cache: chunks-v1"
+     ],
+     "body_bytes": 0,
+     "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+     "name": "whole",
+     "status": "HTTP/1.1 200 OK",
+     "headers": [
+      "Server: <server>",
+      "Date: <date>",
+      "X-Content-Type-Options: nosniff",
+      "Content-Type: application/octet-stream",
+      "Content-Length: 3145733",
+      "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+      "Accept-Ranges: bytes",
+      "Cross-Origin-Opener-Policy: same-origin",
+      "Cross-Origin-Embedder-Policy: require-corp",
+      "Cross-Origin-Resource-Policy: same-origin",
+      "Cache-Control: private, no-cache",
+      "X-Plasma-Asset-Cache: chunks-v1"
+     ],
+     "body_bytes": 3145733,
+     "body_sha256": "a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574"
+    },
+    {
+     "name": "head",
+     "status": "HTTP/1.1 200 OK",
+     "headers": [
+      "Server: <server>",
+      "Date: <date>",
+      "X-Content-Type-Options: nosniff",
+      "Content-Type: application/octet-stream",
+      "Content-Length: 3145733",
+      "ETag: \"sha256-a216bf039e0f629e685c2dc1bc7a2ba8dc68b9153cb0220513ac1b29e4d27574\"",
+      "Accept-Ranges: bytes",
+      "Cross-Origin-Opener-Policy: same-origin",
+      "Cross-Origin-Embedder-Policy: require-corp",
+      "Cross-Origin-Resource-Policy: same-origin",
+      "Cache-Control: private, no-cache",
+      "X-Plasma-Asset-Cache: chunks-v1"
+     ],
+     "body_bytes": 0,
+     "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   ]
+  }
+ ]
+}
