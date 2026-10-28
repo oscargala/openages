@@ -51,6 +51,13 @@ set(PRODUCT_UUID        "ea489821-6c35-4bd0-9dae-bb17c585e680"
                                     CACHE STRING "Product UUID")
 option(PRODUCT_EMBED_BUILD_INFO "Embed build revision information into plProduct" ON)
 cmake_dependent_option(PRODUCT_EMBED_BUILD_TIME "Embed build time into plProduct" ON [[PRODUCT_EMBED_BUILD_INFO]] OFF)
+# A release build embeds the full commit of the source tree it was built from (and the tag at that commit, if any)
+# and stops when that tree has uncommitted changes, so the client never reports a revision that its published source
+# does not match (cmake/BuildInfo.cmake).
+option(PRODUCT_RELEASE_BUILD "Release build: embed the source tree's commit and refuse a tree with uncommitted changes" OFF)
+if(PRODUCT_RELEASE_BUILD AND NOT PRODUCT_EMBED_BUILD_INFO)
+    message(FATAL_ERROR "PRODUCT_RELEASE_BUILD needs PRODUCT_EMBED_BUILD_INFO=ON")
+endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set(CMAKE_FOLDER "CMakePredefinedTargets")
@@ -120,7 +127,10 @@ endif()
 
 # Find all 3rd-party libraries that are required
 find_package(ASIO 1.14 REQUIRED)
-find_package(CURL REQUIRED)
+if(NOT EMSCRIPTEN)
+    # curl is used only by the launcher and the Windows winmain; neither is built for wasm.
+    find_package(CURL REQUIRED)
+endif()
 find_package(DirectX)
 find_package(epoxy)
 find_package(expat REQUIRED)
@@ -142,10 +152,52 @@ find_package(Vorbis REQUIRED)
 find_package(VPX)
 find_package(ZLIB REQUIRED)
 
-if(${CMAKE_VERSION} VERSION_GREATER_EQUAL 4.0 AND CMAKE_CROSSCOMPILING)
+# The Python ABI the script glue (pfPython) is compiled for. 3 (default): the CPython 3 found below.
+# 2: the py2 flavour (plClient-py2), linked with CPython 2.3.3 from the prefix PLASMA_WASM_PYTHON2
+# (set by the wasm toolchain), which runs a shard's own Python 2.3 game code (MOULa's python.pak).
+# One glue source compiles for both through pfPython/pyPy2Compat.h. The py2 flavour is built for
+# Emscripten only.
+set(PLASMA_PYTHON_ABI "3" CACHE STRING "Python ABI of the script glue: 3, or 2 for the py2 flavour (Emscripten)")
+set_property(CACHE PLASMA_PYTHON_ABI PROPERTY STRINGS 2 3)
+
+# The py2 flavour compiles and links against CPython 2.3 alone, so it needs no CPython 3 headers or
+# library: only the interpreter that runs the build's own scripts, which a cross build finds itself
+# (Sources/Plasma/Apps/plClient/CMakeLists.txt, Python3_HOST_EXECUTABLE).
+if(PLASMA_PYTHON_ABI STREQUAL "2")
+    if(NOT (${CMAKE_VERSION} VERSION_GREATER_EQUAL 4.0 AND CMAKE_CROSSCOMPILING))
+        find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
+    endif()
+elseif(${CMAKE_VERSION} VERSION_GREATER_EQUAL 4.0 AND CMAKE_CROSSCOMPILING)
     find_package(Python3 3.8 REQUIRED COMPONENTS Development)
 else()
     find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter Development)
+endif()
+
+if(PLASMA_PYTHON_ABI STREQUAL "2")
+    if(NOT EMSCRIPTEN)
+        message(FATAL_ERROR "PLASMA_PYTHON_ABI=2 (the py2 flavour) is built for Emscripten only")
+    endif()
+    if(NOT EXISTS "${PLASMA_WASM_PYTHON2}/lib/libpython2.3.a" OR
+       NOT EXISTS "${PLASMA_WASM_PYTHON2}/include/python2.3/patchlevel.h")
+        message(FATAL_ERROR "PLASMA_PYTHON_ABI=2: no CPython 2.3 prefix at '${PLASMA_WASM_PYTHON2}' "
+            "(the deps build's python2 step, build-deps.sh python2, installs one; or set PLASMA_WASM_PYTHON2=<prefix>)")
+    endif()
+    add_library(PlasmaPython2::Python STATIC IMPORTED)
+    set_target_properties(PlasmaPython2::Python PROPERTIES
+        IMPORTED_LOCATION "${PLASMA_WASM_PYTHON2}/lib/libpython2.3.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${PLASMA_WASM_PYTHON2}/include/python2.3"
+        INTERFACE_COMPILE_DEFINITIONS "PLASMA_PYTHON_ABI=2"
+        # The 2.3 headers declare `register` parameters (an error in C++17) and take `char*`
+        # names that the glue passes as string literals.
+        INTERFACE_COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CXX>:-Wno-register;-Wno-writable-strings>")
+    set(PLASMA_PYTHON_TARGET PlasmaPython2::Python)
+    message(STATUS "Python ABI 2: ${PLASMA_WASM_PYTHON2}/lib/libpython2.3.a (py2 flavour, plClient-py2)")
+elseif(PLASMA_PYTHON_ABI STREQUAL "3")
+    # The selector pfPython tests (pfPython/pyPy2Compat.h), as the py2 target above carries it.
+    set_property(TARGET Python3::Python APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS "PLASMA_PYTHON_ABI=3")
+    set(PLASMA_PYTHON_TARGET Python3::Python)
+else()
+    message(FATAL_ERROR "PLASMA_PYTHON_ABI must be 2 or 3, not '${PLASMA_PYTHON_ABI}'")
 endif()
 
 if(APPLE)
@@ -156,6 +208,13 @@ if(APPLE)
 
     if(TARGET Metal::Metal)
         check_language(Metal)
+    endif()
+elseif(EMSCRIPTEN)
+    # Emscripten sets UNIX, but there is no fontconfig, libsecret, Wayland or X11 in a
+    # browser. libuuid is provided by Emscripten itself: <uuid/uuid.h> is in the sysroot
+    # and libuuid.js (uuid_generate via crypto.getRandomValues) is linked by default.
+    if(NOT TARGET Uuid::Uuid)
+        add_library(Uuid::Uuid INTERFACE IMPORTED)
     endif()
 elseif(UNIX)
     find_package(LIBSECRET)
@@ -179,6 +238,20 @@ if(PLASMA_EXTERNAL_RELEASE)
     add_definitions(-DPLASMA_EXTERNAL_RELEASE)
 endif(PLASMA_EXTERNAL_RELEASE)
 
+# The harness build: ON compiles the test, comparison and investigation instruments and adds the testhooks/
+# overlay that holds them. OFF is the product build, the only one that is deployed or published.
+option(PLASMA_TEST_HOOKS "Build the test-hook instruments and the testhooks/ overlay (harness builds only)" OFF)
+if(PLASMA_TEST_HOOKS)
+    # Where that overlay is: this tree's testhooks/ by default, or a test checkout of its own, so the source tree
+    # needs no overlay of its own.
+    set(PLASMA_TEST_HOOKS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/testhooks" CACHE PATH
+        "The test-hook overlay a harness build (PLASMA_TEST_HOOKS ON) compiles")
+    if(NOT EXISTS "${PLASMA_TEST_HOOKS_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "PLASMA_TEST_HOOKS is ON, but PLASMA_TEST_HOOKS_DIR (${PLASMA_TEST_HOOKS_DIR}) holds no overlay")
+    endif()
+    add_definitions(-DPLASMA_TEST_HOOKS)
+endif(PLASMA_TEST_HOOKS)
+
 # Pipeline Renderers
 cmake_dependent_option(PLASMA_PIPELINE_DX "Enable DirectX rendering pipeline?" ON "DirectX_FOUND" OFF)
 cmake_dependent_option(PLASMA_PIPELINE_GL "Enable OpenGL rendering pipeline?" ON "TARGET epoxy::epoxy" OFF)
@@ -196,6 +269,12 @@ if(PLASMA_PIPELINE_METAL)
     add_definitions(-DPLASMA_PIPELINE_METAL)
     enable_language(Metal)
 endif(PLASMA_PIPELINE_METAL)
+
+# The browser's WebGPU pipeline (pfWGPUPipeline, a port of pfMetalPipeline), built for Emscripten only.
+cmake_dependent_option(PLASMA_PIPELINE_WGPU "Enable WebGPU rendering pipeline?" ON "EMSCRIPTEN" OFF)
+if(PLASMA_PIPELINE_WGPU)
+    add_definitions(-DPLASMA_PIPELINE_WGPU)
+endif(PLASMA_PIPELINE_WGPU)
 
 # Allow us to disable certain parts of the build
 option(PLASMA_BUILD_CLIENT "Do we want to build plClient?" ON)
@@ -249,6 +328,11 @@ set(PLASMA_MAX_PLUGIN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/Sources/MaxPlugin")
 
 add_subdirectory(Sources/Plasma)
 add_subdirectory(Scripts)
+
+if(PLASMA_TEST_HOOKS)
+    # The binary dir is named, so the overlay builds in <build>/testhooks wherever its sources are.
+    add_subdirectory("${PLASMA_TEST_HOOKS_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/testhooks")
+endif(PLASMA_TEST_HOOKS)
 
 if(PLASMA_BUILD_MAX_PLUGIN)
     add_subdirectory(Sources/MaxPlugin)

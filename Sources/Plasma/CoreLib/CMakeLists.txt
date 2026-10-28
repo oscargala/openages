@@ -37,6 +37,7 @@ endif()
 set(CoreLib_HEADERS
     HeadSpin.h
     hsAlignedAllocator.hpp
+    hsBitCast.h
     hsBitVector.h
     hsBounds.h
     hsColorRGBA.h
@@ -114,6 +115,8 @@ set(BUILD_INFO_COMMAND ${CMAKE_COMMAND}
     -DPRODUCT_UUID=${PRODUCT_UUID}
     -DPRODUCT_EMBED_BUILD_INFO=${PRODUCT_EMBED_BUILD_INFO}
     -DPRODUCT_EMBED_BUILD_TIME=${PRODUCT_EMBED_BUILD_TIME}
+    -DPRODUCT_RELEASE_BUILD=${PRODUCT_RELEASE_BUILD}
+    "-DPRODUCT_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cmake"
 )
 add_custom_target(pcBuildInfo

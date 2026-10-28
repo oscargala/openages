@@ -35,6 +35,60 @@ if(PRODUCT_EMBED_BUILD_INFO)
     endif()
 endif()
 
+# A release build (PRODUCT_RELEASE_BUILD) reports exactly the published source it was built from.
+# The commands above run in the build directory, which for an out-of-tree build is not inside the checkout, and
+# describe by the nearest tag; a release build asks the source tree itself (PRODUCT_SOURCE_DIR) instead:
+#   GIT_REV  the full commit of HEAD;
+#   GIT_TAG  the tag at HEAD, or the commit's first 12 hex digits when HEAD has none (the product string shows it);
+# and stops when the tree has any change that is not committed, untracked files included (ignored ones are not).
+if(PRODUCT_RELEASE_BUILD)
+    find_package(Git QUIET)
+    if(NOT Git_FOUND)
+        message(FATAL_ERROR "PRODUCT_RELEASE_BUILD: git is needed to read the source tree's commit")
+    endif()
+    if(NOT PRODUCT_SOURCE_DIR)
+        message(FATAL_ERROR "PRODUCT_RELEASE_BUILD: PRODUCT_SOURCE_DIR (the source tree) is not set")
+    endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --verify HEAD
+        WORKING_DIRECTORY "${PRODUCT_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_REV
+        RESULT_VARIABLE _GIT_RESULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT _GIT_RESULT EQUAL 0 OR NOT GIT_REV MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "PRODUCT_RELEASE_BUILD: ${PRODUCT_SOURCE_DIR} is not a git checkout with a commit")
+    endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} status --porcelain --untracked-files=normal --ignore-submodules=none
+        WORKING_DIRECTORY "${PRODUCT_SOURCE_DIR}"
+        OUTPUT_VARIABLE _GIT_STATUS
+        RESULT_VARIABLE _GIT_RESULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT _GIT_RESULT EQUAL 0)
+        message(FATAL_ERROR "PRODUCT_RELEASE_BUILD: git status failed in ${PRODUCT_SOURCE_DIR}")
+    endif()
+    if(NOT _GIT_STATUS STREQUAL "")
+        message(FATAL_ERROR "PRODUCT_RELEASE_BUILD: the source tree ${PRODUCT_SOURCE_DIR} has changes that are not "
+                            "committed, so a release build would not match the commit it reports:\n${_GIT_STATUS}")
+    endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --exact-match --tags HEAD
+        WORKING_DIRECTORY "${PRODUCT_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_TAG
+        RESULT_VARIABLE _GIT_RESULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT _GIT_RESULT EQUAL 0 OR GIT_TAG STREQUAL "")
+        string(SUBSTRING "${GIT_REV}" 0 12 GIT_TAG)
+    endif()
+    # A release build carries no diff: the commit is the whole source.
+    set(GIT_DIFF_CONTENTS "")
+endif()
+
 if(NOT GIT_REV)
     set(GIT_REV "untracked")
 endif()

@@ -47,7 +47,13 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <cstring>
 #include <string_theory/format>
 
+// Emscripten's libc has a weak clock_gettime() whose CLOCK_MONOTONIC reads
+// performance.now(). A wasm module is linked statically, so the replacement
+// below would override it for every caller, libc++'s steady_clock included,
+// with a wall clock in whole milliseconds.
+#ifndef __EMSCRIPTEN__
 #define NO_POSIX_CLOCK 1
+#endif
 
 #if NO_POSIX_CLOCK
 #include <sys/time.h>
