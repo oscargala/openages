@@ -748,6 +748,11 @@ void plPXPhysicalControllerCore::InvalidateCache(plKey world)
     gInvalidCacheWorlds.emplace(std::move(world));
 }
 
+void plPXPhysicalControllerCore::ClearInvalidCache()
+{
+    gInvalidCacheWorlds.clear();
+}
+
 // ==========================================================================
 
 void plPXPhysicalControllerCore::ISynchProxy()

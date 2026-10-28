@@ -205,6 +205,10 @@ public:
     /** Invalidates the collision cache for the specified subworld. */
     static void InvalidateCache(plKey world = {});
 
+    /** Releases every pending invalidation. Called when the simulation is destroyed, so that no
+        key outlives the resource manager in this static set. */
+    static void ClearInvalidCache();
+
 #ifndef PLASMA_EXTERNAL_RELEASE
     static bool fDebugDisplay;
 #endif
