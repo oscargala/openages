@@ -17,6 +17,13 @@ set(pnAsyncCore_SOURCES
     pnAcTimer.cpp
 )
 
+if(EMSCRIPTEN)
+    # No TCP sockets in a browser: sockets are browser WebSockets to a
+    # WebSocket-to-TCP proxy (pnAcSocketEmscripten.cpp + its JS half pnAcWebSocket.js).
+    list(REMOVE_ITEM pnAsyncCore_SOURCES pnAcSocket.cpp)
+    list(APPEND pnAsyncCore_SOURCES pnAcSocketEmscripten.cpp)
+endif()
+
 plasma_library(pnAsyncCore
     FOLDER NucleusLib
     SOURCES ${pnAsyncCore_HEADERS} ${pnAsyncCore_SOURCES}

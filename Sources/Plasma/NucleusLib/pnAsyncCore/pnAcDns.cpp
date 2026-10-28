@@ -166,7 +166,17 @@ void AsyncAddressLookupName(const ST::string& name, unsigned port, FAsyncLookupP
     if (!s_resolver)
         s_resolver = new DnsResolver;
 
-    s_resolver->fResolver.async_resolve(hostStr, portStr, tcp::resolver::address_configured,
+#ifdef __EMSCRIPTEN__
+    // Emscripten 6.0.12's getaddrinfo answers EAI_NONAME to any
+    // AI_ADDRCONFIG request (src/lib/libcore.js, "TODO"), so ask without it. A browser has
+    // no interface list to filter by anyway. Names resolve to Emscripten's placeholder
+    // addresses (172.29.x.x), which the WebSocket backend maps back to the name
+    // (pnAcSocketEmscripten.cpp) so the proxy resolves it.
+    constexpr auto resolveFlags = tcp::resolver::flags();
+#else
+    constexpr auto resolveFlags = tcp::resolver::address_configured;
+#endif
+    s_resolver->fResolver.async_resolve(hostStr, portStr, resolveFlags,
             [data = std::move(data)](const asio::error_code& err,
                                      const tcp::resolver::results_type& results)
             {
