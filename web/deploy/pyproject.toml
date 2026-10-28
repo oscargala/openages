@@ -1,0 +1,25 @@
+# The browser client's web product: the origin server, the WebSocket gateway and the deployment tooling, as one
+# package (plasma_web). It runs from a checkout of this repository (plasma_web/__init__.py), so install it editable:
+#   python -m pip install -e web/deploy
+# or, without installing, put web/deploy on the import path (PYTHONPATH=web/deploy, or python -m from web/deploy).
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plasma-web"
+version = "0.1.0.dev0"
+description = "The origin server, WebSocket gateway and deployment tooling of the Plasma browser client"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.13"
+dependencies = ["websockets==17.2"]   # the gateway (requirements.txt pins the same)
+
+[project.scripts]
+plasma-web-server = "plasma_web.server:main"
+plasma-web-gateway = "plasma_web.gateway:cli"
+plasma-web-deployment = "plasma_web.deployment:main"
+plasma-web-emit-static = "plasma_web.emit_static:main"
+plasma-web-analyse-gamecode = "plasma_web.analyse_gamecode:main"
+
+[tool.setuptools]
+packages = ["plasma_web"]

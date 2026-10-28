@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The gateway Worker's fixed shape. It holds no secret and no deployment value: emit_worker.py reads this file and
+# writes one deployment's complete wrangler.json (the vars DEPLOYMENT, JOIN_TTL, UPSTREAMS, ORIGINS, PUBLIC_HOSTS,
+# LIMITS, STATUS_URL and CONTENT_SECURITY_POLICY, the two rate limits, the assets directory) from the deployment file.
+# The join key is the secret JOIN_KEY (64 hex characters), which the operator sets with `wrangler secret put JOIN_KEY`,
+# or for `wrangler dev` in an env file outside the repository; never here.
+# Without the generated vars the Worker refuses every page, /connect and /runtime/join request with 500.
+name = "plasma-gateway"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+[assets]
+directory = "kit"
+binding = "ASSETS"
+# The Worker answers every request first: /connect, /runtime/join and /runtime/status, and the static kit with
+# server.py's headers.
+run_worker_first = true
+html_handling = "none"
+not_found_handling = "none"
+
+[[durable_objects.bindings]]
+name = "JOIN_NONCES"
+class_name = "JoinNonces"
+
+[[durable_objects.bindings]]
+name = "IP_SLOTS"
+class_name = "IpSlots"
+
+[[durable_objects.bindings]]
+name = "CAPACITY"
+class_name = "Capacity"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["JoinNonces", "IpSlots"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Capacity"]
+
+# connectsPerMinutePerIp (CONNECTS) and the join issue rate, 2 x connectsPerMinutePerIp (JOINS). The limits shown are
+# deployment.py LIMIT_DEFAULTS; the generated file has the deployment's values. A namespace id is any positive
+# integer, unique within the Cloudflare account that runs the Worker.
+[[ratelimits]]
+name = "CONNECTS"
+namespace_id = "21401"
+simple = { limit = 30, period = 60 }
+
+[[ratelimits]]
+name = "JOINS"
+namespace_id = "21402"
+simple = { limit = 60, period = 60 }

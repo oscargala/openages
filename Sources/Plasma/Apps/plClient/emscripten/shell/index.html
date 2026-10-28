@@ -1,0 +1,156 @@
+<!doctype html>
+<!--
+/*==LICENSE==*
+
+CyanWorlds.com Engine - MMOG client, server and tools
+Copyright (C) 2011  Cyan Worlds, Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+Additional permissions under GNU GPL version 3 section 7
+
+If you modify this Program, or any covered work, by linking or
+combining it with any of RAD Game Tools Bink SDK, Autodesk 3ds Max SDK,
+NVIDIA PhysX SDK, Microsoft DirectX SDK, OpenSSL library, Independent
+JPEG Group JPEG library, Microsoft Windows Media SDK, or Apple QuickTime SDK
+(or a modified version of those libraries),
+containing parts covered by the terms of the Bink SDK EULA, 3ds Max EULA,
+PhysX SDK EULA, DirectX SDK EULA, OpenSSL and SSLeay licenses, IJG
+JPEG Library README, Windows Media SDK EULA, or QuickTime SDK EULA, the
+licensors of this Program grant you additional
+permission to convey the resulting work. Corresponding Source for a
+non-source form of such a combination shall include the source code for
+the parts of OpenSSL and IJG JPEG Library used as well as that of the covered
+work.
+
+You can contact Cyan Worlds, Inc. by email legal@cyan.com
+ or by snail mail at:
+      Cyan Worlds, Inc.
+      14617 N Newport Hwy
+      Mead, WA   99021
+
+*==LICENSE==*/
+-->
+
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uru Live</title>
+<style>
+  /* The page's colours: the game's black with light text, from the first paint, so a player never sees a white page,
+     also on a run refused before the page has its deployment (its error). */
+  :root { color-scheme: light dark; --bg: #000; --fg: #ddd; --err: #ff7a7a; }
+  body { background: var(--bg); color: var(--fg); font: 12px/1.35 ui-monospace, Menlo, monospace; margin: 16px; }
+  /* the status line is for players (boot.mjs STATUS, CAUSES): what the page is doing, or why the game stopped */
+  #status { font: 15px/1.4 system-ui, sans-serif; margin: 8px 0; }
+  #compatibility { border: 1px solid var(--err); padding: 12px; max-width: 52em; }
+  #compatibility th, #compatibility td { text-align: left; padding: 4px 16px 4px 0; }
+  /* grey shows through wherever the client thread has presented nothing */
+  #canvas { display: block; width: 800px; height: 600px; max-width: 100%; background: #808080; margin-bottom: 8px; }
+  /* the stage stays empty until the page has its deployment (boot.mjs sets data-plasma-mode) and its display */
+  html:not([data-plasma-mode]) #stage { visibility: hidden; }
+  /* the player display (html.plasma-player): the stage is the browser window and the canvas fills it; its
+     backing store is the client's display mode, which follows the window (plEmscriptenDisplay.h).
+     While windowed the window holds the stage and, below it, the page's control strip
+     (#page-controls); the canvas fills the stage, so the client's window is the browser window less the strip. Nothing
+     of the page lies over the canvas: the game's screens use all of it. Full screen
+     shows the stage alone (it is the fullscreen element), so the strip is out of sight there. */
+  html.plasma-player, html.plasma-player body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #ddd; }
+  html.plasma-player body { display: flex; flex-direction: column; }
+  html.plasma-player #stage { position: relative; flex: 1 1 0; min-height: 0; background: #000; }
+  html.plasma-player #canvas { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; margin: 0; background: #000; }
+  /* the canvas holds the keyboard while the game runs (input/capture.mjs): the browser's focus ring would frame the
+     game's screen, which the native client's screens do not have */
+  html.plasma-player #canvas:focus { outline: none; }
+  html.plasma-player.plasma-ended { overflow: auto; }
+  html.plasma-player.plasma-ended body { display: block; height: auto; }
+  html.plasma-player.plasma-ended #stage { height: 70vh; }
+  /* the control strip: the high-res texture setting at the left, the render scale and full screen at the right; one
+     line of fixed height (a long text is cut, its title has it all), so a control's change never resizes the game */
+  #page-controls[hidden], #page-controls > [hidden] { display: none !important; }
+  html.plasma-player #page-controls { flex: none; display: flex; align-items: center; gap: 12px; height: 32px;
+    box-sizing: border-box; padding: 0 8px; border-top: 1px solid #2a2a2a; background: #000; color: #bbb;
+    font: 12px system-ui, sans-serif; white-space: nowrap; overflow: hidden; color-scheme: dark; }
+  html.plasma-player.plasma-ended #page-controls { display: block; height: auto; border: 0; padding: 0 16px; }
+  html.plasma-player #page-controls button { font: inherit; color: #ddd; background: #111; border: 1px solid #555;
+    border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  html.plasma-player #page-controls button:hover:not(:disabled) { color: #fff; border-color: #999; }
+  html.plasma-player #page-controls button:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 1px; }
+  #fullscreen-button, #render-scale { display: none; }
+  html.plasma-player #fullscreen-button { display: block; flex: none; }
+  html.plasma-player.plasma-ended #fullscreen-button { display: none; }
+  /* the optional high-res texture pack setting and, while it is on, its attribution */
+  #texpack { margin: 4px 0; font: 12px system-ui, sans-serif; }
+  #texpack a { color: inherit; }
+  html.plasma-player #texpack { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; }
+  html.plasma-player.plasma-ended #texpack { margin: 8px 0 0; }
+  /* the render-scale (supersampling) choice, one button per scale (boot.mjs: aria-checked marks
+     the scale in effect), beside the fullscreen button */
+  html.plasma-player #render-scale { display: flex; flex: none; align-items: center; gap: 4px; margin-left: auto; }
+  html.plasma-player #render-scale button[aria-checked="true"] { color: #fff; background: #3a3a3a; border-color: #aaa; }
+  /* a scale the window is too large for (its title says why) is greyed and cannot be chosen */
+  html.plasma-player #render-scale button:disabled { color: #6f6f6f; border-color: #333; cursor: not-allowed; }
+  html.plasma-player.plasma-ended #render-scale { display: none; }
+  /* the source notice at the strip's right end: "Source code (GPLv3)" links the published source of
+     this page and client (source.json url: the release tag, else its commit), "Notices" the third-party notices.
+     boot.mjs fills it on the player page; it stays when the run has ended, and when the browser cannot run the game
+     (boot.mjs bootFailure hides the strip's settings, never the notice), also on a page that ended before it had its
+     deployment (the preflight, a refused deployment document or server.ini) */
+  #source-notice { display: none; }
+  html.plasma-player #source-notice:not([hidden]) { display: block; flex: none; }
+  html.plasma-player.plasma-ended #source-notice:not([hidden]),
+  html.plasma-ended:not([data-plasma-mode]) #source-notice:not([hidden]) { display: block; margin: 8px 0; }
+  #source-notice a { color: inherit; }
+  /* the player display: while the game loads (the page, then the client until its first frame) the status line sits
+     over the stage, as it does before the page has its deployment; once the client's first frame is on the canvas
+     the client draws its own screens (boot.mjs plasma.firstFrame), and when the run ends the line returns below the
+     stage, or, on a run refused before the page had its deployment, to the top of the page */
+  html.plasma-player #status, html:not([data-plasma-mode]) #status { position: fixed; left: 0; right: 0; top: 45%;
+    z-index: 2; margin: 0; padding: 0 16px; text-align: center; color: #ddd; pointer-events: none; }
+  html.plasma-player.plasma-presented #status { display: none; }
+  html.plasma-player.plasma-ended #status, html.plasma-ended:not([data-plasma-mode]) #status { display: block;
+    position: static; padding: 12px 16px; text-align: left; color: #ddd; }
+  /* a run that ends before the page has its deployment (the deployment refused) has no stage to keep room for */
+  html.plasma-ended:not([data-plasma-mode]) #stage { display: none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="canvas" width="800" height="600"></canvas></div>
+<div id="page-controls" role="group" aria-label="Page settings">
+<div id="texpack" hidden title="High-resolution textures (original art, from the next Age you enter)"><label><input id="texpack-on" type="checkbox"> High-resolution textures (original art, from the next Age you enter)</label>
+<span id="texpack-credit" hidden> &middot; High-resolution textures: Cyan Worlds, <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a></span></div>
+<div id="render-scale" role="radiogroup" aria-label="Render scale" title="Render scale: supersampling renders above the screen resolution and scales down (sharper, slower)"><span aria-hidden="true">Render scale</span><button type="button" role="radio" data-scale="1" aria-checked="true">Standard</button><button type="button" role="radio" data-scale="2" aria-checked="false">Supersample 2x</button></div>
+<button id="fullscreen-button" type="button" title="Full screen (Esc leaves)">Full screen</button>
+<div id="source-notice" hidden><a id="source-link" target="_blank" rel="noopener noreferrer">Source code (GPLv3)</a><span id="source-none" hidden>Source code (GPLv3): not named by this site</span> &middot; <a id="notices-link" href="THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Notices</a></div>
+</div>
+<div id="status" role="status" aria-live="polite">Loading the game&hellip;</div>
+<section id="compatibility" role="alert" hidden aria-labelledby="compatibility-title">
+<h2 id="compatibility-title">This browser cannot start the game</h2>
+<p id="compatibility-reason"></p>
+<ul id="compatibility-missing"></ul>
+<p>Minimum browser versions:</p>
+<table><thead><tr><th>Browser</th><th>Version</th></tr></thead><tbody>
+<tr><td>Chrome / Chromium</td><td>137 or newer</td></tr>
+<tr><td>Firefox</td><td>153 or newer (Apple silicon macOS)</td></tr>
+<tr><td>Safari</td><td>27 or newer</td></tr>
+</tbody></table>
+<p>A secure connection, shared memory access, and a compatible graphics device are also required.
+Firefox and Safari game compatibility has not yet been tested.</p>
+</section>
+<!-- The page logic is boot.mjs: the deployment, the display and the client start; it meets the client in one
+     object, plasma. -->
+<script type="module" src="boot.mjs" data-plasma-boot></script>
+</body>
+</html>
