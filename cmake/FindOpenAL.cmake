@@ -1,5 +1,21 @@
-# First, try to load OpenAL-Soft from its Cmake config.
-find_package(OpenAL CONFIG QUIET)
+# Native builds and the default Wasm SDK path retain the existing package lookup.
+# An opt-in private prefix selects the original C++ mixer without shared-dependency writes.
+set(PLASMA_WASM_NATIVE_AUDIO FALSE)
+if(EMSCRIPTEN)
+    set(PLASMA_WASM_NATIVE_AUDIO_PREFIX "" CACHE PATH "Private OpenAL Soft/SDL2 Wasm package; empty selects SDK OpenAL")
+    if(PLASMA_WASM_NATIVE_AUDIO_PREFIX)
+        set(PLASMA_WASM_NATIVE_AUDIO TRUE)
+        include("${PLASMA_WASM_NATIVE_AUDIO_PREFIX}/share/OpenAL/OpenALConfig.cmake")
+        message(STATUS "Wasm audio: native OpenAL Soft / SDL2 from ${PLASMA_WASM_NATIVE_AUDIO_PREFIX}")
+    endif()
+    if(NOT "${_PLASMA_WASM_AUDIO_PREFIX}" STREQUAL "${PLASMA_WASM_NATIVE_AUDIO_PREFIX}")
+        unset(OPENAL_HAS_EFX CACHE)
+    endif()
+    set(_PLASMA_WASM_AUDIO_PREFIX "${PLASMA_WASM_NATIVE_AUDIO_PREFIX}" CACHE INTERNAL "Previous audio include selection" FORCE)
+endif()
+if(NOT PLASMA_WASM_NATIVE_AUDIO)
+    find_package(OpenAL CONFIG QUIET)
+endif()
 
 # If that didn't work, fall back to the CMake find module
 if(NOT TARGET OpenAL::OpenAL)
