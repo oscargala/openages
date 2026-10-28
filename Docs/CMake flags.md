@@ -37,7 +37,9 @@ Build Configuration Flags
   Whether to make a `Debug` or `Release` build (or `RelWithDebInfo` to make a
   release build with debugging info). Default is probably `Debug`, but this is
   usually overridden by the build type as configured in the Visual Studio or
-  Xcode IDEs.
+  Xcode IDEs. The browser client keeps its function names and the stack traces
+  of its C++ exceptions in `Debug` and `RelWithDebInfo` builds only (and in
+  every `PLASMA_TEST_HOOKS` build); a `Release` build leaves both out.
 
 * `PLASMA_EXTERNAL_RELEASE`
 
@@ -100,6 +102,22 @@ Build Configuration Flags
 
   Whether to embed information about the build time in the product version.
   Default is based on the value of `PRODUCT_EMBED_BUILD_INFO`.
+
+* `PRODUCT_RELEASE_BUILD`
+
+  A release build: embeds the full commit of the source tree (read from the
+  source directory, not the build directory) and the tag at that commit, or
+  the commit's first 12 hex digits when it has none, and stops when the tree
+  has changes that are not committed, untracked files included. Needs
+  `PRODUCT_EMBED_BUILD_INFO`. The browser build sets it with
+  `build-client.sh RELEASE=1`. Default is `OFF`.
+
+* `PLASMA_WASM_SHELL_CONFIG`
+
+  The browser client only: the `config.mjs` of the page shell. The client is
+  built with its `ASSET_ORIGIN_PINS`, the number of asset origins the page and
+  the client's asset cache admit, so that both use the same number. Default is
+  the shell's `config.mjs` in this repository.
 
 
 Build Feature Flags

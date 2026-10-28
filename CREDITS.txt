@@ -76,4 +76,36 @@ Gabriel, Neil Sparkes and Karl Wallinger. Published by Real World Music
 Limited/Universal Music Limited. Peter Gabriel appears courtesy of Real
 World Records'/ Geffen Records and EMI Records.
 
+BROWSER CLIENT
+--------------
+The browser client builds this engine for WebAssembly with Emscripten and
+draws through WebGPU with Dawn's Emdawnwebgpu. It is built on the work of:
+
+Cyan Worlds, Inc., who wrote the CyanWorlds.com Engine and released it under
+the GNU General Public License.
+
+The H-uru Plasma developers, who maintain the engine this port builds on.
+
+OpenUru.org, whose CWE-ou-minkata repository holds the CPython 2.3.3 tree of
+the plClient-py2 flavour.
+
+The Emscripten and Dawn projects; the Python Software Foundation (CPython
+3.12.9 and 2.3.3); NVIDIA (PhysX); the OpenSSL Project; the libjpeg-turbo
+project; the FreeType Project; the Xiph.Org Foundation (Ogg, Vorbis, Speex)
+and the Opus authors; the WebM Project (libvpx, libwebm); and the authors of
+zlib, libpng, Brotli, bzip2, Expat, Asio, string_theory and tl::expected.
+
+Portions of this software are copyright © 2026 The FreeType Project
+(https://freetype.org). All rights reserved.
+
+This software is based in part on the work of the Independent JPEG Group.
+
+The browser page kit serves Liberation Mono (Liberation Fonts 2.1.5, SIL Open
+Font License 1.1) and DejaVu Sans Bold (DejaVu Fonts 2.37, Bitstream Vera and
+Arev Fonts licences) in place of the client's Courier New and Trebuchet MS
+Bold.
+
+THIRD_PARTY_NOTICES.md lists every third-party component of the browser
+client and the page kit, with its version, licence and full licence text.
+
 *==CREDITS==*/

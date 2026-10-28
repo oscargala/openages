@@ -1,0 +1,396 @@
+{
+  "comment": "Licence texts THIRD_PARTY_NOTICES.md reproduces, each taken from the pinned source it names. notices.py extract verifies every source against its pin and writes the texts; notices.py render fills them into the template; check_notices.py verifies the result. kind: lock = a sources.lock download (SHA-256); port = a vcpkg port's download (its SHA-512 in the port at the lock's vcpkg commit, or in Scripts/Ports for an overlay port); tree = the CPython 2.3.3 tree (git tree id and manifest of its lock record); emport = an Emscripten port's archive (its SHA-512 in that port's file inside the pinned Emscripten release); registry = a file of the vcpkg registry at the lock's vcpkg commit; repo = a file of this repository. embed false: named by its SHA-256 only. start/end: an excerpt from the first line equal to start up to, not including, the next line equal to end; last instead of end includes that line.",
+  "texts": [
+    {
+      "id": "openssl",
+      "kind": "port",
+      "port": "openssl",
+      "archive": "openssl-openssl-openssl-3.6.3.tar.gz",
+      "member": "openssl-openssl-3.6.3/LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+    },
+    {
+      "id": "libjpeg-turbo",
+      "kind": "port",
+      "port": "libjpeg-turbo",
+      "archive": "libjpeg-turbo-libjpeg-turbo-3.2.0.tar.gz",
+      "member": "libjpeg-turbo-3.2.0/LICENSE.md",
+      "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579"
+    },
+    {
+      "id": "libjpeg-turbo-ijg",
+      "kind": "port",
+      "port": "libjpeg-turbo",
+      "archive": "libjpeg-turbo-libjpeg-turbo-3.2.0.tar.gz",
+      "member": "libjpeg-turbo-3.2.0/README.ijg",
+      "start": "LEGAL ISSUES",
+      "end": "REFERENCES",
+      "sha256": "00ef065f71b51bcda7e3abea4797fb4faad135ddcdc55ce260927a81ac64bb25"
+    },
+    {
+      "id": "zlib",
+      "kind": "port",
+      "port": "zlib",
+      "archive": "madler-zlib-v1.3.2.tar.gz",
+      "member": "zlib-1.3.2/LICENSE",
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    },
+    {
+      "id": "libpng",
+      "kind": "port",
+      "port": "libpng",
+      "archive": "pnggroup-libpng-v1.6.58.tar.gz",
+      "member": "libpng-1.6.58/LICENSE",
+      "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+    },
+    {
+      "id": "freetype",
+      "kind": "port",
+      "port": "freetype",
+      "archive": "freetype-freetype-VER-2-14-3.tar.gz",
+      "member": "freetype-VER-2-14-3/LICENSE.TXT",
+      "sha256": "bd36c8b474855fa294c2ec5c184544478ef3720aad37d65a6296a4f264fd2d3b"
+    },
+    {
+      "id": "freetype-ftl",
+      "kind": "port",
+      "port": "freetype",
+      "archive": "freetype-freetype-VER-2-14-3.tar.gz",
+      "member": "freetype-VER-2-14-3/docs/FTL.TXT",
+      "sha256": "5a5ee54c5001bbad1cdc1a57cc3dd4c42199b2da09d39c7ee41fab002d02967f"
+    },
+    {
+      "id": "freetype-bdf",
+      "kind": "port",
+      "port": "freetype",
+      "archive": "freetype-freetype-VER-2-14-3.tar.gz",
+      "member": "freetype-VER-2-14-3/src/bdf/README",
+      "start": "License",
+      "end": "Credits",
+      "sha256": "d97ce69c9dff1f885ad6341b58bdfeecf241337597f78ecc9544776b8f1d7416"
+    },
+    {
+      "id": "freetype-pcf",
+      "kind": "port",
+      "port": "freetype",
+      "archive": "freetype-freetype-VER-2-14-3.tar.gz",
+      "member": "freetype-VER-2-14-3/src/pcf/README",
+      "start": "License",
+      "end": "Credits",
+      "sha256": "acb4adde9db25f992623adb83a3c95db21fb157aae02a19b56aad9194fe8cc64"
+    },
+    {
+      "id": "brotli",
+      "kind": "port",
+      "port": "brotli",
+      "archive": "google-brotli-v1.2.0.tar.gz",
+      "member": "brotli-1.2.0/LICENSE",
+      "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+    },
+    {
+      "id": "bzip2",
+      "kind": "port",
+      "port": "bzip2",
+      "archive": "bzip2-1.0.8.tar.gz",
+      "member": "bzip2-1.0.8/LICENSE",
+      "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3"
+    },
+    {
+      "id": "expat",
+      "kind": "port",
+      "port": "expat",
+      "archive": "libexpat-libexpat-R_2_8_2.tar.gz",
+      "member": "libexpat-R_2_8_2/expat/COPYING",
+      "sha256": "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87"
+    },
+    {
+      "id": "libogg",
+      "kind": "port",
+      "port": "libogg",
+      "archive": "xiph-ogg-v1.3.6.tar.gz",
+      "member": "ogg-1.3.6/COPYING",
+      "sha256": "d2ab5758336489da61c12cc5bb757da5339c4ae9001f9bb0562b4370249af814"
+    },
+    {
+      "id": "libvorbis",
+      "kind": "port",
+      "port": "libvorbis",
+      "archive": "xiph-vorbis-v1.3.7.tar.gz",
+      "member": "vorbis-1.3.7/COPYING",
+      "sha256": "ec1815db59fcd302846df949d7424876cb2e2dc5ed1606c5fb0b36787b1cf43a"
+    },
+    {
+      "id": "opus",
+      "kind": "port",
+      "port": "opus",
+      "archive": "xiph-opus-v1.5.2.tar.gz",
+      "member": "opus-1.5.2/COPYING",
+      "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+    },
+    {
+      "id": "speex",
+      "kind": "port",
+      "port": "speex",
+      "archive": "xiph-speex-5dceaaf3e23ee7fd17c80cb5f02a838fd6c18e01.tar.gz",
+      "member": "speex-5dceaaf3e23ee7fd17c80cb5f02a838fd6c18e01/COPYING",
+      "sha256": "2654a4264b2bfe298dedc508748d140111840c315cc8eb646a3a68c13fa75b01"
+    },
+    {
+      "id": "physx",
+      "kind": "port",
+      "port": "physx",
+      "overlay": true,
+      "archive": "NVIDIAGameWorks-PhysX-93c6dd21b545605185f2febc8eeacebe49a99479.tar.gz",
+      "member": "PhysX-93c6dd21b545605185f2febc8eeacebe49a99479/LICENSE.md",
+      "sha256": "cee409d941f502a1c5ab0a7ecb90b141a57f822129b225bd00b79add4f963fff"
+    },
+    {
+      "id": "asio",
+      "kind": "port",
+      "port": "asio",
+      "archive": "chriskohlhoff-asio-asio-1-32-0.tar.gz",
+      "member": "asio-asio-1-32-0/asio/LICENSE_1_0.txt",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "id": "string-theory",
+      "kind": "port",
+      "port": "string-theory",
+      "archive": "zrax-string_theory-3.9.tar.gz",
+      "member": "string_theory-3.9/LICENSE",
+      "sha256": "68646a10436dcc0323eea429638be914023556bf8bdf76c5565cd6fb039be144"
+    },
+    {
+      "id": "tl-expected",
+      "kind": "port",
+      "port": "tl-expected",
+      "archive": "TartanLlama-expected-v1.3.1.tar.gz",
+      "member": "expected-1.3.1/COPYING",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+    },
+    {
+      "id": "libvpx",
+      "kind": "lock",
+      "record": "libvpx",
+      "member": "libvpx-1.15.2/LICENSE",
+      "sha256": "aa56ba9024f01edde9bfa5f5364644e6dd305874c3da8b73b92eb8af05539861"
+    },
+    {
+      "id": "libvpx-patents",
+      "kind": "lock",
+      "record": "libvpx",
+      "member": "libvpx-1.15.2/PATENTS",
+      "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+    },
+    {
+      "id": "libwebm",
+      "kind": "lock",
+      "record": "libwebm",
+      "member": "libwebm-libwebm-1.0.0.32/LICENSE.TXT",
+      "sha256": "e293d1dddc9785200b1f58a4f5293543cf8566d9e0b8a3c02fad955035b19f42"
+    },
+    {
+      "id": "libwebm-patents",
+      "kind": "lock",
+      "record": "libwebm",
+      "member": "libwebm-libwebm-1.0.0.32/PATENTS.TXT",
+      "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+    },
+    {
+      "id": "cpython3",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/LICENSE",
+      "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+    },
+    {
+      "id": "cpython3-mt",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/Doc/license.rst",
+      "start": "Mersenne Twister",
+      "end": "Sockets",
+      "sha256": "56f6444da8ffc5a7403e934e85c5458b28b8281a8dbcb30c8f033efc28aab264"
+    },
+    {
+      "id": "cpython3-siphash",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/Doc/license.rst",
+      "start": "SipHash24",
+      "end": "strtod and dtoa",
+      "sha256": "f0a5a3b6400f8c73ab033ebff8abdd4415429f17207955a9744756949c11dd3d"
+    },
+    {
+      "id": "cpython3-dtoa",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/Doc/license.rst",
+      "start": "strtod and dtoa",
+      "end": "OpenSSL",
+      "sha256": "67b560eeb6711cf6431080091951c9fb1ed49608d7c59226e6c55266e79f5168"
+    },
+    {
+      "id": "cpython3-cfuhash",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/Doc/license.rst",
+      "start": "cfuhash",
+      "end": "libmpdec",
+      "sha256": "8aaa94145b2ad55fceb0eb9cc1eb42fde5465ca80e0c5fb4f5927d7571b9daa3"
+    },
+    {
+      "id": "cpython3-audioop",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/Doc/license.rst",
+      "start": "Audioop",
+      "end": "asyncio",
+      "sha256": "1cadd6c0eb034c6eaf0d2e8f06aec6fc9546b16d395902d7adf8a3f642d0f15e"
+    },
+    {
+      "id": "libmpdec",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/Doc/license.rst",
+      "start": "libmpdec",
+      "end": "W3C C14N test suite",
+      "sha256": "e59cc21ee1f03744ecd930d930886aa36a0d51f6a3735d297416fb99cf6af16a"
+    },
+    {
+      "id": "hacl",
+      "kind": "lock",
+      "record": "python-3.12.9",
+      "member": "Python-3.12.9/Modules/_hacl/Hacl_Hash_SHA2.c",
+      "start": "/* MIT License",
+      "last": " */",
+      "sha256": "998ce04fb8ad9dedb0bc1b44938f8c3dcf1089780fa105ce1c8c30fb5554d78c"
+    },
+    {
+      "id": "cpython2",
+      "kind": "tree",
+      "record": "cypython-2.3.3",
+      "member": "LICENSE",
+      "repo_copy": "web/build/python2/LICENSE-PSF.txt",
+      "sha256": "9b02e3dfe433ccd2bd94636ef6eb08638b5a54deafe5f87a3d9d9104356c48e0"
+    },
+    {
+      "id": "cpython2-pcre",
+      "kind": "tree",
+      "record": "cypython-2.3.3",
+      "member": "Modules/pypcre.c",
+      "start": "           Copyright (c) 1997 University of Cambridge",
+      "end": "*/",
+      "sha256": "038ba200263ec92ba52c230f873fda9e819ea08d475ab07cc9e1f4edb492bb35"
+    },
+    {
+      "id": "cpython2-mt",
+      "kind": "tree",
+      "record": "cypython-2.3.3",
+      "member": "Modules/_randommodule.c",
+      "start": "   A C-program for MT19937, with initialization improved 2002/1/26.",
+      "end": "*/",
+      "sha256": "5b1ff271605db1e75eca1dfc516f8dc9aa6bef4ac3499a734802384e1d93f592"
+    },
+    {
+      "id": "emscripten",
+      "kind": "lock",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "member": "install/emscripten/LICENSE",
+      "sha256": "51aea7641f81d560eb039bc97ce35e2517e2656fe8731eb49ce6a18498eb22fe"
+    },
+    {
+      "id": "musl",
+      "kind": "lock",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "member": "install/emscripten/system/lib/libc/musl/COPYRIGHT",
+      "sha256": "b870108ec5e7790e9f9919064f1b9421d62d5f9b0e6c230c6adf7ea2da62e97b"
+    },
+    {
+      "id": "llvm-libcxx",
+      "kind": "lock",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "member": "install/emscripten/system/lib/libcxx/LICENSE.TXT",
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "id": "llvm-libcxxabi",
+      "kind": "lock",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "member": "install/emscripten/system/lib/libcxxabi/LICENSE.TXT",
+      "embed": false,
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+    },
+    {
+      "id": "llvm-libunwind",
+      "kind": "lock",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "member": "install/emscripten/system/lib/libunwind/LICENSE.TXT",
+      "embed": false,
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d"
+    },
+    {
+      "id": "llvm-compiler-rt",
+      "kind": "lock",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "member": "install/emscripten/system/lib/compiler-rt/LICENSE.TXT",
+      "embed": false,
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d"
+    },
+    {
+      "id": "dlmalloc",
+      "kind": "lock",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "member": "install/emscripten/system/lib/dlmalloc.c",
+      "start": " This is a version (aka dlmalloc) of malloc/free/realloc written by",
+      "last": " * Version 2.8.6 Wed Aug 29 06:57:58 2012  Doug Lea",
+      "sha256": "fa55964a19876d180f28f852b6fbd7564d469735234238227ed1fc06ae5e16b0"
+    },
+    {
+      "id": "emdawnwebgpu",
+      "kind": "emport",
+      "port": "emdawnwebgpu",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "portfile": "install/emscripten/tools/ports/emdawnwebgpu.py",
+      "archive": "emdawnwebgpu_pkg-v20260423.175430.zip",
+      "member": "emdawnwebgpu_pkg/webgpu/src/LICENSE",
+      "sha256": "2f79bf3699b0870251255b381670237f73f21a04a38c094f791eba39c5fd1df7"
+    },
+    {
+      "id": "webgpu-headers",
+      "kind": "emport",
+      "port": "emdawnwebgpu",
+      "record": "emsdk-6.0.12-linux-x86_64",
+      "portfile": "install/emscripten/tools/ports/emdawnwebgpu.py",
+      "archive": "emdawnwebgpu_pkg-v20260423.175430.zip",
+      "member": "emdawnwebgpu_pkg/webgpu/include/webgpu/webgpu.h",
+      "start": "// BSD 3-Clause License",
+      "last": "// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.",
+      "sha256": "5bc2e68091dc38b0005796276f7f733fc24c97b1fc530462e7e836218532ddd2"
+    },
+    {
+      "id": "vcpkg",
+      "kind": "registry",
+      "member": "LICENSE.txt",
+      "sha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460"
+    },
+    {
+      "id": "font-liberation",
+      "kind": "repo",
+      "path": "web/deploy/fonts/LICENSE-LiberationFonts.txt",
+      "archive_sha256": "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0",
+      "member": "liberation-fonts-ttf-2.1.5/LICENSE",
+      "archive": "liberation-fonts-ttf-2.1.5.tar.gz",
+      "sha256": "f45cc618951fffe1470140692086f7ca8a46ba81fe147cf8416bd63fb4849c61"
+    },
+    {
+      "id": "font-dejavu",
+      "kind": "repo",
+      "path": "web/deploy/fonts/LICENSE-DejaVuFonts.txt",
+      "archive_sha256": "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7",
+      "member": "dejavu-fonts-ttf-2.37/LICENSE",
+      "archive": "dejavu-fonts-ttf-2.37.tar.bz2",
+      "sha256": "7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93"
+    }
+  ]
+}
