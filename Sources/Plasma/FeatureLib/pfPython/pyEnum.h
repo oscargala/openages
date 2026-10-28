@@ -50,6 +50,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plPythonConvert.h"
 #include "pyObjectRef.h"
 
+#if PLASMA_PYTHON_ABI >= 3
 // Helper functions used by the enum glue
 class pyEnum
 {
@@ -128,6 +129,51 @@ public:
         }
     }
 };
+
+#else
+#include <map>
+#include <string>
+
+// CPython 2.3 has no `enum` module (3.4). The py2 flavour builds Cyan's own enum types instead
+// (pyEnum2.cpp, ported from CWE pyEnum.cpp): PtFoo is a PlasmaConstants.Enum whose attributes
+// are PlasmaConstants.EnumValue objects named "PtFoo.kBar" that compare, hash and convert as
+// their int value. CWE built each enum from a std::map<std::string, int> (PYTHON_ENUM_START and
+// PYTHON_ENUM_END in CWE pyGlueHelpers.h), so the values are kept as int, as there.
+class pyEnum
+{
+public:
+    class EnumValue
+    {
+        const char* fName;
+        int         fValue;
+
+    public:
+        EnumValue() = delete;
+
+        template <size_t _Sz, typename _ValueT>
+        EnumValue(const char (&name)[_Sz], _ValueT&& value)
+            : fName(name), fValue((int)static_cast<std::underlying_type_t<std::decay_t<_ValueT>>>(value))
+        {
+            static_assert(std::is_enum_v<std::decay_t<_ValueT>>, "EnumValue can only be used with enumerations");
+        }
+
+        const char* Name() const { return fName; }
+        int         Value() const { return fValue; }
+    };
+
+    template <size_t _Sz, typename... Args>
+    static void MakeEnum(PyObject* m, const char (&name)[_Sz], Args&&... args)
+    {
+        std::map<std::string, int> values;
+        ((values[args.Name()] = args.Value()), ...);
+        MakeEnumFromMap(m, name, values);
+    }
+
+    // CWE's enum construction and type registration (pyEnum2.cpp, from CWE pyEnum.cpp)
+    static void MakeEnumFromMap(PyObject* m, const char* name, const std::map<std::string, int>& values);
+    static void AddPlasmaConstantsClasses(PyObject* m);
+};
+#endif // PLASMA_PYTHON_ABI >= 3
 
 /////////////////////////////////////////////////////////////////////
 // Enum glue (these should all be inside a function)

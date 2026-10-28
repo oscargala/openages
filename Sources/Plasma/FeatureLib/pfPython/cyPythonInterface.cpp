@@ -51,7 +51,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <string_theory/string>
 #include <string_theory/string_stream>
 
-#include <Python.h>
+#include "pyPy2Compat.h"
+#if PLASMA_PYTHON_ABI < 3
+#include "pyCWEOverlay2.h"
+#endif
 #include <marshal.h>
 #include "pyGeometry3.h"
 #include "pyKey.h"
@@ -59,8 +62,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "pyObjectRef.h"
 
 // CPython specific init stuff
+#if PLASMA_PYTHON_ABI >= 3
 #include <cpython/initconfig.h>
 #include <pylifecycle.h>
+#endif
 
 #include "plPythonCallable.h"
 #include "cyPythonInterface.h"
@@ -109,6 +114,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "pyGUISkin.h"
 
 #include "plPythonSDLModifier.h"
+#ifdef PLASMA_TEST_HOOKS
+#include <cstdio>
+#include "plPythonInitHooks.h"
+#endif
 
 // For printing to the log
 #include "plNetClientComm/plNetClientComm.h"
@@ -854,6 +863,7 @@ static void IInitBuiltinModule(const char* modName, const char* docstring, plSta
     }
 }
 
+#if PLASMA_PYTHON_ABI >= 3
 template<typename _ConfigT, PyStatus(*_FuncT)(const _ConfigT*), void(*_ClearT)(_ConfigT*) = nullptr>
 static bool ICheckedInit(_ConfigT& config, plStatusLog* dbgLog, const char* errmsg)
 {
@@ -875,6 +885,7 @@ static bool ICheckedInit(_ConfigT& config, plStatusLog* dbgLog, const char* errm
     }
     return true;
 }
+#endif // PLASMA_PYTHON_ABI >= 3
 
 void PythonInterface::initPython()
 {
@@ -891,6 +902,7 @@ void PythonInterface::initPython()
 
     FirstTimeInit = false;
 
+#if PLASMA_PYTHON_ABI >= 3
     // In Python 2, we could rely on a single PEP 302 hook class installed into sys.path_hooks to
     // handle importing modules from python.pak -- this could be initialized after Python. In Python 3,
     // however, the initialization process imports the encodings module and dies if it is not available.
@@ -918,6 +930,12 @@ void PythonInterface::initPython()
     PyWideStringList_Append(&config.module_search_paths, L"./python/system");
     PyWideStringList_Append(&config.module_search_paths, L"./python/system/lib-dynload");
     config.module_search_paths_set = 1;
+#elif defined(PLASMA_TEST_HOOKS)
+    // A harness build with local game code (plPythonInitHooks::LocalGameCode): pin the module search path empty, so
+    // every stdlib module that is neither frozen nor built in comes from the pak hook (cyPythonModule451.cpp) and
+    // never from a compiled-in prefix.
+    if (plPythonInitHooks* hooks = plPythonInitHooks::Get(); hooks && hooks->LocalGameCode())
+        config.module_search_paths_set = 1;
 #endif
 
     if (!ICheckedInit<PyConfig, Py_InitializeFromConfig, PyConfig_Clear>(config, dbgLog, "Core init failed!"))
@@ -935,6 +953,34 @@ void PythonInterface::initPython()
     if (!ICheckedInit<PyConfig, Py_InitializeFromConfig, PyConfig_Clear>(config, dbgLog, "Main init failed!"))
         return;
 
+#if defined(PLASMA_EXTERNAL_RELEASE) && defined(PLASMA_TEST_HOOKS)
+    // With a harness build's local game code, report the search-path entries (expected 0).
+    if (plPythonInitHooks* hooks = plPythonInitHooks::Get(); hooks && hooks->LocalGameCode()) {
+        PyObject* sysPath = PySys_GetObject("path"); // borrowed
+        std::fprintf(stderr, "local game code: python sys.path entries = %lld\n",
+                     (long long)(sysPath && PyList_Check(sysPath) ? PyList_Size(sysPath) : -1));
+    }
+#endif
+
+#else
+    // CPython 2.3.3, the py2 flavour (Docs/Web/Python 2.3 flavour.md). Cyan's client (CWE
+    // cyPythonInterface.cpp, PythonInterface::initPython) calls Py_SetProgramName("plasma") and
+    // Py_Initialize(), whose `import site` its patched find_module served from python.pak (CWE
+    // Cypython-2.3.3 Python/import_pack.c, find_module). Stock 2.3 has no pak import, so `site`
+    // waits until the pak finder (cyPythonModule302.cpp, PEP 302 sys.meta_path) is installed: no
+    // site at init, then the six builtin modules (CWE's Py_InitModule calls), then the finder,
+    // then `import site` from the pak.
+    Py_NoSiteFlag = 1;
+    Py_SetProgramName(const_cast<char*>("plasma"));
+    Py_Initialize();
+    if (!Py_IsInitialized()) {
+        dbgLog->AddLineF(plStatusLog::kRed, "Python {} init failed!", PY_VERSION);
+        return;
+    }
+
+    builtInModuleName = PyString_InternFromString(const_cast<char*>("__builtins__"));
+#endif // PLASMA_PYTHON_ABI >= 3
+
     // Initialize built-in Plasma modules. For some reason, when using the append-inittab thingy,
     // we get complaints about these modules being leaked :(
     // Note: If you add a new built-in module,
@@ -947,8 +993,43 @@ void PythonInterface::initPython()
     IInitBuiltinModule("PlasmaNetConstants", "Plasma 2.0 Net Constants", dbgLog, AddPlasmaNetConstantsClasses);
     IInitBuiltinModule("PlasmaVaultConstants", "Plasma 2.0 Vault Constants", dbgLog, AddPlasmaVaultConstantsClasses);
 
-    // Woo, we now have a functional Python 3 interpreter...
+#if PLASMA_PYTHON_ABI < 3
+    // CWE's names, argument orders and result types on top of H-uru's glue
+    // (pyCWEOverlay2.cpp), complete before any script runs, as CWE's tables were.
+    plPy2CWE::InstallOverlay(dbgLog);
+
+    initPyPackHook();
+
+    // `site` from the pak, which Cyan's Py_Initialize imported (Py_NoSiteFlag unset there).
+    {
+        pyObjectRef site = PyImport_ImportModule("site");
+        if (!site) {
+            dbgLog->AddLine(plStatusLog::kRed, "Python: import site failed:");
+            PyErr_Print();
+        }
+    }
+
+    // sys.path as Cyan's client leaves it after init (CWE PythonInterface::initPython): set
+    // after `site` ran, to the three loose-script folders. An external client never imports a
+    // top-level module from them (the pak answers first), and the browser has none of them.
+    {
+        pyObjectRef pathList = Py_BuildValue("[sss]", ".\\python", ".\\python\\plasma", ".\\python\\system");
+        if (!pathList || PySys_SetObject("path", pathList.Get()) != 0) {
+            dbgLog->AddLine(plStatusLog::kRed, "Error while setting python path:");
+            PyErr_Print();
+        }
+    }
+#endif // PLASMA_PYTHON_ABI < 3
+
+    // Woo, we now have a functional Python interpreter...
     dbgLog->AddLineF("Python {} interpreter is now alive!", PY_VERSION);
+
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build's instruments that must run before any game script do so here
+    // (plPythonInitHooks.h).
+    if (plPythonInitHooks* hooks = plPythonInitHooks::Get())
+        hooks->BeforeScripts(dbgLog);
+#endif
 
 #if defined(HAVE_CYPYTHONIDE) && !defined(PLASMA_EXTERNAL_RELEASE)
     if (usePythonDebugger)
@@ -997,7 +1078,14 @@ void PythonInterface::initPython()
         dbgLog->AddLine(plStatusLog::kRed, "Could not create python redirector, Python error output will not appear in the log");
     }
 
+#if PLASMA_PYTHON_ABI >= 3
     PyConfig_Clear(&config);
+#endif
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build's Python instruments run here (plPythonInitHooks.h).
+    if (plPythonInitHooks* hooks = plPythonInitHooks::Get())
+        hooks->AfterInit();
+#endif
     initialized++;
 }
 
@@ -1176,6 +1264,10 @@ void PythonInterface::AddPlasmaClasses(PyObject* plasmaMod)
 //
 void PythonInterface::AddPlasmaConstantsClasses(PyObject* plasmaConstantsMod)
 {
+#if PLASMA_PYTHON_ABI < 3
+    // The EnumValue and Enum types first, as CWE PythonInterface::AddPlasmaConstantsClasses
+    pyEnum::AddPlasmaConstantsClasses(plasmaConstantsMod);
+#endif
     cyAvatar::AddPlasmaConstantsClasses(plasmaConstantsMod);
     cyMisc::AddPlasmaConstantsClasses(plasmaConstantsMod);
     cyAccountManagement::AddPlasmaConstantsClasses(plasmaConstantsMod);
@@ -1273,8 +1365,12 @@ void PythonInterface::finiPython()
         Py_CLEAR(builtInModuleName);
 
         // let Python clean up after itself
+#if PLASMA_PYTHON_ABI >= 3
         if (Py_FinalizeEx() != 0)
             dbgLog->AddLine("Hmm... Errors during Python shutdown.");
+#else
+        Py_Finalize();
+#endif
 
         // close done the log file, if we created one
         if (dbgLog != nullptr)
@@ -1467,7 +1563,11 @@ PyObject* PythonInterface::CreateModule(const char* module)
     if (PyDict_GetItem(d, builtInModuleName) == nullptr)
     {
         // if we need the builtins then find the builtin module
+#if PLASMA_PYTHON_ABI >= 3
         PyObject *bimod = PyImport_ImportModule("builtins");
+#else
+        PyObject* bimod = PyImport_ImportModule("__builtin__"); // as CWE PythonInterface::CreateModule
+#endif
         // then add the builtin dicitionary to our module's dictionary
         if (bimod == nullptr || PyDict_SetItem(d, builtInModuleName, bimod) != 0) {
             getOutputAndReset();
@@ -1481,6 +1581,10 @@ PyObject* PythonInterface::CreateModule(const char* module)
 void PythonInterface::ClearModule(PyObject* m)
 {
     hsAssert(PyModule_Check(m), "PythonInterface::ClearModule() called on a non-module object");
+#if PLASMA_PYTHON_ABI < 3
+    // 2.3 still has the function (CWE PythonInterface::CreateModule calls it)
+    _PyModule_Clear(m);
+#else
     PyObject* dict = PyModule_GetDict(m);
 
     // This is basically a reimplementation of the _PyModule_ClearDict function. It's been
@@ -1513,6 +1617,7 @@ void PythonInterface::ClearModule(PyObject* m)
         if (PyDict_SetItem(dict, key, Py_None) != 0)
             PyErr_Print();
     }
+#endif // PLASMA_PYTHON_ABI < 3
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -1613,7 +1718,11 @@ bool PythonInterface::DumpObject(PyObject* pyobj, char** pickle, int32_t* size)
 {
     PyObject *s;        // the python string object where the marsalled object wil go
     // convert object to a marshalled string python object
+#if PLASMA_PYTHON_ABI >= 3
     s = PyMarshal_WriteObjectToString(pyobj, Py_MARSHAL_VERSION);
+#else
+    s = PyMarshal_WriteObjectToString(pyobj); // 2.3: one argument (CWE PythonInterface::DumpObject)
+#endif
 
     // did it actually do it?
     if (s != nullptr)

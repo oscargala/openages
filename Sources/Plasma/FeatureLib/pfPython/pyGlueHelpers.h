@@ -44,7 +44,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "pyGlueDefinitions.h"
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 
 namespace ST { class string; }
 
@@ -54,7 +54,12 @@ int PyUnicode_STStringConverter(PyObject* obj, void* str);
 int PyUnicode_PlFileNameDecoder(PyObject* obj, void* str);
 
 PyObject* PyUnicode_FromSTString(const ST::string& str);
+#if PLASMA_PYTHON_ABI >= 3
 #define PyUnicode_FromSTString(x) PyUnicode_FromStringAndSize((x).c_str(), (x).size())
+#else
+// a cp1252 `str`, as CWE's PyString_FromString (pyPy2Compat.h)
+#define PyUnicode_FromSTString(x) PyPlasma_StrFromUtf8((x).c_str(), (Py_ssize_t)(x).size())
+#endif
 
 // A set of macros to take at least some of the tediousness out of creating straight python glue code
 
@@ -174,6 +179,15 @@ int pythonClassName##___init__(pythonClassName *self, PyObject *args, PyObject *
 #   define PYTHON_TP_VECTORCALL_PRINT
 #endif
 
+// tp_version_tag (2.6) and tp_finalize (3.4) end the type object after tp_del; CPython 2.3's
+// PyTypeObject ends at tp_del (PLASMA_DEFAULT_TYPE in CWE pyGlueHelpers.h).
+// Its fifth slot is tp_print and its tenth tp_compare, both nullptr here as the 3.x slots.
+#if PLASMA_PYTHON_ABI >= 3
+#   define PYTHON_TP_VERSION_TAG_FINALIZE 0, nullptr,
+#else
+#   define PYTHON_TP_VERSION_TAG_FINALIZE
+#endif
+
 // most glue classes can get away with this default structure
 #define PLASMA_DEFAULT_TYPE(pythonClassName, docString) \
 PYTHON_TYPE_START(pythonClassName) \
@@ -222,8 +236,7 @@ PYTHON_TYPE_START(pythonClassName) \
     nullptr,                            /* tp_subclasses */ \
     nullptr,                            /* tp_weaklist */ \
     nullptr,                            /* tp_del */ \
-    0,                                  /* tp_version_tag */ \
-    nullptr,                            /* tp_finalize */ \
+    PYTHON_TP_VERSION_TAG_FINALIZE      /* tp_version_tag, tp_finalize */ \
     PYTHON_TP_VECTORCALL_PRINT \
 PYTHON_TYPE_END
 
@@ -305,8 +318,7 @@ PYTHON_TYPE_END
     nullptr,                            /* tp_subclasses */ \
     nullptr,                            /* tp_weaklist */ \
     nullptr,                            /* tp_del */ \
-    0,                                  /* tp_version_tag */ \
-    nullptr,                            /* tp_finalize */ \
+    PYTHON_TP_VERSION_TAG_FINALIZE      /* tp_version_tag, tp_finalize */ \
     PYTHON_TP_VECTORCALL_PRINT \
 PYTHON_TYPE_END
 
@@ -358,8 +370,7 @@ PYTHON_TYPE_START(pythonClassName) \
     nullptr,                            /* tp_subclasses */ \
     nullptr,                            /* tp_weaklist */ \
     nullptr,                            /* tp_del */ \
-    0,                                  /* tp_version_tag */ \
-    nullptr,                            /* tp_finalize */ \
+    PYTHON_TP_VERSION_TAG_FINALIZE      /* tp_version_tag, tp_finalize */ \
     PYTHON_TP_VECTORCALL_PRINT \
 PYTHON_TYPE_END
 
@@ -392,23 +403,28 @@ PyModule_AddObject(m, #pythonClassName, (PyObject*)&pythonClassName##_type)
 // Python method macros
 /////////////////////////////////////////////////////////////////////
 
+// CPython calls a METH_NOARGS function through a PyCFunction, as meth(self, nullptr)
+// (Objects/methodobject.c cfunction_vectorcall_NOARGS), so each one takes that unused second
+// parameter. Calling a one-parameter function through the two-parameter type is undefined
+// behaviour, and WebAssembly's call_indirect traps on it ("function signature mismatch").
+
 // Handles the three types of methods python uses
 #define PYTHON_METHOD_DEFINITION(pythonClassName, methodName, argsVar) \
     static PyObject *pythonClassName##_##methodName(pythonClassName *self, PyObject *argsVar)
 #define PYTHON_METHOD_DEFINITION_NOARGS(pythonClassName, methodName) \
-    static PyObject *pythonClassName##_##methodName(pythonClassName *self)
+    static PyObject *pythonClassName##_##methodName(pythonClassName *self, PyObject*)
 #define PYTHON_METHOD_DEFINITION_STATIC(pythonClassName, methodName, argsVar) \
     static PyObject *pythonClassName##_##methodName(PyObject*, PyObject *argsVar)
 #define PYTHON_METHOD_DEFINITION_STATIC_WKEY(pythonClassName, methodName, argsVar, keywordsVar) \
     static PyObject *pythonClassName##_##methodName(PyObject*, PyObject *argsVar, PyObject *keywordsVar)
 #define PYTHON_METHOD_DEFINITION_STATIC_NOARGS(pythonClassName, methodName) \
-    static PyObject *pythonClassName##_##methodName(pythonClassName *self)
+    static PyObject *pythonClassName##_##methodName(pythonClassName *self, PyObject*)
 #define PYTHON_METHOD_DEFINITION_WKEY(pythonClassName, methodName, argsVar, keywordsVar) \
     static PyObject *pythonClassName##_##methodName(pythonClassName *self, PyObject *argsVar, PyObject *keywordsVar)
 
 // A very basic function, just calls the class method and returns None
 #define PYTHON_BASIC_METHOD_DEFINITION(pythonClassName, methodName, classMethodName) \
-static PyObject *pythonClassName##_##methodName(pythonClassName *self) \
+static PyObject *pythonClassName##_##methodName(pythonClassName *self, PyObject*) \
 { \
     self->fThis->classMethodName(); \
     PYTHON_RETURN_NONE; \
@@ -417,12 +433,20 @@ static PyObject *pythonClassName##_##methodName(pythonClassName *self) \
 // Different basic return types
 #define PYTHON_RETURN_ERROR { return nullptr; }
 #define PYTHON_RETURN_NONE Py_RETURN_NONE
+#if PLASMA_PYTHON_ABI >= 3
 #define PYTHON_RETURN_BOOL(testValue)                     \
 {                                                         \
     PyObject* retVal = (testValue) ? Py_True : Py_False;  \
     Py_INCREF(retVal);                                    \
     return retVal;                                        \
 }                                                         //
+#else
+// CWE returned every bool as the int 0 or 1 (PYTHON_RETURN_BOOL in CWE pyGlueHelpers.h)
+#define PYTHON_RETURN_BOOL(testValue)                     \
+{                                                         \
+    return PyInt_FromLong((testValue) ? 1L : 0L);         \
+}                                                         //
+#endif
 #define PYTHON_RETURN_NOT_IMPLEMENTED Py_RETURN_NOTIMPLEMENTED
 
 // method table start
@@ -545,9 +569,9 @@ static PyObject *methodName(PyObject *self, PyObject *argsVar) /* and now for th
 
 // Global method with no arguments
 #define PYTHON_GLOBAL_METHOD_DEFINITION_NOARGS(methodName, docString) \
-static PyObject *methodName(PyObject*); /* forward declaration so struct can go here */ \
+static PyObject *methodName(PyObject*, PyObject*); /* forward declaration so struct can go here */ \
 static PyMethodDef methodName##_method = {#methodName, (PyCFunction)methodName, METH_NOARGS, docString}; \
-static PyObject *methodName(PyObject *self) /* and now for the actual function */
+static PyObject *methodName(PyObject *self, PyObject*) /* and now for the actual function */
 
 // Global method with keywords
 #define PYTHON_GLOBAL_METHOD_DEFINITION_WKEY(methodName, argsVar, keywordsVar, docString) \
@@ -557,9 +581,9 @@ static PyObject *methodName(PyObject *self, PyObject *argsVar, PyObject *keyword
 
 // Basic global method
 #define PYTHON_BASIC_GLOBAL_METHOD_DEFINITION(methodName, classMethodName, docString) \
-static PyObject *methodName(PyObject*); /* forward declaration so struct can go here */ \
+static PyObject *methodName(PyObject*, PyObject*); /* forward declaration so struct can go here */ \
 static PyMethodDef methodName##_method = {#methodName, (PyCFunction)methodName, METH_NOARGS, docString}; \
-static PyObject *methodName(PyObject *self) /* and now for the actual function */ \
+static PyObject *methodName(PyObject *self, PyObject*) /* and now for the actual function */ \
 { \
     classMethodName(); \
     PYTHON_RETURN_NONE; \

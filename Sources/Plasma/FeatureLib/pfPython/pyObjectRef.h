@@ -43,7 +43,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #ifndef _pyObjectRef_h_
 #define _pyObjectRef_h_
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 #include "HeadSpin.h"
 
 struct pyObjectNewRef_Type{};

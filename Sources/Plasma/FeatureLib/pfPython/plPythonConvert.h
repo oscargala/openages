@@ -59,9 +59,15 @@ namespace plPython
 
     inline PyObject* ConvertFrom(bool value)
     {
+#if PLASMA_PYTHON_ABI >= 3
         PyObject* result = value ? Py_True : Py_False;
         Py_INCREF(result);
         return result;
+#else
+        // CWE passed and returned bools as the int 0 or 1 (Py_BuildValue "l", and
+        // PYTHON_RETURN_BOOL in CWE pyGlueHelpers.h)
+        return PyInt_FromLong(value ? 1L : 0L);
+#endif
     }
 
     inline PyObject* ConvertFrom(double value)
@@ -114,6 +120,7 @@ namespace plPython
         return PyUnicode_FromSTString(value);
     }
 
+#if PLASMA_PYTHON_ABI >= 3
     inline PyObject* ConvertFrom(unsigned char value)
     {
         return PyLong_FromUnsignedLong(value);
@@ -133,6 +140,34 @@ namespace plPython
     {
         return PyLong_FromUnsignedLong(value);
     }
+#else
+    // Script handlers and callbacks get their numbers as Python `int`, which is how CWE built
+    // them: Py_BuildValue/PyObject_CallMethod with "l" or "i" from the C value (CWE
+    // plPythonFileMod::MsgReceive: OnTimer "l", OnGUINotify "lOl", OnPageLoad "ls", OnKIMsg "lO",
+    // OnCCRMsg "lsl", OnVaultNotify "lO", OnRTChat "Osl", OnSDLNotify "ssls", OnLOSNotify
+    // "llOOf", OnBehaviorNotify "lOl", OnAccountUpdate "iii"; pyVaultNode.cpp's operation
+    // callbacks, VaultOperationStarted "l" and VaultOperationComplete "lOi"; pyAlarm.cpp's
+    // alarm Fire "l"). "l" casts to a C long, so a value above LONG_MAX wraps as it did there.
+    inline PyObject* ConvertFrom(unsigned char value)
+    {
+        return PyInt_FromLong((long)value);
+    }
+
+    inline PyObject* ConvertFrom(unsigned short value)
+    {
+        return PyInt_FromLong((long)value);
+    }
+
+    inline PyObject* ConvertFrom(unsigned int value)
+    {
+        return PyInt_FromLong((long)value);
+    }
+
+    inline PyObject* ConvertFrom(unsigned long value)
+    {
+        return PyInt_FromLong((long)value);
+    }
+#endif
 
     inline PyObject* ConvertFrom(unsigned long long value)
     {
@@ -141,7 +176,13 @@ namespace plPython
 
     inline PyObject* ConvertFrom(wchar_t value)
     {
+#if PLASMA_PYTHON_ABI >= 3
         return PyUnicode_FromFormat("%c", (int)value);
+#else
+        // a one-character cp1252 `str`
+        static_assert(sizeof(wchar_t) == sizeof(char32_t), "a wchar_t is read as one UTF-32 code unit");
+        return PyUnicode_FromSTString(ST::string::from_utf32(reinterpret_cast<const char32_t*>(&value), 1));
+#endif
     }
 
     inline PyObject* ConvertFrom(std::nullptr_t)

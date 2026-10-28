@@ -40,7 +40,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 #include <marshal.h>
 #include <ctime>
 #include <string_theory/format>

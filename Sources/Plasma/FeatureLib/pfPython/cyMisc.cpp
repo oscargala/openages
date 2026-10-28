@@ -42,7 +42,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "cyMisc.h"
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 #include <utility>
 #include <vector>
 

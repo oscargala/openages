@@ -42,7 +42,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "pyGameCli.h"
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 
 #include "pfGameMgr/pfGameCli.h"
 

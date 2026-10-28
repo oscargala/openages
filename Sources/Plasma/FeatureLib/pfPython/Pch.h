@@ -60,7 +60,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <string_theory/format>
 
 // Python Library Includes
-#include <Python.h>
+#include "pyPy2Compat.h"
 #include <marshal.h>
 #include <structmember.h>
 

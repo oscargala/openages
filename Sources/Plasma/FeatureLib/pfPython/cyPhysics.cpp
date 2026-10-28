@@ -42,7 +42,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "cyPhysics.h"
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 #include <string_theory/format>
 
 #include "plgDispatch.h"

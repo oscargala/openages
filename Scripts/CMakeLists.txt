@@ -29,6 +29,9 @@ install(
 )
 
 
+# The CPython 3 standard library is installed for the default ABI only: the py2
+# flavour (PLASMA_PYTHON_ABI=2, Emscripten) does not look for CPython 3 (root CMakeLists.txt).
+if(NOT PLASMA_PYTHON_ABI STREQUAL "2")
 if(${CMAKE_VERSION} VERSION_GREATER_EQUAL 4.0 AND CMAKE_CROSSCOMPILING)
     file(TO_CMAKE_PATH "${Python3_LIBRARY_DIRS}" Scripts_SYSTEM_LIBRARY_DIRS)
     list(GET Scripts_SYSTEM_LIBRARY_DIRS 0 Scripts_SYSTEM_PATH_PREFIX)
@@ -81,3 +84,4 @@ install(
     PATTERN "socket.py" EXCLUDE
     PATTERN "socketserver.py" EXCLUDE
 )
+endif()

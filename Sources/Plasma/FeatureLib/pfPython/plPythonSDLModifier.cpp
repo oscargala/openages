@@ -374,8 +374,15 @@ bool plPythonSDLModifier::IPythonVarIdxToSDL(plSimpleStateVariable* var, int var
 
     case plVarDescriptor::kString32:
         if (PyUnicode_Check(pyVar)) {
+#if PLASMA_PYTHON_ABI >= 3
             const char* v = PyUnicode_AsUTF8(pyVar);
             var->Set(v, varIdx);
+#else
+            // A cp1252 `str` or a `unicode` (pyPy2Compat.h), held as the engine's UTF-8, which
+            // ISDLVarIdxToPython gives back as the same `str`. CWE stored a `str`'s bytes as they
+            // were and set nothing for a `unicode` (CWE plPythonSDLModifier::IPythonVarIdxToSDL).
+            var->Set(PyUnicode_AsSTString(pyVar).c_str(), varIdx);
+#endif
             if (!hintstring.empty())
                 var->GetNotificationInfo().SetHintString(hintstring);
         }
@@ -464,7 +471,13 @@ PyObject* plPythonSDLModifier::ISDLVarIdxToPython(plSimpleStateVariable* var, in
         {
             bool v;
             var->Get(&v, idx);
+#if PLASMA_PYTHON_ABI >= 3
             return PyBool_FromLong(v ? 1: 0);
+#else
+            // a Python `long` 0L or 1L, as CWE plPythonSDLModifier::ISDLVarIdxToPython
+            // (PyLong_FromLong; the py2 PyLong_FromLong macro would make an int)
+            return PyPlasma_LongObject_FromLong(v ? 1 : 0);
+#endif
         }
 
     case plVarDescriptor::kString32:

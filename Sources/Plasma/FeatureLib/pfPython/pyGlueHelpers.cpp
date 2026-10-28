@@ -46,6 +46,8 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "pyGlueHelpers.h"
 
+// The CPython 2.3 versions (cp1252 `str` and `unicode`) are in pyPy2Compat.cpp.
+#if PLASMA_PYTHON_ABI >= 3
 ST::string PyUnicode_AsSTString(PyObject* obj)
 {
     if (PyUnicode_Check(obj)) {
@@ -82,3 +84,4 @@ int PyUnicode_PlFileNameDecoder(PyObject* obj, void* fn)
     }
     return 0;
 }
+#endif // PLASMA_PYTHON_ABI >= 3

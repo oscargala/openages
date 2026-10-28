@@ -47,7 +47,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 //
 //////////////////////////////////////////////////////////////////////////
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 
 #include "HeadSpin.h"
 #include "plgDispatch.h"
@@ -134,9 +134,13 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "pyGameScoreMsg.h"
 
+#include "plPythonHandlerArgs.h"
 #include "plPythonSDLModifier.h"
 
 #include "plMessage/plTimerCallbackMsg.h"
+#if PLASMA_PYTHON_ABI < 3
+#include "pyGameMgr2.h" // CWE's OnGameCliMsg/OnGameMgrMsg (py2 flavour)
+#endif
 
 plProfile_CreateTimer("Update", "Python", PythonUpdate);
 
@@ -921,6 +925,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
         // Cache the whether or not this is a local notification for calls to PtWasLocallyNotified()
         fLocalNotify = !pNtfyMsg->HasBCastFlag(plMessage::kNetNonLocal);
 
+        // One builder for both flavours; where CWE's types differ, plPythonHandlerArgs.h decides
         PyObject* levents = PyTuple_New(pNtfyMsg->GetEventCount());
         for (size_t i = 0; i < pNtfyMsg->GetEventCount(); i++) {
             proEventData* pED = pNtfyMsg->GetEventRecord(i);
@@ -930,7 +935,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proCollisionEventData* eventData = (proCollisionEventData*)pED;
 
                         PyObject* event = PyTuple_New(4);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kCollision));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kCollision));
                         PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fEnter ? 1 : 0));
                         PyTuple_SET_ITEM(event, 2, pySceneObject::New(eventData->fHitter, fSelfKey));
                         PyTuple_SET_ITEM(event, 3, pySceneObject::New(eventData->fHittee, fSelfKey));
@@ -943,7 +948,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proSpawnedEventData* eventData = (proSpawnedEventData*)pED;
 
                         PyObject* event = PyTuple_New(3);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kSpawned));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kSpawned));
                         PyTuple_SET_ITEM(event, 1, pySceneObject::New(eventData->fSpawner, fSelfKey));
                         PyTuple_SET_ITEM(event, 2, pySceneObject::New(eventData->fSpawnee, fSelfKey));
                         PyTuple_SET_ITEM(levents, i, event);
@@ -954,7 +959,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                     {
                         proPickedEventData* eventData = (proPickedEventData*)pED;
                         PyObject* event = PyTuple_New(6);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kPicked));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kPicked));
                         PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fEnabled ? 1 : 0));
                         PyTuple_SET_ITEM(event, 2, pySceneObject::New(eventData->fPicker, fSelfKey));
                         PyTuple_SET_ITEM(event, 3, pySceneObject::New(eventData->fPicked, fSelfKey));
@@ -980,8 +985,8 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proControlKeyEventData* eventData = (proControlKeyEventData*)pED;
 
                         PyObject* event = PyTuple_New(3);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kControlKey));
-                        PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fControlKey));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kControlKey));
+                        PyTuple_SET_ITEM(event, 1, plPython::LongFrom(eventData->fControlKey));
                         PyTuple_SET_ITEM(event, 2, PyLong_FromLong(eventData->fDown ? 1 : 0));
                         PyTuple_SET_ITEM(levents, i, event);
                     }
@@ -992,9 +997,9 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proVariableEventData* eventData = (proVariableEventData*)pED;
                         // create event list
                         PyObject* event = PyTuple_New(4);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kVariable));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kVariable));
                         PyTuple_SET_ITEM(event, 1, PyUnicode_FromSTString(eventData->fName));
-                        PyTuple_SET_ITEM(event, 2, PyLong_FromLong(eventData->fDataType));
+                        PyTuple_SET_ITEM(event, 2, plPython::LongFrom(eventData->fDataType));
 
                         // depending on the data type create the data
                         switch ( eventData->fDataType ) {
@@ -1020,7 +1025,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                     {
                         proFacingEventData* eventData = (proFacingEventData*)pED;
                         PyObject* event = PyTuple_New(5);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kFacing));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kFacing));
                         PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->enabled ? 1 : 0));
                         PyTuple_SET_ITEM(event, 2, pySceneObject::New(eventData->fFacer, fSelfKey));
                         PyTuple_SET_ITEM(event, 3, pySceneObject::New(eventData->fFacee, fSelfKey));
@@ -1034,7 +1039,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proContainedEventData* eventData = (proContainedEventData*)pED;
 
                         PyObject* event = PyTuple_New(4);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kContained));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kContained));
                         PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fEntering ? 1 : 0));
                         PyTuple_SET_ITEM(event, 2, pySceneObject::New(eventData->fContained, fSelfKey));
                         PyTuple_SET_ITEM(event, 3, pySceneObject::New(eventData->fContainer, fSelfKey));
@@ -1047,7 +1052,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proActivateEventData* eventData = (proActivateEventData*)pED;
 
                         PyObject* event = PyTuple_New(3);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kActivate));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kActivate));
                         PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fActive ? 1 : 0));
                         PyTuple_SET_ITEM(event, 2, PyLong_FromLong(eventData->fActivate ? 1 : 0));
                         PyTuple_SET_ITEM(levents, i, event);
@@ -1059,8 +1064,8 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proCallbackEventData* eventData = (proCallbackEventData*)pED;
 
                         PyObject* event = PyTuple_New(2);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kCallback));
-                        PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fEventType));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kCallback));
+                        PyTuple_SET_ITEM(event, 1, plPython::LongFrom(eventData->fEventType));
                         PyTuple_SET_ITEM(levents, i, event);
                     }
                     break;
@@ -1070,8 +1075,8 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proResponderStateEventData* eventData = (proResponderStateEventData*)pED;
 
                         PyObject* event = PyTuple_New(2);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kResponderState));
-                        PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fState));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kResponderState));
+                        PyTuple_SET_ITEM(event, 1, plPython::LongFrom(eventData->fState));
                         PyTuple_SET_ITEM(levents, i, event);
                     }
                     break;
@@ -1081,9 +1086,9 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proMultiStageEventData* eventData = (proMultiStageEventData*)pED;
 
                         PyObject* event = PyTuple_New(4);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kMultiStage));
-                        PyTuple_SET_ITEM(event, 1, PyLong_FromLong(eventData->fStage));
-                        PyTuple_SET_ITEM(event, 2, PyLong_FromLong(eventData->fEvent));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kMultiStage));
+                        PyTuple_SET_ITEM(event, 1, plPython::LongFrom(eventData->fStage));
+                        PyTuple_SET_ITEM(event, 2, plPython::LongFrom(eventData->fEvent));
                         PyTuple_SET_ITEM(event, 3, pySceneObject::New(eventData->fAvatar, fSelfKey));
                         PyTuple_SET_ITEM(levents, i, event);
                     }
@@ -1093,7 +1098,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proOfferLinkingBookEventData* eventData = (proOfferLinkingBookEventData*)pED;
 
                         PyObject* event = PyTuple_New(4);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kOfferLinkingBook));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kOfferLinkingBook));
                         PyTuple_SET_ITEM(event, 1, pySceneObject::New(eventData->offerer, fSelfKey));
                         PyTuple_SET_ITEM(event, 2, PyLong_FromLong(eventData->targetAge));
                         PyTuple_SET_ITEM(event, 3, PyLong_FromLong(eventData->offeree));
@@ -1105,7 +1110,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                         proBookEventData* eventData = (proBookEventData*)pED;
 
                         PyObject* event = PyTuple_New(3);
-                        PyTuple_SET_ITEM(event, 0, PyLong_FromLong((long)proEventData::kBook));
+                        PyTuple_SET_ITEM(event, 0, plPython::LongFrom((long)proEventData::kBook));
                         PyTuple_SET_ITEM(event, 1, PyLong_FromUnsignedLong(eventData->fEvent));
                         PyTuple_SET_ITEM(event, 2, PyLong_FromUnsignedLong(eventData->fLinkID));
                         PyTuple_SET_ITEM(levents, i, event);
@@ -1113,6 +1118,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                     break;
             }
         }
+        levents = plPython::NotifyEvents(levents);
 
         // Need to determine which of the Activators sent this plNotifyMsg
         // and set the ID appropriately
@@ -1219,32 +1225,33 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
     auto pkimsg = IScriptWantsMsg<pfKIMsg>(kfunc_OnKIMsg, msg);
     if (pkimsg && pkimsg->GetCommand() != pfKIMsg::kHACKChatMsg) {
         pyObjectRef value;
+        // One builder for both flavours; where CWE's types differ, plPythonHandlerArgs.h decides
         switch (pkimsg->GetCommand()) {
             case pfKIMsg::kSetChatFadeDelay:
                 value = PyFloat_FromDouble(pkimsg->GetDelay());
                 break;
             case pfKIMsg::kSetTextChatAdminMode:
-                value = PyLong_FromLong(pkimsg->GetFlags()&pfKIMsg::kAdminMsg ? 1 : 0 );
+                value = plPython::LongFrom(pkimsg->GetFlags() & pfKIMsg::kAdminMsg ? 1 : 0);
                 break;
             case pfKIMsg::kYesNoDialog:
                 value = PyTuple_New(2);
-                PyTuple_SET_ITEM(value.Get(), 0, PyUnicode_FromSTString(pkimsg->GetString()));
+                PyTuple_SET_ITEM(value.Get(), 0, plPython::UnicodeFrom(pkimsg->GetString()));
                 PyTuple_SET_ITEM(value.Get(), 1, pyKey::New(pkimsg->GetSender()));
                 break;
             case pfKIMsg::kGZInRange:
                 value = PyTuple_New(2);
-                PyTuple_SET_ITEM(value.Get(), 0, PyLong_FromLong(pkimsg->GetIntValue()));
+                PyTuple_SET_ITEM(value.Get(), 0, plPython::LongFrom(pkimsg->GetIntValue()));
                 PyTuple_SET_ITEM(value.Get(), 1, pyKey::New(pkimsg->GetSender()));
                 break;
             case pfKIMsg::kRateIt:
                 value = PyTuple_New(3);
                 PyTuple_SET_ITEM(value.Get(), 0, PyUnicode_FromSTString(pkimsg->GetUser()));
-                PyTuple_SET_ITEM(value.Get(), 1, PyUnicode_FromSTString(pkimsg->GetString()));
-                PyTuple_SET_ITEM(value.Get(), 2, PyLong_FromLong(pkimsg->GetIntValue()));
+                PyTuple_SET_ITEM(value.Get(), 1, plPython::UnicodeFrom(pkimsg->GetString()));
+                PyTuple_SET_ITEM(value.Get(), 2, plPython::LongFrom(pkimsg->GetIntValue()));
                 break;
             case pfKIMsg::kRegisterImager:
                 value = PyTuple_New(2);
-                PyTuple_SET_ITEM(value.Get(), 0, PyUnicode_FromSTString(pkimsg->GetString()));
+                PyTuple_SET_ITEM(value.Get(), 0, plPython::UnicodeFrom(pkimsg->GetString()));
                 PyTuple_SET_ITEM(value.Get(), 1, pyKey::New(pkimsg->GetSender()));
                 break;
             case pfKIMsg::kAddPlayerDevice:
@@ -1254,7 +1261,7 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                     if (str.empty())
                         value.SetPyNone();
                     else
-                        value = PyUnicode_FromSTString(str);
+                        value = plPython::UnicodeFrom(str);
                 }
                 break;
             case pfKIMsg::kKIChatStatusMsg:
@@ -1264,13 +1271,13 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
             case pfKIMsg::kKIOKDialogNoQuit:
             case pfKIMsg::kGZFlashUpdate:
             case pfKIMsg::kKICreateMarkerNode:
-                value = PyUnicode_FromSTString(pkimsg->GetString());
+                value = plPython::UnicodeFrom(pkimsg->GetString());
                 break;
             case pfKIMsg::kMGStartCGZGame:
             case pfKIMsg::kMGStopCGZGame:
             case pfKIMsg::kFriendInviteSent:
             default:
-                value = PyLong_FromLong(pkimsg->GetIntValue());
+                value = plPython::LongFrom(pkimsg->GetIntValue());
                 break;
         }
 
@@ -1343,6 +1350,12 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
                     break;
             }
 
+#if PLASMA_PYTHON_ABI < 3
+            // an empty tuple when the node or name is missing, as CWE plPythonFileMod::MsgReceive's
+            // plVaultNotifyMsg branch (PyTuple_New(0) before the switch)
+            if (!ptuple)
+                ptuple = PyTuple_New(0);
+#endif
             ICallScriptMethod(kfunc_OnVaultNotify, vaultNotifyMsg->GetType(), std::move(ptuple));
         }
         return true;
@@ -1520,7 +1533,13 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
 
     auto pPubAgeMsg = IScriptWantsMsg<plNetCommPublicAgeListMsg>(kfunc_gotPublicAgeList, msg);
     if (pPubAgeMsg) {
+#if PLASMA_PYTHON_ABI < 3
+        // a list of tuples, as CWE plPythonFileMod::MsgReceive's plNetCommPublicAgeListMsg branch
+        // (PyList_New)
+        PyObject* pyEL = PyList_New(pPubAgeMsg->ages.size());
+#else
         PyObject* pyEL = PyTuple_New(pPubAgeMsg->ages.size());
+#endif
         for (size_t i = 0; i < pPubAgeMsg->ages.size(); ++i) {
             plAgeInfoStruct ageInfo;
             ageInfo.CopyFrom(pPubAgeMsg->ages[i]);
@@ -1531,7 +1550,11 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
             PyTuple_SET_ITEM(t, 0, pyAgeInfoStruct::New(&ageInfo));
             PyTuple_SET_ITEM(t, 1, PyLong_FromUnsignedLong(nPlayers));
             PyTuple_SET_ITEM(t, 2, PyLong_FromUnsignedLong(nOwners));
+#if PLASMA_PYTHON_ABI < 3
+            PyList_SET_ITEM(pyEL, i, t);
+#else
             PyTuple_SET_ITEM(pyEL, i, t);
+#endif
         }
 
         ICallScriptMethod(kfunc_gotPublicAgeList, pyEL);
@@ -1603,6 +1626,26 @@ bool plPythonFileMod::MsgReceive(plMessage* msg)
         ICallScriptMethod(kfunc_OnSubtitleMsg, pSubMsg->GetText(), pSubMsg->GetSpeaker());
         return true;
     }
+
+#if PLASMA_PYTHON_ABI < 3
+    // The game manager's messages, to a script that defines the handler, as a ptGameMgrMsg or
+    // ptGameCliMsg (CWE plPythonFileMod::MsgReceive's OnGameMgrMsg and OnGameCliMsg branches;
+    // pyGameMsg2.cpp). The handler is looked up as CheckInstanceForFunctions does.
+    if (const char* gameHandler = plPy2CWE::GameMsgHandlerName(msg)) {
+        pyObjectRef callable = fInstance ? PyObject_GetAttrString(fInstance, gameHandler) : nullptr;
+        if (callable && PyCallable_Check(callable.Get())) {
+            pyObjectRef pythonMsg = plPy2CWE::GameMsgNew(msg);
+            pyObjectRef retVal;
+            if (pythonMsg)
+                retVal = plPython::CallObject(callable.Get(), std::move(pythonMsg));
+            if (!retVal)
+                ReportError();
+            DisplayPythonOutput();
+            return true;
+        }
+        PyErr_Clear();
+    }
+#endif
 
     return plModifier::MsgReceive(msg);
 }

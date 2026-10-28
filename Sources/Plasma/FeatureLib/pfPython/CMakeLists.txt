@@ -86,6 +86,20 @@ set(pfPython_SOURCES
     pyWaveSet.cpp
 )
 
+# The pak import hook and the Python 2.3 layer by ABI: CPython 3 keeps the PEP 451
+# finder and exactly the H-uru source list (so its unity batches are unchanged); the py2 flavour
+# (PLASMA_PYTHON_ABI=2) builds the PEP 302 finder, the C-API compat layer and CWE's enum types.
+if(PLASMA_PYTHON_ABI STREQUAL "2")
+    list(REMOVE_ITEM pfPython_SOURCES cyPythonModule451.cpp)
+    list(APPEND pfPython_SOURCES cyPythonModule302.cpp pyEnum2.cpp pyPy2Compat.cpp pyPy2Text.cpp)
+    # The CWE surface overlay (pyCWEOverlay2.h)
+    list(APPEND pfPython_SOURCES pyCWEOverlay2.cpp)
+    # CWE's synchronous ptScoreMgr and ptGameScore (pyScoreMgr2.h)
+    list(APPEND pfPython_SOURCES pyScoreMgr2.cpp)
+    # CWE's GameMgr game clients, messages and functions (pyGameMgr2.h)
+    list(APPEND pfPython_SOURCES pyGameCli2.cpp pyGameMgrWire2.cpp pyGameMsg2.cpp)
+endif()
+
 set(pfPython_HEADERS
     cyAccountManagement.h
     cyAnimation.h
@@ -101,6 +115,8 @@ set(pfPython_HEADERS
     plPythonConvert.h
     pfPythonCreatable.h
     plPythonFileMod.h
+    plPythonHandlerArgs.h
+    plPythonInitHooks.h
     plPythonPack.h
     plPythonParameter.h
     plPythonSDLModifier.h
@@ -155,6 +171,7 @@ set(pfPython_HEADERS
     pyNotify.h
     pyObjectRef.h
     pyPlayer.h
+    pyPy2Compat.h
     pySceneObject.h
     pySDL.h
     pySpawnPointInfo.h
@@ -179,6 +196,19 @@ set(pfPython_HEADERS
     pyVaultTextNoteNode.h
     pyWaveSet.h
 )
+
+# The headers of the py2 flavour's sources above.
+if(PLASMA_PYTHON_ABI STREQUAL "2")
+    list(APPEND pfPython_HEADERS
+        pfPython2Creatable.h
+        pyCWEOverlay2.h
+        pyGameGlue2.h
+        pyGameMgr2.h
+        pyGameMgrWire2.h
+        pyPy2Text.h
+        pyScoreMgr2.h
+    )
+endif()
 
 set(pfPython_GLUE
     cyAccountManagementGlue.cpp
@@ -319,10 +349,22 @@ target_link_libraries(
         pfJournalBook
         pfLocalizationMgr
         pfMessage
-        Python3::Python
+        ${PLASMA_PYTHON_TARGET}
     INTERFACE
         pnFactory
 )
+
+if(PLASMA_PYTHON_ABI STREQUAL "2")
+    # pyScoreMgr2.cpp calls the auth score transactions and pumps the net client
+    target_link_libraries(pfPython PRIVATE pnNetProtocol plNetGameLib)
+endif()
+
+if(EMSCRIPTEN AND PLASMA_PYTHON_ABI STREQUAL "3")
+    # The static libpython3.12.a (wasm) needs its builtin modules' helper archives
+    # (libmpdec, HACL SHA2, bz2, expat, zlib), set by cmake/emscripten/Toolchain.cmake.
+    # libpython2.3.a (ABI 2) is self-contained.
+    target_link_libraries(pfPython PRIVATE ${PLASMA_WASM_PYTHON_LINK_LIBS})
+endif()
 
 source_group("Source Files" FILES ${pfPython_SOURCES})
 source_group("Header Files" FILES ${pfPython_HEADERS})

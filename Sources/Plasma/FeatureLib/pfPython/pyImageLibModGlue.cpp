@@ -41,7 +41,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 *==LICENSE==*/
 
 
-#include <Python.h>
+#include "pyPy2Compat.h"
 #include "pyKey.h"
 
 #include "pyImageLibMod.h"
