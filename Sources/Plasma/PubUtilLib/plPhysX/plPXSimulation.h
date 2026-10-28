@@ -159,6 +159,13 @@ public:
     /** Initializes the PhysX simulation. */
     bool Init();
 
+#ifdef PLASMA_TEST_HOOKS
+    // Harness builds only: the test harness's physics accumulator pin is the only caller. Advance reads and writes
+    // fAccumulator; nothing else in the engine does.
+    float GetAccumulator() const { return fAccumulator; }
+    void  SetAccumulator(float accumulator) { fAccumulator = accumulator; }
+#endif
+
 public:
     /**
      * Sets the default endpoint for the PhysX Visual Debugger.

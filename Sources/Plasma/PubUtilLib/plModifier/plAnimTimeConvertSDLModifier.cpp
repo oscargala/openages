@@ -43,6 +43,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plAnimTimeConvertSDLModifier.h"
 #include "plSDL/plSDL.h"
 #include "plInterp/plAnimTimeConvert.h"
+#ifdef PLASMA_TEST_HOOKS
+#include "plSDLTimeCodec.h"
+#endif
 
 // static vars
 char plAnimTimeConvertSDLModifier::AnimTimeConvertVarNames::kStrFlags[]="flags";
@@ -53,6 +56,27 @@ char plAnimTimeConvertSDLModifier::AnimTimeConvertVarNames::kStrSpeed[]="speed";
 char plAnimTimeConvertSDLModifier::AnimTimeConvertVarNames::kStrCurrentEaseCurve[]="currentEaseCurve";
 char plAnimTimeConvertSDLModifier::AnimTimeConvertVarNames::kStrCurrentEaseBeginWorldTime[]="currentEaseBeginWorldTime";
 char plAnimTimeConvertSDLModifier::AnimTimeConvertVarNames::kStrLastStateChange[]="lastStateChange";
+
+// An ATC record's TIME variables, converted as plSimpleStateVariable's Get and Set of a double convert them (the game
+// clock through plClientUnifiedTime's offset), unless a harness build's SDL time codec takes them (plSDLTimeCodec.h).
+// Without PLASMA_TEST_HOOKS these are those two calls.
+static void IGetTime(const plSimpleStateVariable* var, double* game)
+{
+#ifdef PLASMA_TEST_HOOKS
+    if (plSDLTimeCodec* codec = plSDLTimeCodec::Get(); codec && codec->GetTime(var, game))
+        return;
+#endif
+    var->Get(game);
+}
+
+static void IPutTime(plSimpleStateVariable* var, double game)
+{
+#ifdef PLASMA_TEST_HOOKS
+    if (plSDLTimeCodec* codec = plSDLTimeCodec::Get(); codec && codec->PutTime(var, game))
+        return;
+#endif
+    var->Set(game);
+}
 
 //
 // Copy atcs from current state into sdl
@@ -65,13 +89,13 @@ void plAnimTimeConvertSDLModifier::IPutATC(plStateDataRecord* atcStateDataRec, p
     atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrLoopEnd)->Set(animTimeConvert->fLoopEnd);     
     atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrLoopBegin)->Set(animTimeConvert->fLoopBegin);     
     atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrSpeed)->Set(animTimeConvert->fSpeed);     
-    atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrLastStateChange)->Set(lastState->fStartWorldTime);    
+    IPutTime(atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrLastStateChange), lastState->fStartWorldTime);
     
     int curEaseCurve = animTimeConvert->GetCurrentEaseCurve();
     atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrCurrentEaseCurve)->Set(curEaseCurve);     
 
-    atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrCurrentEaseBeginWorldTime)->Set(curEaseCurve ?
-        animTimeConvert->fCurrentEaseCurve->fBeginWorldTime : 0);       
+    IPutTime(atcStateDataRec->FindVar(AnimTimeConvertVarNames::kStrCurrentEaseBeginWorldTime),
+             curEaseCurve ? animTimeConvert->fCurrentEaseCurve->fBeginWorldTime : 0);
 }
 
 //
@@ -112,7 +136,7 @@ void plAnimTimeConvertSDLModifier::ISetCurrentATC(const plStateDataRecord* atcSt
                 vars[j]->Get(&objAtc->fSpeed);
             else
             if (vars[j]->IsNamed(AnimTimeConvertVarNames::kStrLastStateChange))
-                vars[j]->Get(&lastStateChange);
+                IGetTime(vars[j], &lastStateChange);
             else
             if (vars[j]->IsNamed(AnimTimeConvertVarNames::kStrCurrentEaseCurve))
             {
@@ -130,13 +154,17 @@ void plAnimTimeConvertSDLModifier::ISetCurrentATC(const plStateDataRecord* atcSt
             }
             else
             if (vars[j]->IsNamed(AnimTimeConvertVarNames::kStrCurrentEaseBeginWorldTime) && objAtc->fCurrentEaseCurve)
-                vars[j]->Get(&objAtc->fCurrentEaseCurve->fBeginWorldTime);
+                IGetTime(vars[j], &objAtc->fCurrentEaseCurve->fBeginWorldTime);
         }
         objAtc->IClearAllStates();      
         objAtc->IProcessStateChange(lastStateChange, lastStateAnimTime);
         objAtc->fCurrentAnimTime = lastStateAnimTime;
         objAtc->fLastEvalWorldTime = lastStateChange;
         objAtc->SetFlag(plAnimTimeConvert::kForcedMove, true);
+#ifdef PLASMA_TEST_HOOKS
+        if (plSDLTimeCodec* codec = plSDLTimeCodec::Get())
+            codec->OnApply(this, atcStateDataRec, objAtc, objAtc->fCurrentEaseCurve, lastStateAnimTime, lastStateChange);
+#endif
     }
 }
 

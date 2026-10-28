@@ -40,6 +40,7 @@ set(plModifier_HEADERS
     plResponderModifier.h
     plResponderSDLModifier.h
     plSDLModifier.h
+    plSDLTimeCodec.h
     plSimpleModifier.h
     plSoundSDLModifier.h
     plSpawnModifier.h

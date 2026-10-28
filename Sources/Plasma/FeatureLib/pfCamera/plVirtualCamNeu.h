@@ -152,6 +152,13 @@ public:
     hsVector3 GetCameraUp() const { return fOutputUp; }
     void    SetCutNextTrans(); // used when player warps into a new camera region
     void    SetCutNext();
+#ifdef PLASMA_TEST_HOOKS
+    // Harness builds only: the test harness's camera pin holds the output the game reads (GetCameraPos/POA/Up)
+    // and the static FOV at a fixed pose every frame, and Output() applies them again before its own pipeline
+    // write.
+    void        PinOutput(const hsPoint3& pos, const hsPoint3& poa, const hsVector3& up);
+    static void PinFOV(float w, float h);
+#endif
 
     const hsMatrix44 GetCurrentMatrix() { return fMatrix; }
     static plVirtualCam1* Instance() { return fInstance; }
@@ -234,6 +241,13 @@ private:
     double              fUnPanEndTime;
     double              fInterpPanLimitTime;
     float               fRetainedFY;
+#ifdef PLASMA_TEST_HOOKS
+    // the pinned output pose (PinOutput)
+    bool      fOutputPinned = false;
+    hsPoint3  fPinnedPos;
+    hsPoint3  fPinnedPOA;
+    hsVector3 fPinnedUp;
+#endif
 
     // built-in cameras
     plCameraModifier1*  fDriveCamera; // for driving around 
@@ -244,6 +258,10 @@ private:
     plCameraModifier1*  fThirdPersonCam; // built in third person cam for ccr's when they jump about
 
     static float fFOVh, fFOVw;
+#ifdef PLASMA_TEST_HOOKS
+    static bool  fFOVPinned; // the pinned static FOV (PinFOV)
+    static float fPinnedFOVw, fPinnedFOVh;
+#endif
     static float fAspectRatio;
     static float fHither, fYon;
     static plVirtualCam1* fInstance;

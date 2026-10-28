@@ -90,6 +90,14 @@ bool NCAgeJoinerMsgReceive (    // returns true of message was processed
 void NCAgeJoinerUpdate (
     plNCAgeJoiner *         joiner
 );
+
+#ifdef PLASMA_TEST_HOOKS
+// Harness builds only: a function every joiner calls with the Age it is about to join, once the file server's update
+// has succeeded and before NetCommLinkToAge, and which may change it. The test harness's age-instance pin sets it;
+// null otherwise.
+void NCAgeJoinerSetLinkTestHook(
+    void (*hook)(NetCommAge& age));
+#endif
     
 
 

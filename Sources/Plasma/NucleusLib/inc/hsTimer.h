@@ -115,6 +115,14 @@ protected:
     bool        IsRealTime() const { return !fRunningFrameTime; }
 
     void        SetFrameTimeInc(float inc) { fFrameTimeInc = inc; }
+#ifdef PLASMA_TEST_HOOKS
+    // Harness builds only: sets the game clock directly. The test harness's fixed-time pin is the only caller.
+    void SetSysSeconds(double secs)
+    {
+        fSysSeconds = secs;
+        fDelSysSeconds = 0.f;
+    }
+#endif
 
     void        SetTimeScale(float s) { fSysTimeScale = s; }
     float       GetTimeScale() const { return fSysTimeScale; }
@@ -167,6 +175,9 @@ public:
     static bool     IsRealTime() { return fTimer->IsRealTime(); }
 
     static void     SetFrameTimeInc(float inc) { fTimer->SetFrameTimeInc(inc); }
+#ifdef PLASMA_TEST_HOOKS
+    static void SetSysSeconds(double secs) { fTimer->SetSysSeconds(secs); }
+#endif
 
     static void     SetTimeScale(float s) { fTimer->SetTimeScale(s); }
     static float    GetTimeScale() { return fTimer->GetTimeScale(); }

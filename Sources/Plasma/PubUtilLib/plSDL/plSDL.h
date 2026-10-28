@@ -285,6 +285,10 @@ protected:
     void IDeAlloc();
     void IInit();   // initize vars
     void IVarSet(bool timeStampNow=false);
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build's SDL time codec reads and writes a TIME variable's raw seconds and microseconds.
+    friend class plTestHooksSDLTimeCodec;
+#endif
     
     // converter fxns
     bool IConvertFromBool(plVarDescriptor::Type newType);

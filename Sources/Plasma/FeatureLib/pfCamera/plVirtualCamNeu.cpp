@@ -86,6 +86,11 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 float plVirtualCam1::fFOVw                    = 45.0f;
 float plVirtualCam1::fFOVh                    = 33.75f;
+#ifdef PLASMA_TEST_HOOKS
+bool  plVirtualCam1::fFOVPinned = false; // PinFOV
+float plVirtualCam1::fPinnedFOVw = 0.0f;
+float plVirtualCam1::fPinnedFOVh = 0.0f;
+#endif
 float plVirtualCam1::fAspectRatio             = 4.f/3.f;
 float plVirtualCam1::fHither                  = 0.3f;
 float plVirtualCam1::fYon                     = 500.0f;
@@ -809,6 +814,20 @@ void plVirtualCam1::Output()
         up = -GetCurrentCamera()->GetTarget()->GetCoordinateInterface()->GetLocalToWorld().GetAxis(hsMatrix44::kView);
     
     fOutputUp = up;
+#ifdef PLASMA_TEST_HOOKS
+    // Harness builds only: a pinned pose replaces the brain's output (and an animated camera's up), so the pipeline
+    // write below and every reader of GetCameraPos/POA/Up see the pinned camera; a pinned static FOV likewise.
+    if (fOutputPinned) {
+        fOutputPos = fPinnedPos;
+        fOutputPOA = fPinnedPOA;
+        up = fPinnedUp;
+        fOutputUp = up;
+    }
+    if (fFOVPinned) {
+        fFOVw = fPinnedFOVw;
+        fFOVh = fPinnedFOVh;
+    }
+#endif
     targetMatrix.MakeCamera(&fOutputPos,&fOutputPOA, &up);
     targetMatrix.GetInverse(&inverse);
     fPipe->SetWorldToCamera( targetMatrix, inverse );
@@ -834,6 +853,31 @@ void plVirtualCam1::SetOutputFOV()
         fprintf(foutLog, "****************************************************************\n");
     }
 }
+#ifdef PLASMA_TEST_HOOKS
+
+// Harness builds only: set by the test harness's camera pin every frame with the pose the pipeline is pinned to.
+void plVirtualCam1::PinOutput(const hsPoint3& pos, const hsPoint3& poa, const hsVector3& up)
+{
+    fOutputPinned = true;
+    fPinnedPos = pos;
+    fPinnedPOA = poa;
+    fPinnedUp = up;
+    fOutputPos = pos;
+    fOutputPOA = poa;
+    fOutputUp = up;
+}
+
+// Direct, unlike SetFOV(w, h): no aspect rescale of w and no kSetFOV, so the static FOV equals the pipeline's pinned
+// FOV (plDynamicCamMap reads it).
+void plVirtualCam1::PinFOV(float w, float h)
+{
+    fFOVPinned = true;
+    fPinnedFOVw = w;
+    fPinnedFOVh = h;
+    fFOVw = w;
+    fFOVh = h;
+}
+#endif
 
 void plVirtualCam1::Init()
 {

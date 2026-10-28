@@ -55,6 +55,11 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plProgressMgr/plProgressMgr.h"
 #include "plResMgr/plResManager.h"
 
+#ifdef PLASMA_TEST_HOOKS
+#include "plResPatcherLocalGameCode.h"
+#include "plResPatcherObserver.h"
+#endif
+
 extern bool gDataServerLocal;
 bool gPythonLocal = false;
 bool gSDLLocal = false;
@@ -79,6 +84,10 @@ void plResPatcher::Shutdown()
 
 void plResPatcher::OnCompletion(ENetError result, const ST::string& status)
 {
+#ifdef PLASMA_TEST_HOOKS
+    if (plResPatcherObserver* observer = plResPatcherObserver::Get())
+        observer->OnPatchComplete(result);
+#endif
     ST::string error;
     if (IS_NET_ERROR(result))
         error = ST::format("Update Failed: {}\n{}", NetErrorAsString(result), status);
@@ -108,13 +117,24 @@ void plResPatcher::OnFileDownloaded(const plFileName& file)
 bool plResPatcher::OnGameCodeDiscovered(const plFileName& file, hsStream* stream)
 {
     auto ss = std::make_unique<plSecureStream>(false, plStreamSource::GetInstance()->GetEncryptionKey());
+#ifdef PLASMA_TEST_HOOKS
+    bool secure = false; // which branch below took the file, for the test seam
+#endif
     if (ss->Open(stream)) {
         plStreamSource::GetInstance()->InsertFile(file, std::move(ss));
 
         // SecureStream will hold a decrypted buffer...
         delete stream;
+#ifdef PLASMA_TEST_HOOKS
+        secure = true;
+#endif
     } else
         plStreamSource::GetInstance()->InsertFile(file, std::unique_ptr<hsStream>(stream));
+
+#ifdef PLASMA_TEST_HOOKS
+    if (plResPatcherObserver* observer = plResPatcherObserver::Get())
+        observer->OnGameCodeInserted(file, secure);
+#endif
 
     return true; // ASSume success for now...
 }
@@ -143,6 +163,20 @@ pfPatcher plResPatcher::CreatePatcher()
     patcher.OnFileDownloaded(std::bind(&plResPatcher::OnFileDownloaded, this, std::placeholders::_1));
     patcher.OnProgressTick(std::bind(&plResPatcher::OnProgressTick, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build's local game code (plResPatcherLocalGameCode.h), under -LocalPython: inserted here through
+    // OnGameCodeDiscovered, synchronously before patcher.Start() and so before SDL and Python init, ahead of the branch
+    // below. Under -LocalSDL too (the full local mode) that branch never runs, and a configured directory means no game
+    // code is requested on any later age load either (every age load calls CreatePatcher, plAgeLoader::UpdateAge).
+    if (!fRequestedGameCode && gPythonLocal)
+        if (plResPatcherLocalGameCode* local = plResPatcherLocalGameCode::Get())
+            if (local->Insert(gSDLLocal, [this](const plFileName& file, hsStream* stream) {
+                OnGameCodeDiscovered(file, stream);
+            }) &&
+                gSDLLocal)
+                fRequestedGameCode = true;
+#endif
+
     // sneaky hax: do the old SecurePreloader thing.... except here
     if (!fRequestedGameCode && (!gPythonLocal || !gSDLLocal)) {
         patcher.OnGameCodeDiscovery(std::bind(&plResPatcher::OnGameCodeDiscovered, this, std::placeholders::_1, std::placeholders::_2));
@@ -152,6 +186,10 @@ pfPatcher plResPatcher::CreatePatcher()
         // So, we *always* ask for the server's SDL unless we really, really, really don't want it.
         patcher.RequestGameCode(!gPythonLocal, !gSDLLocal);
         fRequestedGameCode = true;
+#ifdef PLASMA_TEST_HOOKS
+        if (plResPatcherObserver* observer = plResPatcherObserver::Get())
+            observer->OnGameCodeRequested(); // this patch carries the shard's game code
+#endif
     }
 
     return patcher;

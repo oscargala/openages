@@ -119,6 +119,9 @@ struct plNCAgeJoiner {
 
 plNCAgeJoiner* plNCAgeJoiner::s_instance = nullptr;
 
+#ifdef PLASMA_TEST_HOOKS
+static void (*s_linkTestHook)(NetCommAge& age) = nullptr; // NCAgeJoinerSetLinkTestHook
+#endif
 
 /*****************************************************************************
 *
@@ -358,6 +361,10 @@ bool plNCAgeJoiner::MsgReceive (plMessage * msg) {
         if (resMsg->Success())
         {
             nc->ResetServerTimeOffset();
+#ifdef PLASMA_TEST_HOOKS
+            if (s_linkTestHook) // NCAgeJoinerSetLinkTestHook
+                s_linkTestHook(age);
+#endif
             NetCommLinkToAge(
                 age,
                 this
@@ -526,3 +533,12 @@ void NCAgeJoinerUpdate (
     ASSERT(joiner);
     joiner->Update();
 }
+
+#ifdef PLASMA_TEST_HOOKS
+//============================================================================
+void NCAgeJoinerSetLinkTestHook(
+    void (*hook)(NetCommAge& age))
+{
+    s_linkTestHook = hook;
+}
+#endif

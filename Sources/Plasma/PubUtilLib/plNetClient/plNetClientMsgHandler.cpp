@@ -63,6 +63,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plMessage/plLoadCloneMsg.h"
 #include "plMessage/plMemberUpdateMsg.h"
 #include "plMessage/plNetOwnershipMsg.h"
+#ifdef PLASMA_TEST_HOOKS
+#include "plModifier/plSDLTimeCodec.h"
+#endif
 #include "plNetMessage/plNetMessage.h"
 #include "plNetTransport/plNetTransportMember.h"
 #include "plSDL/plSDL.h"
@@ -249,11 +252,24 @@ MSG_HANDLER_DEFN(plNetClientMsgHandler,plNetMsgSDLState)
             stateRec = new plStateDataRecord(des);
             stateRec->SetFromDefaults(false);
             stateRec->UpdateFrom(*sdRec, rwFlags);
+#ifdef PLASMA_TEST_HOOKS
+            // A harness build's ATC trace reads the record as the wire carries it; arrival is the initial-state count
+            // before it (IncNumInitialSDLStates above) (plSDLTimeCodec.h).
+            if (plSDLTimeCodec* codec = plSDLTimeCodec::Get())
+                codec->OnReceive(descName, m->ObjectInfo()->GetUoid(), true, nc->GetNumInitialSDLStates() - 1,
+                                 sdRec, stateRec);
+#endif
 
             delete sdRec;
         }
         else
             stateRec = sdRec;
+#ifdef PLASMA_TEST_HOOKS
+        if (!m->IsInitialState()) {
+            if (plSDLTimeCodec* codec = plSDLTimeCodec::Get())
+                codec->OnReceive(descName, m->ObjectInfo()->GetUoid(), false, -1, sdRec, stateRec);
+        }
+#endif
 
         plNetClientMgr::PendingLoad* pl = new plNetClientMgr::PendingLoad();
         pl->fSDRec = stateRec;      // will be deleted when PendingLoad is processed

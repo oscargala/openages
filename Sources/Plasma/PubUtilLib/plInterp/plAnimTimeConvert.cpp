@@ -57,6 +57,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "hsResMgr.h"
 #include "plgDispatch.h"
+#ifdef PLASMA_TEST_HOOKS
+#include "plModifier/plSDLTimeCodec.h"
+#endif
 #include "plCreatableIndex.h"
 
 
@@ -451,6 +454,11 @@ float plAnimTimeConvert::WorldToAnimTime(double wSecs)
     
     if (fFlags & kBackwards)
         delSecs = -delSecs;
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build's ATC trace reads the step of an observed evaluation (plSDLTimeCodec.h).
+    if (plSDLTimeCodec* codec = plSDLTimeCodec::Get())
+        codec->OnAnimTimeStep(this, delSecs);
+#endif
     
     secs = fCurrentAnimTime + delSecs;
     // At this point, "secs" is the pre-wrapped (before looping) anim time. 

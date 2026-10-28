@@ -133,6 +133,11 @@ public:
     int     AppendMeshKey(plKey meshKey);
     int     AppendBoneVec(plKeyVector *boneVec);
     uint8_t   GetNumLOD() const;
+#ifdef PLASMA_TEST_HOOKS
+    // Harness builds only: the level of detail the armature draws now (fCurLOD: set by SetLOD, -1 again after
+    // RefreshTree and EnableDrawing). The test harness's render dump (the pipeline observer) is the only caller.
+    int GetCurLOD() const { return fCurLOD; }
+#endif
     
     // A collection of reasons (flags) that things might be disabled. When all flags are gone
     // The object is re-enabled.

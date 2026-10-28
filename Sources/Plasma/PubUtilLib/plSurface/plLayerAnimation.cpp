@@ -61,6 +61,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plMessage/plLinkToAgeMsg.h"
 #include "plModifier/plLayerSDLModifier.h"
 #include "plModifier/plSDLModifier.h"
+#ifdef PLASMA_TEST_HOOKS
+#include "plModifier/plSDLTimeCodec.h"
+#endif
 #include "plNetClient/plLinkEffectsMgr.h"
 #include "plNetClient/plNetClientMgr.h"
 #include "plSDL/plSDL.h"
@@ -347,7 +350,16 @@ uint32_t plLayerAnimation::Eval(double wSecs, uint32_t frame, uint32_t ignore)
     {
         uint32_t evalChans = 0;
         uint32_t passChans = dirty | fPassThruChannels;
+#ifdef PLASMA_TEST_HOOKS
+        // A harness build's ATC trace observes the first evaluation after an SDL apply (plSDLTimeCodec.h).
+        plSDLTimeCodec* codec = plSDLTimeCodec::Get();
+        const bool      traced = codec && codec->BeforeLayerEval(this);
+#endif
         float secs = fTimeConvert.WorldToAnimTime(wSecs);
+#ifdef PLASMA_TEST_HOOKS
+        if (traced)
+            codec->AfterLayerEval(this, wSecs, secs);
+#endif
         if( secs != fCurrentTime )
         {
             evalChans = fOwnedChannels & ~ignore & ~fPassThruChannels;

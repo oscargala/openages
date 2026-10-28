@@ -46,6 +46,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "plSDL/plSDL.h"
 #include "plSurface/plLayerAnimation.h"
+#ifdef PLASMA_TEST_HOOKS
+#include "plSDLTimeCodec.h"
+#endif
 
 // static vars
 char plLayerSDLModifier::kStrAtc[]="atc";
@@ -204,5 +207,10 @@ void plLayerSDLModifier::ISetCurrentStateFrom(const plStateDataRecord* srcState)
     }
 
     layer->fCurrentTime = -1.f; // force an eval
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build's ATC trace follows the layer's next evaluation (plSDLTimeCodec.h).
+    if (plSDLTimeCodec* codec = plSDLTimeCodec::Get())
+        codec->OnLayerApplied(layer);
+#endif
 }
 

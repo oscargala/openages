@@ -8,6 +8,8 @@ set(plAgeLoader_HEADERS
     plAgeLoader.h
     plAgeLoaderCreatable.h
     plResPatcher.h
+    plResPatcherLocalGameCode.h
+    plResPatcherObserver.h
 )
 
 plasma_library(plAgeLoader
