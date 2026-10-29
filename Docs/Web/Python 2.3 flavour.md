@@ -169,7 +169,7 @@ client files in place of the default ones.
 The py2 flavour runs only game code that the shard itself delivers. A release
 deployment may name only `server` or `server-py2`. The modes in which a
 deployment ships game code of its own (`client`, and `client-python`) are
-not part of the product: only the test harness (`testhooks/`) accepts them,
+not part of the product: only the private test harness accepts them,
 for a local test deployment, and every product tool refuses them. Their
 `python.pak` is packed by a tool with a change that is not in this source
 tree, so serving one would mean serving object code whose build tool is not

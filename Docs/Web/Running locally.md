@@ -23,9 +23,8 @@ what a deployment for other players needs on top.
 - **Python 3.13**, with one virtual environment (next section).
 - **A browser** with WebGPU, JavaScript Promise Integration, cross-origin
   isolation and canvas transfer to a worker (`Deploying.md`, "Browser
-  requirements"). The README's status section lists the browsers that were
-  tried. A page from `http://127.0.0.1` counts as a secure page, so loopback
-  needs no certificate.
+  requirements"). `Status.md` lists the browsers that were tried. A page from
+  `http://127.0.0.1` counts as a secure page, so loopback needs no certificate.
 
 ## One Python environment
 

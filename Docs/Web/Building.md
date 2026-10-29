@@ -263,7 +263,7 @@ Other settings:
 | Variable | Meaning |
 |---|---|
 | `BUILD_TYPE` | CMake's build type, default `Release`, the build that ships. `Debug` and `RelWithDebInfo` keep function names and stack traces |
-| `RELEASE=1` | a release build: the client records the commit and tag it is built from, and a successful build writes `<client>.release.json` beside the client, which the deployment tools turn into the deployment's `source.json` (`Deploying.md`, "Source code and licence files"). It refuses a checkout with any change that is not committed, untracked files included |
+| `RELEASE=1` | a release build: the client records the commit and tag it is built from, and a successful build writes `<client>.release.json` beside the client, which the deployment tools turn into the deployment's `source.json` (`Deploying.md`, "Source code and licence files"). It refuses a checkout with any change that is not committed, untracked files included. Its bytes depend on the commit alone, not on where the checkout and the build directory are ("Rebuilding a release" below) |
 | `PLASMA_WASM_CMAKE_ARGS` | more CMake arguments, split at spaces, for example `-DPRODUCT_EMBED_BUILD_TIME=OFF`, which the CI passes |
 | `PLASMA_WASM_PYTHON2` | the CPython 2.3.3 prefix of the py2 flavour; default `<prefix>/python2` |
 | `VCPKG_ROOT` | as for the prefix |
@@ -273,6 +273,49 @@ configured for the other kind (a release build or not). The script also knows
 `HARNESS=1`, a build with test instruments whose sources are not part of this
 repository: in this tree its configure step stops and says so. A build
 without it, the default, is the product build that `Deploying.md` deploys.
+
+### Rebuilding a release
+
+A release's clients are built with `RELEASE=1` and a symbol map, which the
+release keeps beside the clients (a deployment does not serve it). From a
+clone of the release's tag with nothing changed in it, and with `EMSDK` and
+`PLASMA_WASM_DEPS` set as above:
+
+```sh
+export RELEASE=1 PLASMA_WASM_CMAKE_ARGS=-DCMAKE_EXE_LINKER_FLAGS_RELEASE=--emit-symbol-map
+PLASMA_WASM_BUILD=<build dir> web/build/build-client.sh
+PLASMA_PYTHON_ABI=2 PLASMA_WASM_BUILD=<py2 build dir> web/build/build-client.sh
+```
+
+The clients, their symbol maps and their release records come out byte for
+byte the same wherever the checkout and the build directories are. Two
+things used to tie a release to more than its sources, and a release build
+handles both:
+
+- **The paths.** Clang records each source's path, as the compiler is given
+  it, in the module it compiles, and ThinLTO hashes the module into the names
+  it gives the functions it moves between modules (`<name>.llvm.<hash>`). The
+  symbol map keeps those names, and the order of functions that share a name
+  follows them. A release build therefore names each source by a path
+  relative to the build directory: it creates a link to the checkout in the
+  build directory (`CMakeFiles/plasma-source`) and compiles the checkout's
+  sources through it (`cmake/ReleaseSourcePaths.cmake`).
+- **The commit.** The commit and the tag a release reports are compiled into
+  `plProduct.cpp`. A release build compiles that one file without LTO, so
+  the commit does not reach the names ThinLTO gives, and it declares the two
+  strings as arrays of their own (`cmake/hsBuildInfo.inl.cmake`) rather than
+  string literals, which the linker merges into one pool ordered by their
+  text. Two commits that compile the same sources then give clients that
+  differ only in the bytes of the tag (and of the commit, were the client to
+  use it), as long as the two tags have the same length. An untagged commit's
+  tag is its first 12 hex digits. A tag of another length also changes the
+  code that uses its length, and can move the data after it.
+
+The same Emscripten release (`web/build/sources.lock`) and a prefix built
+from the same commit are part of the sources here. A rebuild with another
+Emscripten, or with other vcpkg ports, is a different build and gives other
+bytes. Releases made before this change (v0.1.0) are rebuilt at the paths
+their release notes name.
 
 ## Formatting
 

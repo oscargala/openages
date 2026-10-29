@@ -36,7 +36,7 @@ the game looks and `pfMetalPipeline` for how a modern pipeline is structured.
 | `web/build/` | the dependency and client builds (`build-deps.sh`, `build-client.sh`, `python2/` for CPython 2.3.3), the pins of every download (`sources.lock`), the licence notices (`notices/`) and the build's checks |
 | `web/deploy/` | `plasma_web`: the origin server, the WebSocket gateway, the deployment and static-kit tools; `worker/`, the gateway as a Cloudflare Worker; `fonts/`, the free substitute fonts |
 | `web/tests/` | the tests of `plasma_web`; `run.py` runs them |
-| `Docs/Web/` | the documents: `Building.md`, `Running locally.md`, `Deploying.md`, and the designs, `Architecture.md`, `Python 2.3 flavour.md`, `HD texture pack format.md` |
+| `Docs/Web/` | the documents: the port's status (`Status.md`), `Building.md`, `Running locally.md`, `Deploying.md`, and the designs, `Architecture.md`, `Python 2.3 flavour.md`, `HD texture pack format.md` |
 
 Start with `Docs/Web/Architecture.md`. It describes the components, the page's
 contract with the client (`plasma`) and the test-hook seams. A change to

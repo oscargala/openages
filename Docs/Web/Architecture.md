@@ -56,7 +56,7 @@ end. Its parts:
 | Browser storage | `plEmscriptenStorage.{h,cpp,js}` | none |
 | File system | `plEmscriptenFetchBackend.js`, `plEmscriptenAssetCache.js`, `plEmscriptenAssetCatalog.js`, `plEmscriptenCwd.{h,cpp}`, `plEmscriptenStdio.cpp`, `plEmscriptenPoll.cpp` | the local disk |
 | Input | `plEmscriptenInput.{cpp,js}`, `plEmscriptenKeys.h`, `plEmscriptenFullscreen.{cpp,js}`, and the page's modules in `input/` (`capture.mjs`, `transport.mjs`, `fullscreen.mjs`) | the window's input messages |
-| Audio | `plEmscriptenOpenAL*.js`, `plEmscriptenNativeAudio.js` | OpenAL |
+| Audio | `plEmscriptenOpenAL*.js`, `plEmscriptenNativeAudio.js`, `plEmscriptenAudioActivation.js` | OpenAL |
 | Server settings | `plEmscriptenRuntime.{h,cpp}` | `server.ini` on disk |
 | Page contract | `pre.js` | the command line |
 

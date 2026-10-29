@@ -103,7 +103,7 @@ refused.
 | `root` | a local tree of game files. With `http` it is the game data; with `patcher` it is optional and holds the client package, the files a native installer carries beyond the shard's manifests |
 | `url` | the same tree on another origin (an `https://` URL), instead of serving it next to the page |
 | `urlPrefix` | the path the origin server serves `root` under; default `/data` |
-| `gameCode` | where the game's Python and SDL come from: `server` (the shard's file server, the default), `server-py2` (the same, run by the Python 2.3 build; `patcher` only), `local` (the origin server also serves `root`'s own `python/` and `SDL/`; not with `patcher`). `client` and `client-python` are test modes: the product's tools do not know them, and only the test harness (`testhooks/web/`) accepts them, for a loopback test deployment |
+| `gameCode` | where the game's Python and SDL come from: `server` (the shard's file server, the default), `server-py2` (the same, run by the Python 2.3 build; `patcher` only), `local` (the origin server also serves `root`'s own `python/` and `SDL/`; not with `patcher`). `client` and `client-python` are test modes: the product's tools do not know them, and only the private test harness accepts them, for a loopback test deployment |
 | `gameCodeDir` | only with the test modes (the test harness's key) |
 
 `server-py2` selects the `plClient-py2` build: the page loads it, and the
@@ -494,6 +494,7 @@ The gateway's limits, `gateway.limits`, with their defaults:
 | `idleSeconds` | 120 | a connection with no payload byte in either direction for this long is closed (code 4000); every Plasma connection pings every 30 seconds |
 | `connections` | 64 | open connections of the whole gateway |
 | `memoryBytes` | 1 GiB | `gateway.py` only: each connection reserves about 18 MB of buffers, so the default admits 58 connections |
+| `isolateQueueBytes` | 48 MiB | the Worker only: the browser frames waiting for the shard that all connections in one Worker instance (isolate) may hold together; at least 16 MiB |
 
 A value of 0 for `connectionsPerIp`, `connectsPerMinutePerIp`, `connections` or
 `memoryBytes` refuses every connection; `bytesPerSecond` and `idleSeconds` are
@@ -521,6 +522,10 @@ Other bounds:
   most every 10 seconds in each of its instances.
 - **The Worker** enforces the same limits except `memoryBytes`. It keeps at most
   16 MiB of frames waiting per connection (more closes it with 1008), and at
+  most `isolateQueueBytes` for all the connections that one Worker instance
+  (isolate) relays. When those are full, a frame that does not fit closes the
+  connection that holds the most waiting frames, with the same 1008, so a
+  connection that sends little is not closed by others' traffic. It keeps at
   most 4,096 unexpired spent tokens in each of 64 stores; when one is full, a
   handshake is refused with 503. A connection renews its slots every 30
   seconds, and a slot not renewed for 90 seconds is freed.
@@ -656,7 +661,12 @@ the checkout is at that commit with nothing uncommitted, so that the page files
 are that commit's too, and `source.tag` must name that commit; without a
 release build, no tag is accepted. A deployment that names no repository gets a
 `source.json` that says so: offer the source another way, as the licence
-requires.
+requires. A deployment of a modified client names its own repository.
+
+The third-party sources are pinned in `web/build/sources.lock`.
+`web/build/notices/source_bundle.py` assembles the pinned sources into one
+bundle. Each release publishes that bundle, and a deployment names its address
+in `source.json` (`source.thirdPartySources` above).
 
 ## Browser requirements
 

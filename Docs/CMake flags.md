@@ -111,6 +111,13 @@ Build Configuration Flags
   has changes that are not committed, untracked files included. Needs
   `PRODUCT_EMBED_BUILD_INFO`. The browser build sets it with
   `build-client.sh RELEASE=1`. Default is `OFF`.
+  A release build's bytes depend on its sources alone. It declares the
+  commit and the tag as arrays outside the linker's string pool
+  (`cmake/hsBuildInfo.inl.cmake`), and with LTO under clang or GCC it
+  compiles `plProduct.cpp`, which embeds them, without LTO. With Emscripten it
+  also compiles every source by a path relative to the build directory,
+  through a link to the checkout (`cmake/ReleaseSourcePaths.cmake`), so
+  that neither folder's path reaches the names ThinLTO gives.
 
 * `PLASMA_WASM_SHELL_CONFIG`
 
