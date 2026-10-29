@@ -58,6 +58,11 @@ option(PRODUCT_RELEASE_BUILD "Release build: embed the source tree's commit and 
 if(PRODUCT_RELEASE_BUILD AND NOT PRODUCT_EMBED_BUILD_INFO)
     message(FATAL_ERROR "PRODUCT_RELEASE_BUILD needs PRODUCT_EMBED_BUILD_INFO=ON")
 endif()
+# A release build of the browser client gives the same bytes wherever the checkout and the build dir lie: its compiles
+# name their sources by paths relative to the build dir (cmake/ReleaseSourcePaths.cmake). Before any target.
+if(PRODUCT_RELEASE_BUILD AND EMSCRIPTEN)
+    include(ReleaseSourcePaths)
+endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set(CMAKE_FOLDER "CMakePredefinedTargets")

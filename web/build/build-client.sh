@@ -68,7 +68,8 @@
 #                       testhooks/: CMake's PLASMA_TEST_HOOKS_DIR. The product build never reads it.
 #   RELEASE=1           a release build: PRODUCT_EMBED_BUILD_INFO=ON, PRODUCT_RELEASE_BUILD=ON
 #                       and PRODUCT_EMBED_BUILD_TIME=OFF, so the client reports the commit of this checkout and
-#                       its tag (cmake/BuildInfo.cmake), and its bytes depend on that commit alone. Refused with
+#                       its tag (cmake/BuildInfo.cmake), and its bytes depend on that commit alone, not on where
+#                       the checkout and the build dir are (cmake/ReleaseSourcePaths.cmake). Refused with
 #                       HARNESS=1, and while the checkout has changes that are not committed (untracked files
 #                       too) before configure, before the build and after it. A successful build writes
 #                       <client>.release.json beside the client: the commit, the tag, the SHA-256 of
@@ -135,7 +136,8 @@ release_tree() {
 }
 
 # release_record: after a release build, <client>.release.json beside the client (see RELEASE above). The commit
-# must be the one the build started from and the one the client embeds (hsBuildInfo.inl GIT_REV).
+# must be the one the build started from and the one the client embeds: hsBuildInfo.inl's GIT_REV_CHARS, the release
+# form of its build info (PLASMA_BUILD_INFO_NAMED_STRINGS 1, cmake/hsBuildInfo.inl.cmake), and GIT_TAG_CHARS the tag.
 release_record() {
     local abi name
     abi=$(sed -n 's/^PLASMA_PYTHON_ABI:STRING=//p' "$B/CMakeCache.txt")
@@ -155,8 +157,10 @@ def sha256(path):
             h.update(chunk)
     return h.hexdigest()
 info = open(os.path.join(build, "Sources/Plasma/CoreLib/hsBuildInfo.inl")).read()
-rev = re.search(r'GIT_REV = "([^"]*)"', info).group(1)
-product_tag = re.search(r'GIT_TAG = "([^"]*)"', info).group(1)
+if not re.search(r"^#define PLASMA_BUILD_INFO_NAMED_STRINGS 1$", info, re.M):
+    sys.exit("build-client.sh: hsBuildInfo.inl is not a release build's (PLASMA_BUILD_INFO_NAMED_STRINGS is not 1)")
+rev = re.search(r'GIT_REV_CHARS\[\] = "([^"]*)"', info).group(1)
+product_tag = re.search(r'GIT_TAG_CHARS\[\] = "([^"]*)"', info).group(1)
 if rev != head:
     sys.exit(f"build-client.sh: the client embeds revision {rev!r}, not the checkout's commit {head}")
 tag = subprocess.run(["git", "-C", src, "describe", "--exact-match", "--tags", "HEAD"],

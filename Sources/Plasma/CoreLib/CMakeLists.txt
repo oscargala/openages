@@ -84,6 +84,18 @@ plasma_library(CoreLib
     PRECOMPILED_HEADERS _CoreLibPch.h
 )
 plasma_target_simd_sources(CoreLib SSE3 hsMatrix44_SSE3.cpp)
+# A release build embeds its commit in plProduct.cpp, the one file that includes hsBuildInfo.inl. As a ThinLTO module
+# the commit would enter that module's hash, and with it the names ThinLTO gives the functions it promotes, and the link
+# order, so two commits would differ far beyond the commit string. Compiled without LTO (and so without the PCH, which
+# was built for LTO, and outside a unity source), plProduct.cpp is a plain object, and its commit and tag are arrays
+# outside the linker's string pool (cmake/hsBuildInfo.inl.cmake): the commit changes only their bytes.
+if(PRODUCT_RELEASE_BUILD AND CMAKE_INTERPROCEDURAL_OPTIMIZATION AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set_source_files_properties(plProduct.cpp PROPERTIES
+        COMPILE_OPTIONS -fno-lto
+        SKIP_PRECOMPILE_HEADERS ON
+        SKIP_UNITY_BUILD_INCLUSION ON
+    )
+endif()
 target_link_libraries(
     CoreLib
     PUBLIC

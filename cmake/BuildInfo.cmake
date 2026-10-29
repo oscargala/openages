@@ -87,6 +87,8 @@ if(PRODUCT_RELEASE_BUILD)
     endif()
     # A release build carries no diff: the commit is the whole source.
     set(GIT_DIFF_CONTENTS "")
+    # Its commit and tag are named arrays (hsBuildInfo.inl.cmake), so that they change only their own bytes.
+    set(PLASMA_BUILD_INFO_NAMED_STRINGS ON)
 endif()
 
 if(NOT GIT_REV)
