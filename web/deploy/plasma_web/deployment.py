@@ -607,6 +607,17 @@ class Deployment:
         if not self.harness and self.join_secret_file is None:
             _fail("a deployment that is not a loopback harness one needs gateway.join (the gateway's admission tokens)")
 
+    def require_source(self):
+        """Whoever serves the page and the client conveys the client's object code, and must offer its Corresponding
+        Source (GPL version 3, section 6): server.py and emit_static.py refuse a deployment that names no
+        source.repository, the link of every source.json, and so does the check (main), with this one rule. A
+        loopback harness deployment is exempt: it serves the test harness's own runs, never players."""
+        if not self.harness and self.source_repository is None:
+            _fail(
+                "source.repository: a deployment that is not a loopback harness one must name the repository that "
+                "publishes its source (an https:// URL), the link of its source.json"
+            )
+
     def upstreams(self, resolver=socket.getaddrinfo):
         """The (host, port) pairs the gateway may open: the ini's hosts and the extra hosts at
         the client port, plus (resolveUpstreams) their IPv4 addresses, since a game server
@@ -866,7 +877,9 @@ def join_secret(dep):
 
 
 def main(argv=None):
-    """The command line (plasma-web-deployment): print a deployment's summary, or create its join key file."""
+    """The command line (plasma-web-deployment): check a deployment and print its summary, or create its join key
+    file. The check refuses what the servers and the static kit refuse at start, by their own rules (load, then
+    require_source); creating the key checks only what load does, so a key can precede the file's source entry."""
     import argparse
     import sys
 
@@ -897,6 +910,7 @@ def main(argv=None):
         print(f"join key {'created' if created else 'present'}: {dep.join_secret_file}")
         raise SystemExit(0)
     try:
+        dep.require_source()  # server.py and emit_static.py refuse such a deployment at start; the check does too
         print(json.dumps(dep.summary(), indent=1))
     except (OSError, ValueError) as e:
         print(f"invalid deployment: {e}", file=sys.stderr)

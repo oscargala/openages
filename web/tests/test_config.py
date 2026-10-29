@@ -141,6 +141,7 @@ HOSTILE = {
     "config": "/runtime/config.json",
     "d13": "1",
     "dumpminframes": "3",
+    "freshorigin": "1",
     "gamecodedir": "/tmp/code",
     "graphicsini": "Graphics.Width 640\r\n",
     "harnesscli": "1",
@@ -159,6 +160,7 @@ HOSTILE = {
     "movieobserve": "1",
     "msgbox": "manual",
     "noyield": "1",
+    "ownerchannel": "1",
     "pickingobserve": "1",
     "pyprobe": "1",
     "reentryselftest": "1",
@@ -273,6 +275,11 @@ def ini_text(host, status=None):
     return "# synthetic\n" + "\n".join(lines) + "\n"
 
 
+# A player deployment names the repository that publishes its source: server.py and emit_static.py refuse one
+# without it (deployment.py require_source). A harness deployment (the write_deployment default) may name none.
+SOURCE = {"repository": "https://code.example.test/plasma-web"}
+
+
 def write_deployment(tmp, host="shard.example.test", status=None, **fields):
     """A deployment file in tmp (outside the repository) with a synthetic server.ini; fields override the defaults."""
     tmp = Path(tmp)
@@ -298,6 +305,7 @@ def static_page_deployment(tmp):
     return write_deployment(
         tmp,
         capabilities={},
+        source=SOURCE,
         data={"root": "data", "url": "https://assets.example.test/data"},
         fonts={"url": "https://assets.example.test/fonts"},
         sound={"url": "https://sound.example.test/sfx"},
@@ -336,6 +344,7 @@ def own_origin_deployment(tmp, bind, gateway_url, page_origin):
         data={"files": "patcher", "gameCode": "server-py2"},
         gateway=gateway,
         capabilities={"harness": False},
+        source=SOURCE,
         graphics={
             "initialIni": {
                 "Graphics.Windowed": True,
@@ -2941,6 +2950,7 @@ def free_fonts_in_chromium():
         path = write_deployment(
             tmp,
             capabilities={},
+            source=SOURCE,
             data={"root": "data", "files": "patcher", "gameCode": "server"},
             gateway={
                 "bind": "127.0.0.1",
@@ -3090,6 +3100,7 @@ def player_deployment(tmp):
     path = write_deployment(
         tmp,
         capabilities={},
+        source=SOURCE,
         gateway={
             "bind": "127.0.0.1",
             "port": 0,

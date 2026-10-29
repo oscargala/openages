@@ -72,7 +72,7 @@ out/
                                                     client and the page kit, with its licence text), then the fonts
                                                     this kit serves (provenance.py kit_notices)
   source.json                                       where the source of this page and client is published: the
-                                                    deployment's source.repository, and, for a release build
+                                                    deployment's source.repository (required), and, for a release build
                                                     (build-client.sh RELEASE=1), its commit and tag, which the page's
                                                     "Source code (GPLv3)" link names (provenance.py). A release build
                                                     is refused unless this checkout is at its commit with every
@@ -88,7 +88,8 @@ unless the deployment names fonts.url.
 
 A kit carries no game code of its own. The client runs the shard's (data.gameCode server, or server-py2 for MOULa); the
 client-side modes (client, client-python) are modes of the private test harness, outside a release, and refused, as are
-harness and gameCodeCapture deployments. The high-resolution texture packs are not copied either (textures.hdPack).
+harness and gameCodeCapture deployments, and a deployment that names no source.repository (deployment.py
+require_source). The high-resolution texture packs are not copied either (textures.hdPack).
 """
 
 import argparse
@@ -272,6 +273,8 @@ def main():
             raise deployment_file.DeploymentError(
                 "capabilities.gameCodeCapture is a loopback diagnostic, never a public page"
             )
+        # A kit conveys the client: it names where its source is published (source.json's link).
+        d.require_source()
         # The status relay: the login dialog reads the ini's Server.Status URL through /runtime/status on the page's
         # own origin (server.py relay_status; in a kit, the gateway Worker's), as server.py's page document names it.
         # A page cannot read that URL across origins, and the kit's Content-Security-Policy names no origin for it.

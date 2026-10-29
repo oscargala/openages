@@ -20,5 +20,7 @@
                                   "Kveer", "LiveBahroCaves", "Myst", "Negilahn", "Neighborhood", "Nexus", "Payiferen",
                                   "PelletBahroCave", "Personal", "philRelto", "spyroom", "Teledahn", "Tetsonot",
                                   "trebivdil", "VeeTsah", "Vothol"]}},
- "capabilities": {"harness": false}
+ "capabilities": {"harness": false},
+ "source": {"repository": "https://github.com/oscargala/openages", "tag": "v0.1.0",
+            "thirdPartySources": "https://github.com/oscargala/openages/releases/download/v0.1.0/openages-v0.1.0-third-party-sources.tar"}
 }

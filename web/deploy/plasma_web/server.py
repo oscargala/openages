@@ -68,7 +68,8 @@ deployment.py content_security_policy):
                 where the source of this page and client is published, the licence and the notices, as a static kit
                 carries them (provenance.py). source.json and the notices are made once, at start,
                 from the deployment's source entry and the build's release record; a release build whose record or
-                checkout does not match is refused at start, as emit_static.py refuses its kit
+                checkout does not match is refused at start, as emit_static.py refuses its kit, and so is a
+                deployment that is not a loopback harness one and names no source.repository
 
 Without --deployment it serves the data tree --data-root and, with --runtime-config, a page document written by hand.
 No path of the machine it runs on is assumed: the build, the data and every other tree it serves are named on the
@@ -967,6 +968,8 @@ def configure(cfg, ap, handler=Handler):
             ap.error("--deployment replaces --runtime-config, --data-root, --fonts-root and --asset-prefix")
         try:
             dep = deployment_file.load(cfg.deployment)
+            # The page conveys the client: a deployment that serves players names where its source is published.
+            dep.require_source()
             public = dep.public_document(cfg.gateway_url, status_relay="/runtime/status")
             cfg.content_security_policy = deployment_file.content_security_policy(public)
         except (OSError, ValueError) as e:

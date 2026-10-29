@@ -68,7 +68,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from plasma_web import deployment
+from plasma_web import deployment, provenance
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -76,6 +76,9 @@ PACKAGE_ROOT = ROOT / "web/deploy"  # the package's directory: python -m runs fr
 SHELL = "Sources/Plasma/Apps/plClient/emscripten/shell"  # the page shell: index.html, boot.mjs, config.mjs
 CONFIG_MJS = ROOT / SHELL / "config.mjs"  # the page's runtime configuration module
 TEMPLATE = ROOT / "web/deploy/deployments/moula.template.json"  # the MOULa deployment template
+# A player deployment names the repository that publishes its source: server.py and emit_static.py refuse one
+# without it (deployment.py require_source). A harness deployment (the Fixture default) may name none.
+SOURCE = {"repository": "https://code.example.test/plasma-web"}
 # The product's commands, run as python -m <module> (the package on the import path, as for these tests)
 PRODUCT_SERVER = ["-m", "plasma_web.server"]  # the product's origin server
 EMIT_STATIC = ["-m", "plasma_web.emit_static"]
@@ -318,6 +321,7 @@ class DeploymentFileTests(unittest.TestCase):
                 tmp,
                 ini_text("shard.example.test", "shard.example.test"),
                 capabilities={},
+                source=SOURCE,
                 data={"root": "data", "url": "https://assets.example.test/data/"},
                 fonts={"url": "https://assets.example.test/fonts"},
                 sound={"url": "https://assets.example.test/sound"},
@@ -374,6 +378,7 @@ class DeploymentFileTests(unittest.TestCase):
                     tmp,
                     ini_text("shard.example.test", "shard.example.test", extra=extra),
                     capabilities={},
+                    source=SOURCE,
                     gateway={
                         "url": "wss://play.example.test",
                         "origins": ["https://play.example.test"],
@@ -537,6 +542,53 @@ class DeploymentFileTests(unittest.TestCase):
             self.assertEqual((d.harness, d.game_code_capture, d.fonts_source), (False, False, "free"))
             self.assertEqual(d.join_secret_file, (Path(tmp) / "k/join.key").resolve())
 
+    def test_check_refuses_a_player_deployment_that_names_no_repository(self):
+        # The check (plasma-web-deployment <file>) refuses what server.py and emit_static.py refuse at start: a
+        # deployment that is not a loopback harness one and names no source.repository. It applies their rule
+        # (deployment.py require_source), so its reason is that rule's message. A harness deployment is exempt.
+        with tempfile.TemporaryDirectory() as tmp:
+            key = Path(tmp) / "keys/join.key"
+            importlib.import_module("plasma_web.join_token").init_secret(key)
+            gateway = {"bind": "127.0.0.1", "port": 0, "origins": [], "join": {"secretFile": str(key)}}
+
+            def check(f):
+                return subprocess.run(
+                    [sys.executable, *DEPLOYMENT_CLI, str(f.path)], capture_output=True, text=True, timeout=60
+                )
+
+            for i, (caps, source) in enumerate(
+                (({}, None), ({"harness": False}, None), ({}, {"tag": "v1.0"}), ({}, {"thirdPartySources": None}))
+            ):
+                with self.subTest(capabilities=caps, source=source):
+                    f = Fixture(
+                        Path(tmp) / f"p{i}",
+                        ini_text(),
+                        capabilities=caps,
+                        gateway=gateway,
+                        **({"source": source} if source is not None else {}),
+                    )
+                    with self.assertRaises(deployment.DeploymentError) as rule:
+                        deployment.load(f.path).require_source()
+                    self.assertIn(
+                        "source.repository: a deployment that is not a loopback harness one must name the repository "
+                        "that publishes its source",
+                        str(rule.exception),
+                    )
+                    r = check(f)
+                    self.assertEqual(r.returncode, 1, r.stderr)
+                    self.assertEqual(r.stderr.strip(), f"invalid deployment: {rule.exception}")
+                    self.assertEqual(r.stdout, "")  # no summary
+            # the same player deployment with its repository named passes and prints its summary
+            f = Fixture(Path(tmp) / "named", ini_text(), capabilities={}, gateway=gateway, source=SOURCE)
+            r = check(f)
+            self.assertEqual((r.returncode, r.stderr), (0, ""))
+            self.assertEqual(json.loads(r.stdout), json.loads(json.dumps(deployment.load(f.path).summary())))
+            # a loopback harness deployment (the Fixture default) without a source entry passes: exempt
+            h = Fixture(Path(tmp) / "harness", ini_text())
+            r = check(h)
+            self.assertEqual((r.returncode, r.stderr), (0, ""))
+            self.assertEqual(json.loads(r.stdout), json.loads(json.dumps(deployment.load(h.path).summary())))
+
     def test_server_py2(self):
         # gameCode server-py2 = the shard's Python and SDL (as server, no local override) run by the py2 build;
         # the page document names build py2 and the page's validator returns plClient-py2.
@@ -653,6 +705,7 @@ class DeploymentFileTests(unittest.TestCase):
                 tmp,
                 ini_text("shard.example.test", "shard.example.test"),
                 capabilities={},
+                source=SOURCE,
                 data=data,
                 gateway={
                     "url": "wss://gw.example.test",
@@ -701,6 +754,7 @@ class DeploymentFileTests(unittest.TestCase):
                 tmp,
                 ini_text("shard.example.test", "shard.example.test"),
                 capabilities={},
+                source=SOURCE,
                 data={"files": "patcher", "gameCode": "server"},
                 gateway={
                     "url": "wss://gw.example.test",
@@ -754,6 +808,7 @@ class DeploymentFileTests(unittest.TestCase):
                 tmp,
                 ini_text("shard.example.test", "shard.example.test"),
                 capabilities={},
+                source=SOURCE,
                 data={"files": "patcher", "gameCode": "server-py2"},
                 graphics={"initialIni": good},
                 gateway={
@@ -954,6 +1009,17 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertEqual(
             t["textures"]["hdPack"], {"root": "~/.config/plasma-web/shards/moula/hdpack", "ages": moula_ages}
         )
+        # A MOULa deployment names its source: the public repository, the release tag and that release's
+        # third-party source bundle, the asset the release attaches under its tag.
+        repository, tag = "https://github.com/oscargala/openages", "v0.1.0"
+        self.assertEqual(
+            t["source"],
+            {
+                "repository": repository,
+                "tag": tag,
+                "thirdPartySources": f"{repository}/releases/download/{tag}/openages-{tag}-third-party-sources.tar",
+            },
+        )
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "server.ini").write_text(ini_text("moula.example.test", "moula.example.test"))
             t["serverIni"] = str(Path(tmp) / "server.ini")
@@ -966,6 +1032,14 @@ class DeploymentFileTests(unittest.TestCase):
             (Path(tmp) / "moula.json").write_text(json.dumps(t))
             d = deployment.load(Path(tmp) / "moula.json")
             self.assertEqual((d.name, d.build, d.files, d.harness), ("moula", "py2", "patcher", False))
+            self.assertEqual(
+                (d.source_repository, d.source_tag, d.third_party_sources),
+                (repository, tag, t["source"]["thirdPartySources"]),
+            )
+            # The tag names exact source, so the client such a deployment serves is the release built at it
+            # (build-client.sh RELEASE=1 in the tag's checkout): with an ordinary build the kit is refused.
+            with self.assertRaisesRegex(ValueError, "only a release build"):
+                provenance.source_document(d.source_repository, d.source_tag, ())
             doc = d.public_document("wss://gw.example.test")
             self.assertEqual(node_config(doc, "https://play.example.test/")["client"], "plClient-py2")
             self.assertEqual(doc["textures"], {"hdPack": {"base": "/hdpack", "ages": moula_ages}})
@@ -1116,6 +1190,7 @@ class DeploymentFileTests(unittest.TestCase):
                 Path(tmp) / name,
                 ini_text("shard.example.test", "shard.example.test"),
                 capabilities={},
+                source=SOURCE,
                 data={"files": "patcher", "gameCode": "server"},
                 gateway={
                     "url": "wss://gw.example.test",
@@ -1287,7 +1362,10 @@ class ProvenanceTests(unittest.TestCase):
     kit's fonts after it) and source.json, which names the exact source of a release build and nothing it cannot
     check."""
 
-    def player(self, tmp, name="player", **fields):
+    def player(self, tmp, name="player", source=SOURCE, **fields):
+        # a player deployment names its source (SOURCE unless given); source=None leaves the entry out
+        if source is not None:
+            fields["source"] = source
         return Fixture(
             Path(tmp) / name,
             ini_text("shard.example.test", "shard.example.test"),
@@ -1317,7 +1395,7 @@ class ProvenanceTests(unittest.TestCase):
         lock_sha = hashlib.sha256((ROOT / "web/build/sources.lock").read_bytes()).hexdigest()
         notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text()
         with tempfile.TemporaryDirectory() as tmp:
-            # no repository named, no build: the files are there and source.json says what it cannot name
+            # a repository named, no build: the files are there and source.json says what it cannot name
             f = self.player(tmp)
             out = f.dir / "kit"
             r = self.emit(f, out)
@@ -1363,11 +1441,11 @@ class ProvenanceTests(unittest.TestCase):
             )
             self.assertEqual(
                 (src["schema"], src["repository"], src["tag"], src["commit"], src["url"], src["build"]),
-                (1, None, None, None, None, None),
+                (1, SOURCE["repository"], None, None, SOURCE["repository"], None),
             )
             self.assertIn("GPL-3.0-or-later", src["licence"])
             self.assertEqual(src["sourcesLock"], {"path": "web/build/sources.lock", "sha256": lock_sha})
-            self.assertTrue(any("names no repository" in n for n in src["notes"]), src["notes"])
+            self.assertFalse(any("names no repository" in n for n in src["notes"]), src["notes"])
             self.assertTrue(any("carries no client build" in n for n in src["notes"]), src["notes"])
             headers = (out / "_headers").read_text()
             for name in ("/source.json", "/LICENSE.txt", "/COPYING.txt", "/THIRD_PARTY_NOTICES.md"):
@@ -1427,6 +1505,38 @@ class ProvenanceTests(unittest.TestCase):
                 "from https://fonts.example.test/f, which the operator serves",
                 (f.dir / "kit/THIRD_PARTY_NOTICES.md").read_text(),
             )
+
+    def test_kit_refuses_a_deployment_that_names_no_repository(self):
+        # A kit conveys the client, so its deployment names the repository that publishes the source
+        # (deployment.py require_source): without source.repository emit_static.py stops at start and writes nothing,
+        # whatever else the source entry names. A harness deployment is refused as one, named source or not.
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, source in enumerate((None, {}, {"thirdPartySources": "https://code.example.test/sources-v1"})):
+                with self.subTest(source=source):
+                    f = self.player(tmp, f"none{i}", source=source)
+                    out = f.dir / "kit"
+                    r = self.emit(f, out)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn(
+                        "invalid deployment: source.repository: a deployment that is not a loopback harness one must "
+                        "name the repository that publishes its source",
+                        r.stderr,
+                    )
+                    self.assertFalse(out.exists())
+                    self.assertFalse((f.dir / "kit.publish-report.json").exists())
+            # the same player deployment with its repository named: the kit is written and links it
+            f = self.player(tmp, "named")
+            r = self.emit(f, f.dir / "kit")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            src = json.loads((f.dir / "kit/source.json").read_text())
+            self.assertEqual((src["repository"], src["url"]), (SOURCE["repository"], SOURCE["repository"]))
+            for i, source in enumerate(({}, {"source": SOURCE})):
+                with self.subTest(harness_source=source):
+                    h = Fixture(Path(tmp) / f"harness{i}", ini_text(), gateway={"url": "ws://127.0.0.1:9"}, **source)
+                    r = self.emit(h, h.dir / "kit")
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn("a harness deployment is loopback-only, never a static public page", r.stderr)
+                    self.assertFalse((h.dir / "kit").exists())
 
     def test_source_entry_is_checked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1563,6 +1673,7 @@ def emit_fixture_kit(tmp):
         tmp / "dep",
         ini_text("shard.example.test", "shard.example.test"),
         capabilities={},
+        source=SOURCE,
         data={"files": "patcher", "gameCode": "server"},
         gateway={
             "url": "wss://gw.example.test",
@@ -2100,6 +2211,65 @@ class ProcessTests(unittest.TestCase):
                     self.assertEqual(r.returncode, 2, r.stderr)
                     self.assertIn(want, r.stderr)
 
+    def test_server_refuses_a_player_deployment_that_names_no_repository(self):
+        # The origin server conveys the client to players: a deployment that is not a loopback harness one must name
+        # source.repository, or the server stops at start (deployment.py require_source). A loopback harness
+        # deployment serves only the test harness's runs and may name none; its source.json says so.
+        with tempfile.TemporaryDirectory() as tmp:
+            key = Path(tmp) / "keys/join.key"
+            importlib.import_module("plasma_web.join_token").init_secret(key)
+            gateway = {"bind": "127.0.0.1", "port": 0, "origins": [], "join": {"secretFile": str(key)}}
+
+            def args(f, port=0):
+                return [
+                    *PRODUCT_SERVER,
+                    "--port",
+                    str(port),
+                    "--access-log",
+                    str(f.dir / "a.jsonl"),
+                    "--deployment",
+                    str(f.path),
+                    "--gateway-url",
+                    "ws://127.0.0.1:9",
+                ]
+
+            for i, (caps, source) in enumerate(
+                (({}, None), ({"harness": False}, None), ({}, {"tag": "v1.0"}), ({}, {"thirdPartySources": None}))
+            ):
+                with self.subTest(capabilities=caps, source=source):
+                    f = Fixture(
+                        Path(tmp) / f"p{i}",
+                        ini_text(),
+                        capabilities=caps,
+                        gateway=gateway,
+                        **({"source": source} if source is not None else {}),
+                    )
+                    r = subprocess.run([str(self.PY), *args(f)], capture_output=True, text=True, timeout=60)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn(
+                        "Invalid deployment: source.repository: a deployment that is not a loopback harness one must "
+                        "name the repository that publishes its source",
+                        r.stderr,
+                    )
+                    self.assertNotIn("serving on", r.stdout)
+            # the same player deployment with its repository named starts and links it
+            f = Fixture(Path(tmp) / "named", ini_text(), capabilities={}, gateway=gateway, source=SOURCE)
+            port = free_port()
+            _, lines = self.start(args(f, port), "serving on")
+            self.assertIn("harness False", "".join(lines))
+            self.assertIn(f"source: {SOURCE['repository']} (commit none, tag none", "".join(lines))
+            src = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/source.json").read())
+            self.assertEqual((src["repository"], src["url"]), (SOURCE["repository"], SOURCE["repository"]))
+            # a loopback harness deployment (the Fixture default) without a source entry starts: exempt
+            h = Fixture(Path(tmp) / "harness", ini_text())
+            port = free_port()
+            _, lines = self.start(args(h, port), "serving on")
+            self.assertIn("harness True", "".join(lines))
+            self.assertIn("source: no repository named", "".join(lines))
+            src = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/source.json").read())
+            self.assertIsNone(src["repository"])
+            self.assertTrue(any("names no repository" in n for n in src["notes"]), src["notes"])
+
     def serve_fonts(self, args, script=PRODUCT_SERVER):
         """An origin server started with args: its /fonts tree (the manifest's names, the two faces' bytes) and its
         start lines about fonts. script: the server's arguments after the interpreter."""
@@ -2233,6 +2403,7 @@ class ProcessTests(unittest.TestCase):
                 tmp,
                 ini_text(),
                 capabilities={},
+                source=SOURCE,
                 gateway=gateway,
                 data={"root": "data", "files": "patcher"},
                 textures={"hdPack": {"root": str(packs), "ages": ["Personal"]}},
