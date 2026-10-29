@@ -66,6 +66,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plStatusLog/plStatusLog.h"
 #include "plWGPULog.h"
 #include "plWGPUPipeline.h"
+#ifdef PLASMA_TEST_HOOKS
+#include "plWGPUPipelineObserver.h"
+#endif
 #include "plWGPUPipelineState.h"
 #include "plWGPUShader.h"
 #include "plWGPUTextureFormat.h"
@@ -112,6 +115,8 @@ plWGPUDevice::plWGPUDevice()
       fSurface(),
       fDeviceType(),
       fSampleCount(1),
+      fGeneration(),
+      fCanvasFormatKnown(),
       fFramebufferFormat(WGPUTextureFormat_BGRA8Unorm),
       fDepthFormat(WGPUTextureFormat_Depth24PlusStencil8),
       fCurrentCommandBuffer(),
@@ -428,6 +433,11 @@ void plWGPUDevice::ConfigureSurface(uint32_t width, uint32_t height)
 
 void plWGPUDevice::Clear(bool shouldClearColor, const float clearColor[4], bool shouldClearDepth, float clearDepth)
 {
+    if (fPrewarmWalkActive) {
+        IPrewarmClear(shouldClearColor, shouldClearDepth);
+        return;
+    }
+
     /*
      D3D9 Clear (plDXPipeline::ClearRenderTarget) clears the current viewport (the rect
      of IGetClearViewPort, or the whole viewport when that is the target) of the colour
@@ -581,6 +591,8 @@ void plWGPUDevice::ISubmitOffscreen()
 
 void plWGPUDevice::SetRenderTarget(plRenderTarget* target)
 {
+    // The prewarm walk binds nothing (BindRenderTargetSurfaces records the target for its builds), then invalidates
+    // the state cache and sets the viewport as the draw does (IInvalidateState skips its texture half in a walk).
     BindRenderTargetSurfaces(target);
 
     fPipeline->IInvalidateState();
@@ -597,6 +609,12 @@ void plWGPUDevice::BindRenderTargetSurfaces(plRenderTarget* target)
     // Structure from plMetalDevice::SetRenderTarget: each offscreen target records into its own
     // command encoder, submitted when the target changes; the canvas pass is kept open while
     // the canvas stays bound.
+    // The prewarm walk binds nothing and makes no ref: it records the target (SetRenderTarget, and the shadow blur's
+    // IBlurSetRenderTarget, which calls this directly, plDXPipeline.cpp:10042-10062).
+    if (fPrewarmWalkActive) {
+        IPrewarmBindTarget(target);
+        return;
+    }
     plWGPURenderTargetRef* ref = nullptr;
     if (target != nullptr) {
         ref = (plWGPURenderTargetRef*)target->GetDeviceRef();
@@ -656,7 +674,7 @@ void plWGPUDevice::SetViewport()
     fViewport[1] = float(vt.GetViewPortTop());
     fViewport[2] = float(vt.GetViewPortWidth());
     fViewport[3] = float(vt.GetViewPortHeight());
-    if (fCurrentRenderTargetCommandEncoder)
+    if (fCurrentRenderTargetCommandEncoder && !fPrewarmWalkActive)
         IApplyViewport(fCurrentRenderTargetCommandEncoder);
 }
 
@@ -666,7 +684,7 @@ void plWGPUDevice::SetViewport(float x, float y, float w, float h)
     fViewport[1] = y;
     fViewport[2] = w;
     fViewport[3] = h;
-    if (fCurrentRenderTargetCommandEncoder)
+    if (fCurrentRenderTargetCommandEncoder && !fPrewarmWalkActive)
         IApplyViewport(fCurrentRenderTargetCommandEncoder);
 }
 
@@ -697,14 +715,24 @@ static uint32_t IGetBufferFormatSize(uint8_t format)
     return size;
 }
 
-void plWGPUDevice::SetupVertexBufferRef(plGBufferGroup* owner, uint32_t idx, plWGPUDevice::VertexBufferRef* vRef)
+uint8_t plWGPUDevice::VertexBufferFormat(uint8_t groupFormat)
 {
-    // plMetalDevice::SetupVertexBufferRef
-    uint8_t format = owner->GetVertexFormat();
-
+    // plMetalDevice::SetupVertexBufferRef's format: skinned buffers lose their weights and indices (the CPU skins
+    // them into a volatile buffer).
+    uint8_t format = groupFormat;
     if (format & plGBufferGroup::kSkinIndices) {
         format &= ~(plGBufferGroup::kSkinWeightMask | plGBufferGroup::kSkinIndices);
         format |= plGBufferGroup::kSkinNoWeights; // Should do nothing, but just in case...
+    }
+    return format;
+}
+
+void plWGPUDevice::SetupVertexBufferRef(plGBufferGroup* owner, uint32_t idx, plWGPUDevice::VertexBufferRef* vRef)
+{
+    // plMetalDevice::SetupVertexBufferRef
+    const uint8_t format = VertexBufferFormat(owner->GetVertexFormat());
+
+    if (owner->GetVertexFormat() & plGBufferGroup::kSkinIndices) {
         vRef->SetSkinned(true);
         vRef->SetVolatile(true);
     }
@@ -1603,6 +1631,7 @@ bool plWGPUDevice::CreateNewCommandBuffer()
     fCurrentDrawable = st.texture;
     fCurrentDrawableView = wgpuTextureCreateView(fCurrentDrawable, nullptr);
     fFramebufferFormat = wgpuTextureGetFormat(fCurrentDrawable);
+    fCanvasFormatKnown = true;
 
     const uint32_t width = wgpuTextureGetWidth(fCurrentDrawable);
     const uint32_t height = wgpuTextureGetHeight(fCurrentDrawable);
@@ -1685,9 +1714,61 @@ bool plWGPUDevice::CreateNewCommandBuffer()
     return true;
 }
 
+void plWGPUDevice::IPipelineDescriptor(const plWGPUPipelineRecord& record, plWGPUPipelineState* pipelineState,
+                                       PipelineDescriptor& d)
+{
+    pipelineState->ConfigureVertexDescriptor(d.layouts, d.attributes);
+    pipelineState->ConfigureConstants(WGPUShaderStage_Vertex, d.vertexConstants);
+    pipelineState->ConfigureConstants(WGPUShaderStage_Fragment, d.fragmentConstants);
+
+    const char*             source = pipelineState->GetShaderSource();
+    WGPUShaderModule        module = ShaderModule(source, pipelineState->GetDescription());
+    const plWGPUFixedState& fixed = pipelineState->GetFixedState();
+
+    d.blend = WGPU_BLEND_STATE_INIT;
+    const bool blending = pipelineState->ConfigureBlend(d.blend);
+    d.target = WGPU_COLOR_TARGET_STATE_INIT;
+    d.target.format = record.colorFormat;
+    d.target.blend = blending ? &d.blend : nullptr;
+    d.target.writeMask = pipelineState->GetWriteMask();
+
+    d.fs = WGPU_FRAGMENT_STATE_INIT;
+    d.fs.module = module;
+    d.fs.entryPoint = Str(pipelineState->GetFragmentFunction());
+    d.fs.constantCount = d.fragmentConstants.size();
+    d.fs.constants = d.fragmentConstants.data();
+    d.fs.targetCount = 1;
+    d.fs.targets = &d.target;
+
+    d.ds = WGPU_DEPTH_STENCIL_STATE_INIT;
+    d.ds.format = record.depthFormat;
+    d.ds.depthWriteEnabled = fixed.depthWrite ? WGPUOptionalBool_True : WGPUOptionalBool_False;
+    d.ds.depthCompare = fixed.depthCompare;
+
+    d.desc = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
+    d.desc.label = Str(pipelineState->GetDescription());
+    d.desc.layout = PipelineLayout(pipelineState->GetBindLayout());
+    d.desc.vertex.module = module;
+    d.desc.vertex.entryPoint = Str(pipelineState->GetVertexFunction());
+    d.desc.vertex.constantCount = d.vertexConstants.size();
+    d.desc.vertex.constants = d.vertexConstants.data();
+    d.desc.vertex.bufferCount = d.layouts.size();
+    d.desc.vertex.buffers = d.layouts.data();
+    d.desc.primitive.topology = fixed.topology;
+    d.desc.primitive.frontFace = fixed.frontFace;
+    d.desc.primitive.cullMode = fixed.cullMode;
+    d.desc.depthStencil = record.depthFormat != WGPUTextureFormat_Undefined ? &d.ds : nullptr;
+    d.desc.multisample.count = record.sampleCount;
+    d.desc.fragment = &d.fs;
+}
+
 WGPURenderPipeline plWGPUDevice::PipelineState(plWGPUPipelineState* pipelineState)
 {
-    // plMetalDevice::PipelineState, built synchronously.
+    // plMetalDevice::PipelineState (plMetalDevice.cpp:1138): a built pipeline is returned. A build in flight
+    // (PrewarmPipelineStateFor) is not waited for, as plMetalDevice::PipelineState waits (:1157-1168): the port
+    // cannot suspend in a frame, so the pipeline is created synchronously now, and the build's late result is
+    // released when it is collected. A build still queued (PumpPipelineBuilds) leaves the queue.
+    // Neither: built synchronously, as before the prewarm.
     plWGPUPipelineRecord record = {
         fCurrentDepthFormat,
         fCurrentColorFormat,
@@ -1695,62 +1776,58 @@ WGPURenderPipeline plWGPUDevice::PipelineState(plWGPUPipelineState* pipelineStat
     record.state = std::shared_ptr<plWGPUPipelineState>(pipelineState->Clone());
 
     auto it = fNewPipelineStateMap.find(record);
-    if (it != fNewPipelineStateMap.end())
+    if (it != fNewPipelineStateMap.end()) {
+#ifdef PLASMA_TEST_HOOKS
+        // The first draw that asks for a prewarmed pipeline (the trace's kBuildUsed).
+        if (auto unused = fPrewarmUnused.find(record); unused != fPrewarmUnused.end()) {
+            if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+                observer->OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildUsed, unused->second, 0.0);
+            fPrewarmUnused.erase(unused);
+        }
+#endif
         return it->second;
+    }
 
-    const double                        t0 = emscripten_get_now();
-    std::vector<WGPUVertexBufferLayout> layouts;
-    std::vector<WGPUVertexAttribute>    attributes;
-    pipelineState->ConfigureVertexDescriptor(layouts, attributes);
-    std::vector<WGPUConstantEntry> vertexConstants, fragmentConstants;
-    pipelineState->ConfigureConstants(WGPUShaderStage_Vertex, vertexConstants);
-    pipelineState->ConfigureConstants(WGPUShaderStage_Fragment, fragmentConstants);
+    if (auto queued = fPipelineQueued.find(record); queued != fPipelineQueued.end()) {
+        // Queued at the draw (PumpPipelineBuilds has not issued it): the draw builds it, as
+        // plMetalDevice::PipelineState builds a record neither built nor building (plMetalDevice.cpp:1171-1180), and
+        // the build leaves the queue (its entry in fPipelineQueue is skipped).
+#ifdef PLASMA_TEST_HOOKS
+        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+            observer->OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildTaken, queued->second.serial,
+                                      emscripten_get_now() - queued->second.queuedMs);
+#endif
+        fPipelineQueued.erase(queued);
+    } else if (auto build = fPipelineBuilds.find(record); build != fPipelineBuilds.end()) {
+        // In flight at the draw: a synchronous duplicate (none is expected once DrainPipelineBuilds has run).
+        build->second.duplicated = true;
+        plStatusLog::AddLineSF("pipeline.log", 0xffff0000,
+                               "pipeline '{}' drawn while its build was in flight: created synchronously",
+                               pipelineState->GetDescription());
+#ifdef PLASMA_TEST_HOOKS
+        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+            observer->OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildDuplicate,
+                                      build->second.serial, emscripten_get_now() - build->second.startMs);
+#endif
+    }
 
-    const char*             source = pipelineState->GetShaderSource();
-    WGPUShaderModule        module = ShaderModule(source, pipelineState->GetDescription());
-    const plWGPUFixedState& fixed = pipelineState->GetFixedState();
-
-    WGPUBlendState       blend = WGPU_BLEND_STATE_INIT;
-    const bool           blending = pipelineState->ConfigureBlend(blend);
-    WGPUColorTargetState target = WGPU_COLOR_TARGET_STATE_INIT;
-    target.format = record.colorFormat;
-    target.blend = blending ? &blend : nullptr;
-    target.writeMask = pipelineState->GetWriteMask();
-
-    WGPUFragmentState fs = WGPU_FRAGMENT_STATE_INIT;
-    fs.module = module;
-    fs.entryPoint = Str(pipelineState->GetFragmentFunction());
-    fs.constantCount = fragmentConstants.size();
-    fs.constants = fragmentConstants.data();
-    fs.targetCount = 1;
-    fs.targets = &target;
-
-    WGPUDepthStencilState ds = WGPU_DEPTH_STENCIL_STATE_INIT;
-    ds.format = record.depthFormat;
-    ds.depthWriteEnabled = fixed.depthWrite ? WGPUOptionalBool_True : WGPUOptionalBool_False;
-    ds.depthCompare = fixed.depthCompare;
-
-    WGPURenderPipelineDescriptor desc = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
-    desc.label = Str(pipelineState->GetDescription());
-    desc.layout = PipelineLayout(pipelineState->GetBindLayout());
-    desc.vertex.module = module;
-    desc.vertex.entryPoint = Str(pipelineState->GetVertexFunction());
-    desc.vertex.constantCount = vertexConstants.size();
-    desc.vertex.constants = vertexConstants.data();
-    desc.vertex.bufferCount = layouts.size();
-    desc.vertex.buffers = layouts.data();
-    desc.primitive.topology = fixed.topology;
-    desc.primitive.frontFace = fixed.frontFace;
-    desc.primitive.cullMode = fixed.cullMode;
-    desc.depthStencil = record.depthFormat != WGPUTextureFormat_Undefined ? &ds : nullptr;
-    desc.multisample.count = record.sampleCount;
-    desc.fragment = &fs;
-
-    WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(fWGPUDevice, &desc);
+    const double t0 = emscripten_get_now();
+#ifdef PLASMA_TEST_HOOKS
+    const bool newModule = fShaderModules.find(pipelineState->GetShaderSource()) == fShaderModules.end();
+#endif
+    PipelineDescriptor d;
+    IPipelineDescriptor(record, pipelineState, d);
+    WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(fWGPUDevice, &d.desc);
     fNewPipelineStateMap[record] = pipeline;
 
     // Synchronous creation cost
     const double ms = emscripten_get_now() - t0;
+#ifdef PLASMA_TEST_HOOKS
+    // The test hooks' pipeline-creation trace (plWGPUPipelineObserver::OnPipelineCreated).
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+        observer->OnPipelineCreated(*this, *pipelineState, record.colorFormat, record.depthFormat, record.sampleCount,
+                                    newModule, ms);
+#endif
     if (ms > 100.0)
         plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "pipeline '{}' took {.1f} ms to create (over 100 ms)",
                                pipelineState->GetDescription(), ms);
@@ -1764,6 +1841,284 @@ void plWGPUDevice::SetPipeline(WGPURenderPassEncoder pass, plWGPUPipelineState& 
         wgpuRenderPassEncoderSetPipeline(pass, pipeline);
 }
 
+bool plWGPUDevice::PrewarmPipelineStateFor(plWGPUPipelineState* pipelineState)
+{
+    // plMetalDevice::PrewarmPipelineStateFor and StartPipelineBuild (plMetalDevice.cpp:1183-1201, :1083-1135): the
+    // pipeline the draw would build, started asynchronously (newRenderPipelineStateWithDescriptor's completion handler
+    // there, wgpuDeviceCreateRenderPipelineAsync here), on the main target. It is queued here and issued by
+    // PumpPipelineBuilds or DrainPipelineBuilds.
+    if (!fCanvasFormatKnown)
+        return false;
+    const double t0 = emscripten_get_now();
+#ifdef PLASMA_TEST_HOOKS
+    // The trace's record of what the walk asked for (plWGPUPipelineObserver::OnPrewarmRequest).
+    const auto note = [this, pipelineState](plWGPUPipelineObserver::PrewarmRequestResult result) {
+        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+            observer->OnPrewarmRequest(*this, *pipelineState, result);
+    };
+#endif
+    plWGPUPipelineRecord record = {fDepthFormat, fFramebufferFormat, fSampleCount};
+    if (fPrewarmWalkActive) {
+        if (!fWalkTargetValid) {
+#ifdef PLASMA_TEST_HOOKS
+            note(plWGPUPipelineObserver::kRequestNoTarget);
+#endif
+            return false;
+        }
+        record.depthFormat = fWalkDepthFormat;
+        record.colorFormat = fWalkColorFormat;
+        record.sampleCount = fWalkSampleCount;
+    }
+    record.state = std::shared_ptr<plWGPUPipelineState>(pipelineState->Clone());
+    if (fNewPipelineStateMap.find(record) != fNewPipelineStateMap.end() ||
+        fPipelineBuilds.find(record) != fPipelineBuilds.end() || fPipelineQueued.find(record) != fPipelineQueued.end()) {
+#ifdef PLASMA_TEST_HOOKS
+        note(plWGPUPipelineObserver::kRequestKnown);
+#endif
+        return false;
+    }
+
+    // A new burst of builds starts the pacing again from one build in flight: what one browser compiles cheaply (the
+    // GUI's pipelines) says nothing about the next burst (an Age's fixed-function pipelines).
+    if (fPipelineBuilds.empty() && fPipelineQueued.empty())
+        fPipelineCap = 1;
+
+    PipelineQueued queued;
+    queued.generation = fGeneration;
+    queued.queuedMs = t0;
+#ifdef PLASMA_TEST_HOOKS
+    queued.serial = ++fPipelineBuildSerial;
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+        observer->OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildStarted, queued.serial,
+                                  emscripten_get_now() - t0);
+    note(plWGPUPipelineObserver::kRequestStarted);
+#endif
+    fPipelineQueue.push_back(record);
+    fPipelineQueued.emplace(std::move(record), queued);
+    return true;
+}
+
+bool plWGPUDevice::IIssuePipelineBuild(const plWGPUPipelineRecord& record, const PipelineQueued& queued)
+{
+    // The descriptor comes from the record's own state, the clone the walk queued (plMetalDevice::StartPipelineBuild
+    // builds from record.state, plMetalDevice.cpp:1095): the walk's state is gone by now.
+    const double       t0 = emscripten_get_now();
+    PipelineDescriptor d;
+    IPipelineDescriptor(record, record.state.get(), d);
+
+    // The callback writes only the shared result. WaitAnyOnly: it runs inside a wgpuInstanceWaitAny, the pump's
+    // (timeout 0, PumpPipelineBuilds) or the drain's (DrainPipelineBuilds), or with CallbackCancelled when the
+    // instance goes (IReadTexture's map), possibly after this device is gone.
+    auto                                      result = std::make_shared<PipelineBuildResult>();
+    WGPUCreateRenderPipelineAsyncCallbackInfo ci = WGPU_CREATE_RENDER_PIPELINE_ASYNC_CALLBACK_INFO_INIT;
+    ci.mode = WGPUCallbackMode_WaitAnyOnly;
+    ci.callback = [](WGPUCreatePipelineAsyncStatus status, WGPURenderPipeline pipeline, WGPUStringView message,
+                     void* userdata1, void*) {
+        std::unique_ptr<std::shared_ptr<PipelineBuildResult>> hold(static_cast<std::shared_ptr<PipelineBuildResult>*>(userdata1));
+        PipelineBuildResult*                                  r = hold->get();
+        r->done = true;
+        r->status = status;
+        r->pipeline = pipeline;
+        if (message.data)
+            r->message.assign(message.data, message.length == WGPU_STRLEN ? strlen(message.data) : message.length);
+    };
+    ci.userdata1 = new std::shared_ptr<PipelineBuildResult>(result);
+    const WGPUFuture future = wgpuDeviceCreateRenderPipelineAsync(fWGPUDevice, &d.desc, ci);
+    if (!future.id) {
+        // The callback is never called (IRequestReadback): no build, the draw creates it synchronously. The walk's
+        // request was noted as started when it was queued (PrewarmPipelineStateFor): the issue runs outside the walk,
+        // with no pass to note it under.
+        delete static_cast<std::shared_ptr<PipelineBuildResult>*>(ci.userdata1);
+        return false;
+    }
+
+    PipelineBuild build;
+    build.future = future;
+    build.result = std::move(result);
+    build.generation = queued.generation;
+    build.startMs = queued.queuedMs;
+#ifdef PLASMA_TEST_HOOKS
+    build.serial = queued.serial;
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+        observer->OnPipelineBuild(*this, *record.state, plWGPUPipelineObserver::kBuildIssued, build.serial,
+                                  emscripten_get_now() - t0);
+#endif
+    fPipelineBuilds.emplace(record, std::move(build));
+    return true;
+}
+
+namespace
+{
+// The pacing's window, from its first issue to its decision (PumpPipelineBuilds): the frame loop's yields in it
+// (plWGPUDevice::NoteYield), and the longest time the client thread was held, in a yield or in a frame's submit
+// (NoteHeld).
+uint32_t s_paceYields = 0;
+double   s_paceHoldMaxMs = 0.0;
+} // namespace
+
+void plWGPUDevice::NoteYield(double waitedMs)
+{
+    s_paceYields++;
+    s_paceHoldMaxMs = std::max(s_paceHoldMaxMs, waitedMs);
+}
+
+void plWGPUDevice::NoteHeld(double heldMs)
+{
+    s_paceHoldMaxMs = std::max(s_paceHoldMaxMs, heldMs);
+}
+
+void plWGPUDevice::PumpPipelineBuilds()
+{
+    // The finished builds first: the timeout-0 wait completes every ready future without suspending
+    // (emdawnwebgpu's wgpuInstanceWaitAny, timeoutNS 0), and runs their callbacks.
+    if (!fPipelineBuilds.empty()) {
+        std::vector<WGPUFutureWaitInfo> infos;
+        infos.reserve(fPipelineBuilds.size());
+        for (const auto& [record, build] : fPipelineBuilds) {
+            WGPUFutureWaitInfo info = WGPU_FUTURE_WAIT_INFO_INIT;
+            info.future = build.future;
+            infos.push_back(info);
+        }
+        wgpuInstanceWaitAny(plWGPUEnumerate::Instance(), infos.size(), infos.data(), 0);
+        ICollectPipelineBuilds();
+    }
+
+    // The cap, from the window that the first issue after the last decision opened: how long the client thread was
+    // held in it, in a yield (the end of its task and its resume) or in a frame's submit. A browser that compiles on
+    // the GPU process's command stream holds one of them until the builds issued before it are compiled, often in the
+    // second frame after the issue, not the first. So one hold over three frames at 60 Hz halves the cap at once, and
+    // the cap doubles only after two yields with no hold over two frames (a frame-yield waits for the next animation
+    // frame).
+    constexpr uint32_t kMaxCap = 64;
+    constexpr double   kFastHoldMs = 34.0;
+    constexpr double   kSlowHoldMs = 50.0;
+    if (fPaceIssued && s_paceYields) {
+        const uint32_t oldCap = fPipelineCap;
+        bool           decided = false;
+        if (s_paceHoldMaxMs > kSlowHoldMs) {
+            fPipelineCap = std::max(1u, fPipelineCap / 2);
+            decided = true;
+        } else if (s_paceYields >= 2) {
+            if (s_paceHoldMaxMs <= kFastHoldMs)
+                fPipelineCap = std::min(kMaxCap, fPipelineCap * 2);
+            decided = true;
+        }
+#ifdef PLASMA_TEST_HOOKS
+        if (fPipelineCap != oldCap) {
+            if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+                observer->OnPipelinePace(*this, oldCap, fPipelineCap, s_paceYields, s_paceHoldMaxMs, fPaceIssued,
+                                         uint32_t(fPipelineQueued.size()), uint32_t(fPipelineBuilds.size()));
+        }
+#endif
+        if (decided)
+            fPaceIssued = 0;
+    }
+
+    // Then the queue, up to the cap.
+    uint32_t issued = 0;
+    while (fPipelineBuilds.size() < fPipelineCap && !fPipelineQueue.empty()) {
+        plWGPUPipelineRecord record = std::move(fPipelineQueue.front());
+        fPipelineQueue.pop_front();
+        auto it = fPipelineQueued.find(record);
+        if (it == fPipelineQueued.end())
+            continue; // a draw took it (PipelineState)
+        const PipelineQueued queued = it->second;
+        fPipelineQueued.erase(it);
+        if (queued.generation != fGeneration)
+            continue;
+        if (IIssuePipelineBuild(record, queued))
+            issued++;
+    }
+    if (issued) {
+        // The first issue after a decision opens the window: what came before it is spent.
+        if (!fPaceIssued) {
+            s_paceYields = 0;
+            s_paceHoldMaxMs = 0.0;
+        }
+        fPaceIssued += issued;
+    }
+}
+
+void plWGPUDevice::DrainPipelineBuilds(double& waitMs)
+{
+    // Every queued build is issued first: the drain stands for plMetalDevice::PipelineState's wait
+    // (plMetalDevice.cpp:1150-1180), which waits for what the draws need, whatever the pacing.
+    while (!fPipelineQueue.empty()) {
+        plWGPUPipelineRecord record = std::move(fPipelineQueue.front());
+        fPipelineQueue.pop_front();
+        auto it = fPipelineQueued.find(record);
+        if (it == fPipelineQueued.end())
+            continue;
+        const PipelineQueued queued = it->second;
+        fPipelineQueued.erase(it);
+        if (queued.generation == fGeneration)
+            IIssuePipelineBuild(record, queued);
+    }
+
+    // The futures are copied first: no iterator is held across a wait.
+    if (fPipelineBuilds.empty())
+        return;
+    std::vector<WGPUFuture> futures;
+    futures.reserve(fPipelineBuilds.size());
+    for (const auto& [record, build] : fPipelineBuilds) {
+        if (!build.result->done)
+            futures.push_back(build.future);
+    }
+    if (!futures.empty()) {
+        if (!BeginGPUWait("the pipeline builds"))
+            return; // they stay in flight
+        for (const WGPUFuture& future : futures)
+            WaitFuture(future, waitMs, "the pipeline builds");
+        EndGPUWait();
+    }
+    ICollectPipelineBuilds();
+}
+
+void plWGPUDevice::ICollectPipelineBuilds()
+{
+    // The builds whose callbacks have run (inside the pump's or the drain's wgpuInstanceWaitAny): a delivered
+    // pipeline goes into fNewPipelineStateMap, where the draw finds it (PipelineState).
+    for (auto it = fPipelineBuilds.begin(); it != fPipelineBuilds.end();) {
+        const plWGPUPipelineRecord& record = it->first;
+        PipelineBuild&              build = it->second;
+        PipelineBuildResult*        r = build.result.get();
+        if (!r->done) {
+            ++it; // still in flight, for a later pump or drain
+            continue;
+        }
+#ifdef PLASMA_TEST_HOOKS
+        plWGPUPipelineObserver*                   observer = plWGPUPipelineObserver::Get();
+        plWGPUPipelineObserver::PipelineBuildStep step;
+#endif
+        if (r->status != WGPUCreatePipelineAsyncStatus_Success || !r->pipeline) {
+            // No pipeline: the draw takes the synchronous path (a failed create stores a null pipeline there).
+            plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "pipeline '{}' build failed (status {}): {}",
+                                   record.state->GetDescription(), int(r->status), r->message.c_str());
+#ifdef PLASMA_TEST_HOOKS
+            step = plWGPUPipelineObserver::kBuildFailed;
+#endif
+        } else if (build.generation == fGeneration && fNewPipelineStateMap.find(record) == fNewPipelineStateMap.end()) {
+            fNewPipelineStateMap[record] = r->pipeline;
+            r->pipeline = nullptr;
+#ifdef PLASMA_TEST_HOOKS
+            step = plWGPUPipelineObserver::kBuildReady;
+            fPrewarmUnused[record] = build.serial;
+#endif
+        } else {
+            // A draw created it meanwhile (PipelineState), or it is from a released generation: its pipeline is
+            // released with the result.
+#ifdef PLASMA_TEST_HOOKS
+            step = plWGPUPipelineObserver::kBuildDropped;
+#endif
+        }
+#ifdef PLASMA_TEST_HOOKS
+        if (observer)
+            observer->OnPipelineBuild(*this, *record.state, step, build.serial, emscripten_get_now() - build.startMs);
+#endif
+        it = fPipelineBuilds.erase(it);
+    }
+}
+
 WGPUShaderModule plWGPUDevice::ShaderModule(const char* source, const char* label)
 {
     auto it = fShaderModules.find(source);
@@ -1772,6 +2127,15 @@ WGPUShaderModule plWGPUDevice::ShaderModule(const char* source, const char* labe
 
     WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
     wgsl.code = Str(source);
+#ifdef PLASMA_TEST_HOOKS
+    // The harness's per-run shader salt (plWGPUPipelineObserver::SaltShaderSource); the module stays keyed by its
+    // source.
+    std::string salted;
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+        if (observer->SaltShaderSource(source, salted))
+            wgsl.code = WGPUStringView{salted.data(), salted.size()};
+    }
+#endif
     WGPUShaderModuleDescriptor desc = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
     desc.nextInChain = &wgsl.chain;
     desc.label = Str(label);
@@ -1815,6 +2179,9 @@ void plWGPUDevice::SubmitCommandBuffer()
 {
     // plMetalDevice::SubmitCommandBuffer: end the pass, submit. No present call: the canvas
     // shows this frame when the client thread's task ends, and no GPU wait.
+    // The time it takes goes to the builds' pacing (NoteHeld): a browser that compiles pipelines on the GPU process's
+    // command stream can hold the submit until they are compiled.
+    const double t0 = emscripten_get_now();
     IEndRenderPass();
     ISubmitOffscreen();
 
@@ -1884,6 +2251,7 @@ void plWGPUDevice::SubmitCommandBuffer()
     fClearColor[0] = fClearColor[1] = fClearColor[2] = 0.f;
     fClearColor[3] = 1.f;
     fClearDepth = 1.f;
+    NoteHeld(emscripten_get_now() - t0);
 }
 
 WGPURenderPassEncoder plWGPUDevice::CurrentRenderCommandEncoder()
@@ -2203,12 +2571,8 @@ WGPUBindGroup plWGPUDevice::IFixedBindGroup(const std::array<void*, 24>& key)
     return group;
 }
 
-bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
+void plWGPUDevice::IFixedFunctionKey(const FixedFunctionDraw& draw, plWGPUFixedFunctionKey& key, plWGPUFixedState& fixed) const
 {
-    WGPURenderPassEncoder pass = CurrentRenderCommandEncoder();
-    if (!pass || (!draw.vertexBuffer && !draw.vertexBytes) || !draw.count)
-        return false;
-
     const DWORD*                                         rs = fD3D.fRenderState;
     const uint8_t                                        vertexKind = draw.plateVertex ? 1 : (draw.xyzTex1 ? 2 : 0);
     const plWGPUFixedFunctionPipelineState::VertexLayout layout =
@@ -2219,7 +2583,7 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
     while (numStages < plWGPUD3DDevice::kNumStages && fD3D.fStageState[numStages][D3DTSS_COLOROP] != D3DTOP_DISABLE)
         numStages++;
 
-    plWGPUFixedFunctionKey key = {};
+    key = {};
     key.blendEnabled = rs[D3DRS_ALPHABLENDENABLE] ? 1 : 0;
     key.srcBlend = key.blendEnabled ? uint8_t(rs[D3DRS_SRCBLEND]) : 0;
     key.dstBlend = key.blendEnabled ? uint8_t(rs[D3DRS_DESTBLEND]) : 0;
@@ -2240,7 +2604,7 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
     key.vertexFormat = vertexKind ? 0 : draw.vertexFormat;
     key.plateVertex = vertexKind;
 
-    plWGPUFixedState fixed;
+    fixed = plWGPUFixedState();
     fixed.topology = draw.topology;
     // D3DCULL_CW culls clockwise triangles: front faces are counter-clockwise in WebGPU's
     // terms (same window orientation), so cull the back (the plates confirm it).
@@ -2263,6 +2627,35 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
         fixed.depthCompare = WGPUCompareFunction_Always;
         fixed.depthWrite = false;
     }
+}
+
+bool plWGPUDevice::PrewarmFixedFunction(const FixedFunctionDraw& draw)
+{
+    // The fixed-function draw's pipeline (DrawFixedFunction) on the main target. Nothing is drawn: the walk's draw
+    // carries the buffer's vertex format and no buffer (a room not drawn yet has none).
+    if (!draw.count)
+        return false;
+    plWGPUFixedFunctionKey key;
+    plWGPUFixedState       fixed;
+    IFixedFunctionKey(draw, key, fixed);
+    plWGPUFixedFunctionPipelineState state(this, key, fixed);
+    return PrewarmPipelineStateFor(&state);
+}
+
+bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
+{
+    WGPURenderPassEncoder pass = CurrentRenderCommandEncoder();
+    if (!pass || (!draw.vertexBuffer && !draw.vertexBytes) || !draw.count)
+        return false;
+
+    const DWORD*                                         rs = fD3D.fRenderState;
+    const uint8_t                                        vertexKind = draw.plateVertex ? 1 : (draw.xyzTex1 ? 2 : 0);
+    const plWGPUFixedFunctionPipelineState::VertexLayout layout =
+        plWGPUFixedFunctionPipelineState::Layout(draw.vertexFormat, vertexKind);
+    plWGPUFixedFunctionKey key;
+    plWGPUFixedState       fixed;
+    IFixedFunctionKey(draw, key, fixed);
+    const uint32_t numStages = key.stages;
 
     // Pipeline, by packed key and the target's formats.
     // Bits 0-33 the key (vertex kind in 32-33), 34-43 the fixed state, 44-50 the colour
@@ -2509,21 +2902,13 @@ WGPURenderPipeline plWGPUDevice::IShaderPipeline(const plWGPUShaderKey& key, con
     return pipeline;
 }
 
-bool plWGPUDevice::DrawShader(const FixedFunctionDraw& draw)
+void plWGPUDevice::IShaderKey(const FixedFunctionDraw& draw, WGPUTextureFormat depthFormat, plWGPUShaderKey& key,
+                              plWGPUFixedState& fixed) const
 {
-    WGPURenderPassEncoder      pass = CurrentRenderCommandEncoder();
     const plWGPUShaderProgram* vs = fD3D.fVertexShader;
     const plWGPUShaderProgram* ps = fD3D.fPixelShader;
-    if (!pass || !draw.vertexBuffer || !draw.count || !vs || !ps)
-        return false;
-    if (strcmp(vs->family, ps->family) != 0) {
-        plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "shader draw pairs {} with {} (two families): not drawn",
-                               vs->entry, ps->entry);
-        return false;
-    }
-
-    const DWORD*    rs = fD3D.fRenderState;
-    plWGPUShaderKey key = {};
+    const DWORD*               rs = fD3D.fRenderState;
+    key = {};
     key.vs = uint8_t(vs->Index());
     key.ps = uint8_t(ps->Index());
     key.blendEnabled = rs[D3DRS_ALPHABLENDENABLE] ? 1 : 0;
@@ -2537,7 +2922,7 @@ bool plWGPUDevice::DrawShader(const FixedFunctionDraw& draw)
     // layers).
     key.fog = rs[D3DRS_FOGENABLE] ? 1 : 0;
 
-    plWGPUFixedState fixed;
+    fixed = plWGPUFixedState();
     fixed.topology = draw.topology;
     fixed.frontFace = WGPUFrontFace_CCW;
     switch (rs[D3DRS_CULLMODE]) {
@@ -2558,12 +2943,109 @@ bool plWGPUDevice::DrawShader(const FixedFunctionDraw& draw)
         fixed.depthCompare = WGPUCompareFunction_Always;
         fixed.depthWrite = false;
     }
-    if (fCurrentDepthFormat == WGPUTextureFormat_Undefined) {
+    if (depthFormat == WGPUTextureFormat_Undefined) {
         // A target without depth (the CompRT, zDepth 0, plWaveSet7::ICreateTransferRenderTarget): D3D9 with no depth
         // surface tests and writes nothing.
         fixed.depthCompare = WGPUCompareFunction_Always;
         fixed.depthWrite = false;
     }
+}
+
+bool plWGPUDevice::PrewarmShader(const FixedFunctionDraw& draw)
+{
+    // The shader-program draw's pipeline (DrawShader) on the main target: what DrawShader refuses is not built (the
+    // walk's draw has no buffer, as PrewarmFixedFunction's).
+    const plWGPUShaderProgram* vs = fD3D.fVertexShader;
+    const plWGPUShaderProgram* ps = fD3D.fPixelShader;
+    if (!draw.count || !vs || !ps || strcmp(vs->family, ps->family) != 0)
+        return false;
+    if (fPrewarmWalkActive && !fWalkTargetValid)
+        return false;
+    plWGPUShaderKey  key;
+    plWGPUFixedState fixed;
+    IShaderKey(draw, fPrewarmWalkActive ? fWalkDepthFormat : fDepthFormat, key, fixed);
+    plWGPUShaderPipelineState state(this, key, fixed, vs, ps);
+    return PrewarmPipelineStateFor(&state);
+}
+
+void plWGPUDevice::BeginPrewarmWalk()
+{
+    fPrewarmWalkActive = true;
+    IPrewarmBindTarget(nullptr);
+}
+
+void plWGPUDevice::EndPrewarmWalk()
+{
+    IPrewarmBindTarget(nullptr);
+    fPrewarmWalkActive = false;
+}
+
+void plWGPUDevice::IPrewarmBindTarget(plRenderTarget* target)
+{
+    // BindRenderTargetSurfaces' choice of target, as a record: a target without a colour view renders to the main
+    // target; a render target's depth is its own depth view's, and it draws single-sampled (CurrentTargetSampleCount).
+    // Unlike the draw, the walk makes no device ref: a pool's targets have theirs from LoadResources
+    // (IMakeRenderTargetPools, IFillAvRTPool), and a target without one is skipped (its draws build at the draw).
+    plWGPURenderTargetRef* ref = target ? (plWGPURenderTargetRef*)target->GetDeviceRef() : nullptr;
+    fWalkTargetValid = true;
+    if (target && (!ref || ref->IsDirty())) {
+        fWalkTarget = target;
+        fWalkTargetValid = false;
+        return;
+    }
+    if (!ref || !ref->fRenderView) {
+        fWalkTarget = nullptr;
+        fWalkColorFormat = fFramebufferFormat;
+        fWalkDepthFormat = fDepthFormat;
+        fWalkSampleCount = fSampleCount;
+        fWalkWidth = fDrawableWidth;
+        fWalkHeight = fDrawableHeight;
+    } else {
+        fWalkTarget = target;
+        fWalkColorFormat = ref->fFormat;
+        fWalkDepthFormat = ref->fDepthView ? ref->fDepthFormat : WGPUTextureFormat_Undefined;
+        fWalkSampleCount = 1;
+        fWalkWidth = target->GetWidth();
+        fWalkHeight = target->GetHeight();
+    }
+}
+
+void plWGPUDevice::IPrewarmClear(bool shouldClearColor, bool shouldClearDepth)
+{
+    // Clear's choice, for the walk's target: nothing to clear; or the load operation of a pass that has not started
+    // over the full target (no pipeline); or the clear quad, whose pipeline is started. A render target the walk
+    // pushed has no pass yet (BindRenderTargetSurfaces ends the pass at a target switch). The main target's pass is
+    // open in a scene frame before any render request: plClient::IDraw clears it first (ClearRenderTarget, with the
+    // view's default kRenderClearColor | kRenderClearDepth), and that clear begins it.
+    if (!fWalkTargetValid)
+        return;
+    shouldClearDepth = shouldClearDepth && fWalkDepthFormat != WGPUTextureFormat_Undefined;
+    if (!shouldClearColor && !shouldClearDepth)
+        return;
+    const bool fullTarget = fViewport[0] <= 0.f && fViewport[1] <= 0.f && fViewport[0] + fViewport[2] >= float(fWalkWidth) &&
+                            fViewport[1] + fViewport[3] >= float(fWalkHeight);
+    if (fWalkTarget && fullTarget)
+        return;
+    plWGPUClearPipelineState state(this, shouldClearColor, shouldClearDepth);
+    PrewarmPipelineStateFor(&state);
+}
+
+bool plWGPUDevice::DrawShader(const FixedFunctionDraw& draw)
+{
+    WGPURenderPassEncoder      pass = CurrentRenderCommandEncoder();
+    const plWGPUShaderProgram* vs = fD3D.fVertexShader;
+    const plWGPUShaderProgram* ps = fD3D.fPixelShader;
+    if (!pass || !draw.vertexBuffer || !draw.count || !vs || !ps)
+        return false;
+    if (strcmp(vs->family, ps->family) != 0) {
+        plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "shader draw pairs {} with {} (two families): not drawn",
+                               vs->entry, ps->entry);
+        return false;
+    }
+
+    plWGPUShaderKey  key;
+    plWGPUFixedState fixed;
+    IShaderKey(draw, fCurrentDepthFormat, key, fixed);
 
     uint32_t           missing;
     WGPURenderPipeline pipeline = IShaderPipeline(key, fixed, missing);
@@ -3147,6 +3629,16 @@ void plWGPUDevice::ReleaseAllDeviceObjects()
     for (auto& [record, pipeline] : fNewPipelineStateMap)
         wgpuRenderPipelineRelease(pipeline);
     fNewPipelineStateMap.clear();
+    // The builds queued and in flight belong to the released generation: their results are released with them, or by
+    // their callbacks when the instance cancels them (IIssuePipelineBuild).
+    fPipelineBuilds.clear();
+    fPipelineQueue.clear();
+    fPipelineQueued.clear();
+    fPaceIssued = 0;
+    fGeneration++;
+#ifdef PLASMA_TEST_HOOKS
+    fPrewarmUnused.clear();
+#endif
     for (auto& [source, module] : fShaderModules)
         wgpuShaderModuleRelease(module);
     fShaderModules.clear();

@@ -59,7 +59,11 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
 {
     // plDXPipeline::IPreprocessAvatarTextures: compose each outfit's texture into its
     // render target from the base texture and the items' layers.
-    IClearClothingOutfits(&fPrevClothingOutfits); // Frees anyone used last frame that we don't need this frame
+    // The prewarm's walk (plWGPUPipeline::IPrewarmTargets) runs it too, to start each quad's pipeline: it frees,
+    // assigns and clears nothing (the outfits, their targets and dirty items stay for the frame's compose), counts and
+    // reports nothing, and makes or binds no texture (IDrawClothingQuad).
+    if (!fPrewarmWalk)
+        IClearClothingOutfits(&fPrevClothingOutfits); // Frees anyone used last frame that we don't need this frame
 
     if (fClothingOutfits.empty())
         return;
@@ -67,7 +71,7 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
 #ifdef PLASMA_TEST_HOOKS
     // The test harness's clothing checks: the composites' stage-0 bias lines and the CPU recomposition of the
     // composites it reads back (plWGPUPipelineObserver.h).
-    plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get();
+    plWGPUPipelineObserver* observer = fPrewarmWalk ? nullptr : plWGPUPipelineObserver::Get();
     if (observer)
         observer->OnClothing(*this, plWGPUPipelineObserver::kComposeBegin, plWGPUClothingView());
 #endif
@@ -127,11 +131,21 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
         }
 
         if (rt == nullptr) {
-            rt = IGetNextAvRT();
-            co->fTargetLayer->SetTexture(rt);
+            if (fPrewarmWalk) {
+                // The walk takes no target from the pool (IGetNextAvRT does not check the pool's end, and only the
+                // frame's IClearClothingOutfits frees last frame's): every pool target has the same formats
+                // (pl3DPipeline::IFillAvRTPool), so the first stands for the one the compose will take.
+                if (fAvRTPool.empty())
+                    continue;
+                rt = fAvRTPool.front();
+            } else {
+                rt = IGetNextAvRT();
+                co->fTargetLayer->SetTexture(rt);
+            }
         }
 
-        fCounters.clothingOutfits++;
+        if (!fPrewarmWalk)
+            fCounters.clothingOutfits++;
 #ifdef PLASMA_TEST_HOOKS
         if (observer) {
             plWGPUClothingView view;
@@ -186,7 +200,8 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
             }
         }
         PopRenderTarget();
-        co->fDirtyItems.Clear();
+        if (!fPrewarmWalk)
+            co->fDirtyItems.Clear();
 #ifdef PLASMA_TEST_HOOKS
         if (observer) {
             plWGPUClothingView view;
@@ -200,24 +215,27 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
     fD3DDevice->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
     fView.fXformResetFlags = fView.kResetAll;
 
-    fClothingOutfits.swap(fPrevClothingOutfits);
+    if (!fPrewarmWalk)
+        fClothingOutfits.swap(fPrevClothingOutfits);
 }
 
 // plAVTexVert (plDXPipeline.cpp) with the D3D9 (u, v, 1) of a 2-float coordinate.
 void plWGPUPipeline::IDrawClothingQuad(float x, float y, float w, float h, float uOff, float vOff, plMipmap* tex)
 {
-    // plDXPipeline::IDrawClothingQuad
-    plWGPUTextureRef* ref = (plWGPUTextureRef*)tex->GetDeviceRef();
-    if (!ref || ref->IsDirty()) {
-        MakeTextureRef(tex);
-        ref = (plWGPUTextureRef*)tex->GetDeviceRef();
+    // plDXPipeline::IDrawClothingQuad (the prewarm's walk makes and binds no texture)
+    if (!fPrewarmWalk) {
+        plWGPUTextureRef* ref = (plWGPUTextureRef*)tex->GetDeviceRef();
+        if (!ref || ref->IsDirty()) {
+            MakeTextureRef(tex);
+            ref = (plWGPUTextureRef*)tex->GetDeviceRef();
+        }
+        if (!ref)
+            return;
+        if (!ref->fTexture)
+            IReloadTexture(tex, ref);
+        hsRefCnt_SafeAssign(fLayerRef[0], ref);
+        fD3DDevice->SetTexture(0, ref);
     }
-    if (!ref)
-        return;
-    if (!ref->fTexture)
-        IReloadTexture(tex, ref);
-    hsRefCnt_SafeAssign(fLayerRef[0], ref);
-    fD3DDevice->SetTexture(0, ref);
 
     plWGPUXYZTex1Vert ptr[4];
     plWGPUXYZTex1Vert vert;
@@ -249,9 +267,10 @@ void plWGPUPipeline::IDrawClothingQuad(float x, float y, float w, float h, float
     ptr[3].fUv[1] -= 1.f;
 
     // DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, ptr, sizeof(plAVTexVert))
-    fCounters.clothingQuads++;
+    if (!fPrewarmWalk)
+        fCounters.clothingQuads++;
 #ifdef PLASMA_TEST_HOOKS
-    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+    if (plWGPUPipelineObserver* observer = fPrewarmWalk ? nullptr : plWGPUPipelineObserver::Get()) {
         plWGPUClothingView view;
         view.x = x;
         view.y = y;
@@ -272,6 +291,9 @@ void plWGPUPipeline::IDrawClothingQuad(float x, float y, float w, float h, float
     draw.start = 0;
     draw.count = 4;
     draw.topology = WGPUPrimitiveTopology_TriangleStrip;
-    IDrawFixedFunction(draw);
+    if (fPrewarmWalk)
+        fDevice.PrewarmFixedFunction(draw); // the draw's pipeline, started; nothing drawn
+    else
+        IDrawFixedFunction(draw);
     fRowCtx.kind = kind;
 }

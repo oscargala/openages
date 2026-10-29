@@ -268,10 +268,13 @@ int32_t plWGPUPipeline::IHandleMaterial(hsGMaterial* newMat, uint32_t layer, con
 
     fCurrLayerIdx = layer;
 
-    // As plDXPipeline::IHandleMaterial (Stats.Show "Polys Per Material", plCalculatedProfiles.cpp)
-    if (newMat != fCurrMaterial)
-        plProfile_Inc(MatChange);
-    plProfile_Inc(LayChange);
+    // As plDXPipeline::IHandleMaterial (Stats.Show "Polys Per Material", plCalculatedProfiles.cpp); a draw's, not
+    // the prewarm's walk (plWGPUPipeline::IPrewarmPipelines).
+    if (!fPrewarmWalk) {
+        if (newMat != fCurrMaterial)
+            plProfile_Inc(MatChange);
+        plProfile_Inc(LayChange);
+    }
 
     /// Test for fail states
     if (IsDebugFlagSet(plPipeDbg::kFlagNoDecals) && (newMat->GetCompositeFlags() & hsGMaterial::kCompDecal)) {
@@ -548,7 +551,10 @@ void plWGPUPipeline::IHandleTextureStage(uint32_t stage, plLayerInterface* layer
     // UVW transform
     IHandleStageTransform(stage, layer);
 
-    // Create the texture (if necessary) and set it to the device.
+    // Create the texture (if necessary) and set it to the device. The prewarm's walk (plWGPUPipeline::
+    // IPrewarmPipelines) neither creates nor binds textures: no pipeline depends on them.
+    if (fPrewarmWalk)
+        return;
     if (texture = layer->GetTexture(); texture != nullptr) {
         ref = texture->GetDeviceRef();
         if (ref == nullptr || ref->IsDirty()) {
@@ -1176,7 +1182,7 @@ bool plWGPUPipeline::ISkipBumpMap(hsGMaterial* newMat, uint32_t& layer, const pl
     if (newMat && currSpan) {
         if (newMat->GetLayer(layer) && (newMat->GetLayer(layer)->GetMiscFlags() & hsGMatState::kMiscBumpChans) && (!currSpan->GetNumLights(false) || IsDebugFlagSet(plPipeDbg::kFlagNoBump))) {
             plWGPUPipeline* self = const_cast<plWGPUPipeline*>(this);
-            if (newMat->GetKey() && self->fBumpLogged.insert("skip " + newMat->GetKey()->GetUoid().StringIze()).second)
+            if (!fPrewarmWalk && newMat->GetKey() && self->fBumpLogged.insert("skip " + newMat->GetKey()->GetUoid().StringIze()).second)
                 plWGPULog("bump skipped (span has no lights): {} layer {}", newMat->GetKey()->GetUoid().StringIze(), layer);
             layer += 4;
             if (layer >= newMat->GetNumLayers())
@@ -1418,14 +1424,17 @@ void plWGPUPipeline::IStageStop(uint32_t stage)
 
 void plWGPUPipeline::IInvalidateState()
 {
-    // plDXPipeline::IInvalidateState
+    // plDXPipeline::IInvalidateState. A render-target switch of the prewarm's walk (plWGPUDevice::SetRenderTarget)
+    // keeps the texture refs, which the walk neither binds nor reads; the render state is reset as the draw's is.
     fLastEndingStage = 0;
     fTexturing = false;
     int i;
-    for (i = 0; i < 8; i++) {
-        hsRefCnt_SafeUnRef(fLayerRef[i]);
-        fLayerRef[i] = nullptr;
-        fD3DDevice->SetTexture(i, nullptr);
+    if (!fPrewarmWalk) {
+        for (i = 0; i < 8; i++) {
+            hsRefCnt_SafeUnRef(fLayerRef[i]);
+            fLayerRef[i] = nullptr;
+            fD3DDevice->SetTexture(i, nullptr);
+        }
     }
 
     fLayerState[0].fZFlags = 0;

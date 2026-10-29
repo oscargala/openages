@@ -52,9 +52,11 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <set>
 #include <string_theory/format>
 #include <string_theory/string_stream>
+#include <tuple>
 
 #include "HeadSpin.h"
 #include "ShaderSrc/ShaderTypes.h"
+#include "hsResMgr.h"
 #include "hsTimer.h"
 #include "pfCamera/plVirtualCamNeu.h"
 #include "plDrawable/plAuxSpan.h"
@@ -79,7 +81,13 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plPipeline/plSoftwareMeshSkinner.h"
 #include "plProfile.h"
 #include "plQuality.h"
+#include "plResMgr/plRegistryHelpers.h"
+#include "plResMgr/plRegistryNode.h"
+#include "plResMgr/plResManager.h"
+#include "plScene/plPageTreeMgr.h"
 #include "plScene/plRenderRequest.h"
+#include "plScene/plSceneNode.h"
+#include "plScene/plVisMgr.h"
 #include "plStatusLog/plStatusLog.h"
 #include "plSurface/hsGMaterial.h"
 #include "plSurface/plLayerAnimation.h"
@@ -95,6 +103,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plWGPUVertexShader.h"
 #include "plgDispatch.h"
 #include "pnEncryption/plChecksum.h"
+#include "pnKeyedObject/plKeyImp.h"
 #include "pnMessage/plPipeResMakeMsg.h"
 #include "pnNetCommon/plNetApp.h" // for dbg logging
 #ifdef PLASMA_TEST_HOOKS
@@ -175,6 +184,18 @@ plWGPUPipeline::plWGPUPipeline(hsDisplayHndl display, hsWindowHndl window, const
     fFrameWaveBiasSeen = false;
     fFrameWaveBiasMixed = false;
     fFrameWaveBiasBits = 0;
+    fPrewarmWalk = false;
+    fPrewarmSeat = nullptr;
+    fPrewarmGeneration = 0;
+    fPrewarmColor = WGPUTextureFormat_Undefined;
+    fPrewarmDepth = WGPUTextureFormat_Undefined;
+    fPrewarmSamples = 0;
+    fPrewarmFogType = plFogEnvironment::kNoFog;
+    fPrewarmFogDegenerate = false;
+    fPrewarmConditionsSet = false;
+#ifdef PLASMA_TEST_HOOKS
+    fPrewarmCensusDue = false;
+#endif
     fDeviceLost = false;
     fDevWasLost = false;
     fForceDeviceReset = false;
@@ -442,7 +463,7 @@ void plWGPUPipeline::ClearRenderTarget(const hsColorRGBA* col, const float* dept
         static std::set<std::array<float, 6>> sLogged;
         const std::array<float, 6>            now = {clearColor[0], clearColor[1], clearColor[2], clearColor[3], clearDepth,
                                                      float(fView.fRenderState & (kRenderClearColor | kRenderClearDepth))};
-        if (sLogged.insert(now).second) {
+        if (!fPrewarmWalk && sLogged.insert(now).second) {
             plWGPULog("clear: colour {} {} {} {} (D3DCOLOR {02x}{02x}{02x}{02x} ARGB) depth {}, target{}{}",
                       clearColor[0], clearColor[1], clearColor[2], clearColor[3],
                       uint32_t(clearColor[3] * 255.f + .5f), uint32_t(clearColor[0] * 255.f + .5f),
@@ -895,6 +916,15 @@ bool plWGPUPipeline::BeginRender()
     // offset transform
     RefreshScreenMatrices();
 
+    // The frame start's walks, before the canvas texture is acquired: the walked
+    // drawables again when the device, the main target or the default fog changed, and the rooms PrewarmRoom could
+    // not walk. A scene frame has waited for the builds already (PrewarmBeforeScene); this frame does not wait. Then
+    // the builds' pacing: the finished builds are taken and queued builds issued (plWGPUDevice::PumpPipelineBuilds).
+    if (fInSceneDepth == 0) {
+        IPrewarmFrameStart();
+        fDevice.PumpPipelineBuilds();
+    }
+
     // If this is the primary BeginRender, make sure we're really ready.
     if (fInSceneDepth++ == 0) {
         fDevice.BeginRender();
@@ -1274,6 +1304,956 @@ void plWGPUPipeline::LoadResources()
     hsStatusMessageF("End Device Reload t={}", hsTimer::GetSeconds());
     plNetClientApp::StaticDebugMsg("End Device Reload");
 }
+
+// MARK: - Pipelines built ahead of their first draw
+
+// On WebGPU a render pipeline is a shader compile in the browser's GPU process. Created at the draw that first needs
+// it (PipelineState), a new Age's pipelines compile one after another in the first frame that draws it; a cold
+// browser shader cache turns that into seconds of frozen arrival. D3D9 has no pipeline objects (its shader objects
+// are made at first use, plDXPipeline::ISetShaders, plDXVertexShader::GetShader); upstream Metal builds
+// asynchronously and waits at the draw (plMetalDevice::PipelineState, plMetalDevice.cpp:1138-1180), and its prewarm
+// entry (PrewarmPipelineStateFor, plMetalDevice.cpp:1183) is reached only from
+// plMetalPipelineState::PrewarmRenderPipelineState, which nothing calls. These are this port's callers:
+// - PrewarmRoom, from plClient::IRoomLoaded: a loaded room's drawables go through the draw's own material code
+//   (RenderSpans: ISetupTransforms, ILoopOverLayers, IHandleMaterial, ISetFogParameters, ISetShaders) with a render
+//   functor that draws nothing (plWGPUPrewarmTriListFunc), and the device starts their pipelines' builds, which
+//   compile in parallel while the load goes on. Everything the walk writes is restored after it.
+// - The frame start (IPrewarmFrameStart, at every primary BeginRender and before a scene frame): when the device,
+//   the main target or the default fog changed since the drawables were walked (an Age's .fni sets its fog at
+//   plAgeLoaded2Msg, after its rooms loaded), the walked drawables are walked again; rooms PrewarmRoom could not walk
+//   are walked there.
+// - PrewarmBeforeScene, from plClient::IDraw before the scene frame's BeginRender: this frame's render-target passes
+//   (the shadow maps with their blur, the clothing composites) and render requests (IPrewarmRequests: each as
+//   plRenderRequest::Render draws it, under its own target and view: an environment map's faces, a waveset's bump
+//   composite, a GUI dialog), then the wait for every build in flight, before the canvas texture is acquired.
+//   Progress frames (plClient::IDrawProgress) draw no scene and do not wait, so the builds compile through the load
+//   and the arrival frame waits only for what is left.
+
+bool plWGPUPipeline::PrewarmUoidLess::operator()(const plUoid& a, const plUoid& b) const
+{
+    const auto key = [](const plUoid& u) {
+        return std::make_tuple(u.GetLocation().GetSequenceNumber(), u.GetLocation().GetFlags(), u.GetClassType(),
+                               u.GetObjectID(), u.GetCloneID(), u.GetClonePlayerID());
+    };
+    return key(a) < key(b);
+}
+
+const char* plWGPUPipeline::IPrewarmSkipped() const
+{
+    // Only between frames: inside a frame the walk would write the frame's state, and the wait would suspend it with
+    // the canvas texture held.
+    if (fInSceneDepth != 0)
+        return "inside a frame";
+    if (!fDevice.CanPrewarm())
+        return "no canvas texture yet";
+    if (GetOverrideMaterial())
+        return "an override material is pushed";
+    return nullptr;
+}
+
+hsKeyedObject* plWGPUPipeline::IPrewarmLoadedObject(const plUoid& uoid)
+{
+    // The object if its page and key are loaded, and nothing is loaded to find out: hsResMgr::FindKey reads and holds
+    // a page's keys on a miss (plResManager::FindOriginalKey, plResManagerHelper::LoadAndHoldPageKeys); the page's
+    // own key list does not.
+    // A clone's key is not in its page's key list (plRegistryKeyList::FindKey looks up the original by object ID): it
+    // is found on the original, as plResManager::FindKey does (plResManager.cpp:579-587, plKeyImp::GetClone).
+    plRegistryPageNode* page = static_cast<plResManager*>(hsgResMgr::ResMgr())->FindPage(uoid.GetLocation());
+    if (!page)
+        return nullptr;
+    plKeyImp* key = page->FindKey(uoid);
+    if (!key)
+        return nullptr;
+    if (uoid.IsClone()) {
+        plKey clone = key->GetClone(uoid.GetClonePlayerID(), uoid.GetCloneID());
+        return clone ? clone->ObjectIsLoaded() : nullptr;
+    }
+    return key->ObjectIsLoaded();
+}
+
+void plWGPUPipeline::IPrewarmRoomDrawables(plSceneNode* node, std::vector<plDrawableSpans*>& drawables)
+{
+    for (plDrawable* drawable : node->GetDrawPool()) {
+        if (plDrawableSpans* spans = plDrawableSpans::ConvertNoRef(drawable))
+            drawables.push_back(spans);
+    }
+}
+
+void plWGPUPipeline::IPrewarmFog(uint8_t& type, bool& degenerate) const
+{
+    // ISetFogParameters' inputs from the default fog, outside any render request (PushRenderRequest sets it for a
+    // request and PopRenderRequest restores it): FOGENABLE is FALSE for kNoFog and for a linear fog whose start
+    // equals its end; shader layers take the linear path for every type.
+    const plFogEnvironment& fog = fView.GetDefaultFog();
+    type = fog.GetType();
+    degenerate = false;
+    if (type != plFogEnvironment::kNoFog) {
+        float       start, end;
+        hsColorRGBA color;
+        fog.GetPipelineParams(&start, &end, &color);
+        degenerate = start == end;
+    }
+}
+
+void plWGPUPipeline::PrewarmRoom(plSceneNode* node, bool afterAgeSettings)
+{
+    if (!node)
+        return;
+    // A page of an Age load whose .fni has not run (plClient::IRoomLoaded): the .fni sets the Age's default fog at
+    // plAgeLoaded2Msg, after the Age's last page (plAgeLoaderPaging.cpp:124-128, plNetCliAgeJoiner.cpp:413-416,
+    // plAgeLoader::ExecPendingAgeFniFiles, plAgeLoader.cpp:422-430), so a walk now would build the room's pipelines
+    // for the fog in force before it, which the Age never draws with. The room waits for PrewarmAgeSettings.
+    if (afterAgeSettings) {
+        fPrewarmDeferredRooms.push_back(node->GetKey()->GetUoid());
+        return;
+    }
+    std::vector<plDrawableSpans*> drawables;
+    IPrewarmRoomDrawables(node, drawables);
+    if (IPrewarmWalk(drawables, "room", node->GetKey()->GetName().c_str()))
+        IPrewarmNoteRoom(node);
+    else
+        fPrewarmPendingRooms.push_back(node->GetKey()->GetUoid());
+}
+
+void plWGPUPipeline::PrewarmAgeSettings()
+{
+    // The .fni's plConsoleMsg is dispatched in the dispatch loop of the plAgeLoaded2Msg that ran it, so the next frame
+    // start, which walks the released rooms, sees the Age's fog. A room unloaded meanwhile (an aborted load) is
+    // dropped; its draws, if it comes back, build at the draw or at its next load.
+    if (fPrewarmDeferredRooms.empty())
+        return;
+    size_t gone = 0;
+    for (const plUoid& uoid : fPrewarmDeferredRooms) {
+        if (plSceneNode::ConvertNoRef(IPrewarmLoadedObject(uoid)))
+            fPrewarmReleasedRooms.push_back(uoid);
+        else
+            gone++;
+    }
+    plStatusLog::AddLineSF("pipeline.log", 0xff00ffff,
+                           "pipeline prewarm: {} rooms of the Age kept for its .fni, walked at the next frame start{}",
+                           fPrewarmDeferredRooms.size() - gone,
+                           gone ? ST::format(" ({} no longer loaded, dropped)", gone) : ST::string());
+    fPrewarmDeferredRooms.clear();
+}
+
+bool plWGPUPipeline::PrewarmBeforeScene(const std::vector<plRenderRequest*>& preRequests,
+                                        const std::vector<plRenderRequest*>& postRequests, plPageTreeMgr* pageMgr,
+                                        bool mayDefer, const char* detail)
+{
+    if (fInSceneDepth != 0)
+        return false;
+    IPrewarmFrameStart();
+    // This frame's render-target passes and render requests are known now: plRenderMsg has submitted the shadow
+    // slaves (pl3DPipeline::SubmitShadowSlave) and the outfits (SubmitClothingOutfit, on plPreResourceMsg) and queued
+    // the render requests (plClient::IAddRenderRequest), and BeginRender draws the passes after it acquires the canvas
+    // texture (IPreprocessShadows, IPreprocessAvatarTextures; plDXPipeline::BeginRender, plDXPipeline.cpp:2972-2973),
+    // then plClient::IDraw the requests (IProcessPreRenderRequests, IProcessPostRenderRequests). The skip test runs
+    // once, here: a request's own override material (PushRenderRequest) must not stop its walk.
+    if (!IPrewarmSkipped()) {
+        IPrewarmTargets();
+        IPrewarmRequests(preRequests, postRequests, pageMgr);
+    }
+    if (mayDefer && fDevice.PipelineBuildsPending()) {
+        // Not drawn, as a frame whose device is not ready: plDXPipeline::BeginRender returns true after IResetDevice
+        // has cleared the shadow slaves (plDXPipeline.cpp:1909-1918, 2921-2926), and plClient::IDraw flushes the
+        // render requests (plClient.cpp:1929-1932). The outfits stay submitted, as there; the next primary
+        // BeginRender composites them (plDXPipeline.cpp:2972-2973).
+        const uint32_t pending = uint32_t(fDevice.PipelineBuildsPending());
+        fDevice.PumpPipelineBuilds();
+        IClearShadowSlaves();
+#ifdef PLASMA_TEST_HOOKS
+        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+            plWGPUPipelineObserver::PrewarmView view;
+            view.seat = "dropped";
+            view.detail = detail;
+            view.drained = pending;
+            view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
+            observer->OnPrewarm(*this, view);
+        }
+#endif
+        plStatusLog::AddLineSF("pipeline.log", 0xff00ffff,
+                               "pipeline prewarm: scene frame not drawn, {} pipeline builds pending after the load",
+                               pending);
+        return true;
+    }
+    IPrewarmDrain();
+    return false;
+}
+
+size_t plWGPUPipeline::PrewarmPending()
+{
+    if (fInSceneDepth != 0)
+        return 0;
+    IPrewarmFrameStart();
+    fDevice.PumpPipelineBuilds();
+    return fDevice.PipelineBuildsPending();
+}
+
+size_t plWGPUPipeline::PumpPipelineBuilds()
+{
+    fDevice.PumpPipelineBuilds();
+    return fDevice.PipelineBuildsPending();
+}
+
+void plWGPUPipeline::NotePrewarmWait(uint32_t before, uint32_t after, uint32_t frames, double ms, const char* detail)
+{
+#ifdef PLASMA_TEST_HOOKS
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+        plWGPUPipelineObserver::PrewarmView view;
+        view.seat = "wait";
+        view.detail = detail;
+        view.drained = before;
+        view.inFlightAfter = after;
+        view.frames = frames;
+        view.drainMs = ms;
+        observer->OnPrewarm(*this, view);
+    }
+#endif
+    if (ms > 100.0)
+        plStatusLog::AddLineSF("pipeline.log", 0xff00ffff,
+                               "pipeline prewarm: waited {.1f} ms for {} pipeline builds, {} progress frames drawn",
+                               ms, before, frames);
+}
+
+void plWGPUPipeline::IPrewarmPoolSpans(const std::vector<plDrawable*>& pool, std::vector<size_t>& spans)
+{
+    spans.clear();
+    spans.reserve(pool.size());
+    for (plDrawable* drawable : pool) {
+        const plDrawableSpans* ds = plDrawableSpans::ConvertNoRef(drawable);
+        spans.push_back(ds ? ds->GetSpanArray().size() : 0);
+    }
+}
+
+void plWGPUPipeline::IPrewarmNoteRoom(plSceneNode* node)
+{
+    // The walked room, its draw pool and its drawables' span counts, which IPrewarmFrameStart compares at every frame
+    // start.
+    const plUoid& uoid = node->GetKey()->GetUoid();
+    for (PrewarmRoomPool& room : fPrewarmRooms) {
+        if (room.node == uoid) {
+            room.pool = node->GetDrawPool();
+            IPrewarmPoolSpans(room.pool, room.spans);
+            return;
+        }
+    }
+    PrewarmRoomPool& room = fPrewarmRooms.emplace_back();
+    room.node = uoid;
+    room.pool = node->GetDrawPool();
+    IPrewarmPoolSpans(room.pool, room.spans);
+}
+
+void plWGPUPipeline::IPrewarmFrameStart()
+{
+    if (fInSceneDepth != 0 || IPrewarmSkipped())
+        return;
+
+    // The conditions the walked set was walked under: the device generation, the main target, the default fog.
+    uint8_t fogType;
+    bool    fogDegenerate;
+    IPrewarmFog(fogType, fogDegenerate);
+    const char* cause = nullptr;
+    if (!fPrewarmConditionsSet)
+        cause = "first";
+    else if (fPrewarmGeneration != fDevice.Generation())
+        cause = "device";
+    else if (fPrewarmColor != fDevice.fFramebufferFormat || fPrewarmDepth != fDevice.fDepthFormat ||
+             fPrewarmSamples != fDevice.fSampleCount)
+        cause = "target";
+    else if (fPrewarmFogType != fogType || fPrewarmFogDegenerate != fogDegenerate)
+        cause = "fog";
+    if (cause) {
+        std::vector<plDrawableSpans*> drawables;
+        for (const plUoid& uoid : fPrewarmWalked) {
+            if (plDrawableSpans* drawable = plDrawableSpans::ConvertNoRef(IPrewarmLoadedObject(uoid)))
+                drawables.push_back(drawable);
+        }
+        fPrewarmWalked.clear();
+        fPrewarmRequestsWalked.clear();
+        fPrewarmGeneration = fDevice.Generation();
+        fPrewarmColor = fDevice.fFramebufferFormat;
+        fPrewarmDepth = fDevice.fDepthFormat;
+        fPrewarmSamples = fDevice.fSampleCount;
+        fPrewarmFogType = fogType;
+        fPrewarmFogDegenerate = fogDegenerate;
+        fPrewarmConditionsSet = true;
+        if (!drawables.empty())
+            IPrewarmWalk(drawables, "re-walk", cause);
+    }
+
+    // The drawables that joined a walked room since it was walked: a cluster group's drawable, made and added to its
+    // room on the group's first plEvalMsg (plClusterGroup::UnPack, plClusterGroup.cpp:268-296), a clone placed in the
+    // clone room (an avatar's or an NPC's, plNetClientMgr::ILoadClone, plNetClientMgrLoad.cpp:107-111;
+    // plDrawInterface::ISetSceneNode), or a drawable that moved rooms (plDrawableSpans::SetSceneNode). The pool's
+    // contents are compared, not its size. A drawable whose span count changed since its walk is walked again: clothing
+    // appends an avatar's spans to its drawable after the avatar joined the clone room (plClothingOutfit::IAddItem,
+    // plAvatarClothing.cpp:553-589; plInstanceDrawInterface::AddSharedMesh; plDrawableSpans::AppendDISpans,
+    // plDrawableSpans.cpp:2100), and removal (RemoveDISpans, IRemoveGarbage) shrinks it.
+    {
+        std::vector<plDrawableSpans*> drawables;
+        std::vector<size_t>           spans;
+        ST::string                    rooms;
+        for (auto it = fPrewarmRooms.begin(); it != fPrewarmRooms.end();) {
+            plSceneNode* node = plSceneNode::ConvertNoRef(IPrewarmLoadedObject(it->node));
+            if (!node) {
+                it = fPrewarmRooms.erase(it);
+                continue;
+            }
+            const std::vector<plDrawable*>& pool = node->GetDrawPool();
+            IPrewarmPoolSpans(pool, spans);
+            if (pool != it->pool || spans != it->spans) {
+                uint32_t respanned = 0;
+                for (size_t i = 0; i < pool.size(); i++) {
+                    plDrawableSpans* ds = plDrawableSpans::ConvertNoRef(pool[i]);
+                    if (!ds)
+                        continue;
+                    const auto old = std::find(it->pool.begin(), it->pool.end(), pool[i]);
+                    const bool joined = old == it->pool.end();
+                    const bool changed = !joined && it->spans[old - it->pool.begin()] != spans[i];
+                    if (changed) {
+                        fPrewarmWalked.erase(ds->GetKey()->GetUoid());
+                        respanned++;
+                    }
+#ifdef PLASMA_TEST_HOOKS
+                    if (joined || changed) {
+                        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+                            observer->OnPrewarmJoined(*this, node, ds, joined ? -1 : int(it->spans[old - it->pool.begin()]));
+                    }
+#endif
+                }
+                rooms += ST::format("{}{}{}", rooms.empty() ? "" : ", ", node->GetKey()->GetName(),
+                                    respanned ? ST::format(" ({} drawables with changed spans)", respanned) : ST::string());
+                it->pool = pool;
+                it->spans = spans;
+                IPrewarmRoomDrawables(node, drawables);
+            }
+            ++it;
+        }
+        if (!drawables.empty())
+            IPrewarmWalk(drawables, "joined", rooms.c_str());
+    }
+
+    // The rooms PrewarmRoom could not walk, and an Age's rooms released after its .fni (PrewarmAgeSettings).
+    const auto walkRooms = [this](std::vector<plUoid>& list, const char* seat, const char* detail) {
+        if (list.empty())
+            return;
+        std::vector<plUoid> rooms;
+        rooms.swap(list);
+        std::vector<plSceneNode*>     nodes;
+        std::vector<plDrawableSpans*> drawables;
+        for (const plUoid& uoid : rooms) {
+            if (plSceneNode* node = plSceneNode::ConvertNoRef(IPrewarmLoadedObject(uoid))) {
+                nodes.push_back(node);
+                IPrewarmRoomDrawables(node, drawables);
+            }
+        }
+        if (IPrewarmWalk(drawables, seat, detail)) {
+            for (plSceneNode* node : nodes)
+                IPrewarmNoteRoom(node);
+        } else {
+            list.insert(list.end(), rooms.begin(), rooms.end());
+        }
+    };
+    walkRooms(fPrewarmPendingRooms, "pending rooms", nullptr);
+    if (!fPrewarmReleasedRooms.empty()) {
+        const ST::string fog = ST::format("after the .fni: fog type {}{}", fPrewarmFogType,
+                                          fPrewarmFogDegenerate ? " (degenerate)" : "");
+        walkRooms(fPrewarmReleasedRooms, "deferred rooms", fog.c_str());
+    }
+}
+
+void plWGPUPipeline::IPrewarmDrain()
+{
+    if (fInSceneDepth != 0 || !fDevice.PipelineBuildsPending())
+        return;
+    // A scene frame: no draw of it finds a build queued or in flight.
+    const uint32_t inFlight = uint32_t(fDevice.PipelineBuildsPending());
+    double         drainMs = 0.0;
+    fDevice.DrainPipelineBuilds(drainMs);
+#ifdef PLASMA_TEST_HOOKS
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+        plWGPUPipelineObserver::PrewarmView view;
+        view.seat = "drain";
+        view.drained = inFlight;
+        view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
+        view.drainMs = drainMs;
+        observer->OnPrewarm(*this, view);
+    }
+    if (fPrewarmCensusDue) {
+        fPrewarmCensusDue = false;
+        IPrewarmCensus();
+    }
+#endif
+    if (drainMs > 100.0)
+        plStatusLog::AddLineSF("pipeline.log", 0xff00ffff, "pipeline prewarm: waited {.1f} ms for {} pipeline builds",
+                               drainMs, inFlight);
+}
+
+// The state a walk writes, saved before it and restored after it (IPrewarmBegin, IPrewarmEnd): the emulated D3D9
+// device, the material state, the transforms, the camera (SetViewTransform: the device's camera matrices and fFrame,
+// which override layers read), the viewport, the light enables (IInvalidateState and ISetShadowLightState clear them)
+// and the base render target. The material code pushes and pops the override and piggy-back stacks in pairs, and the
+// render-target passes push and pop the views and targets in pairs: those are checked unchanged.
+struct plWGPUPipeline::PrewarmSaved
+{
+    plWGPUD3DDevice            d3d;
+    hsGMatState                layerState[8], oldLayerState[8];
+    hsGDeviceRef*              layerRef[8];
+    bool                       layerTransform[8];
+    float                      layerLODBias[8];
+    uint32_t                   layerUVWSrcs[8], layerXformFlags[8];
+    uint32_t                   lastEndingStage;
+    bool                       texturing;
+    bool                       textureInvalid;
+    const plWGPUShaderProgram* vertexShader;
+    const plWGPUShaderProgram* pixelShader;
+    hsGMaterial*               material;
+    uint32_t                   layerIdx;
+    uint32_t                   numLayers;
+    plLayerInterface*          lay;
+    bool                       forceMatHandle;
+    uint32_t                   renderLayer;
+    uint32_t                   lightingMethod;
+    bool                       liteState;
+    plWGPUFogSettings          fog;
+    hsMatrix44                 bumpDu, bumpDv, bumpDw;
+    bool                       unsupportedPass;
+    RowContext                 rowCtx;
+    plWGPUD3D9::D3DCULL        cullMode;
+    hsMatrix44                 matrixL2W, matrixW2L, matrixProj, matrixW2C, matrixC2W;
+    float                      viewport[4];
+    hsMatrix44                 viewL2W, viewW2L;
+    bool                       viewVectorsDirty;
+    bool                       leftHanded;
+    uint8_t                    xformResetFlags;
+    uint32_t                   frame;
+    hsBitVector                lightsEnabled, lightsHeld;
+    plRenderTarget*            baseRenderTarget;
+    // Checked unchanged.
+    size_t                     overLayers, piggyBacks;
+    int32_t                    activePiggyBacks;
+    plLayerInterface*          overBase;
+    plLayerInterface*          overAll;
+    hsGMatState                matOverOn, matOverOff;
+    plRenderTarget*            renderTarget;
+    hsGDeviceRef*              renderTargetRef;
+    size_t                     renderTargets, views, overrideMats;
+    double                     t0;
+};
+
+void plWGPUPipeline::IPrewarmBegin(PrewarmSaved& s, const char* seat)
+{
+    s.t0 = emscripten_get_now();
+    s.d3d = fDevice.fD3D;
+    for (int i = 0; i < 8; i++) {
+        s.layerState[i] = fLayerState[i];
+        s.oldLayerState[i] = fOldLayerState[i];
+        s.layerRef[i] = fLayerRef[i];
+        s.layerTransform[i] = fLayerTransform[i];
+        s.layerLODBias[i] = fLayerLODBias[i];
+        s.layerUVWSrcs[i] = fLayerUVWSrcs[i];
+        s.layerXformFlags[i] = fLayerXformFlags[i];
+    }
+    s.lastEndingStage = fLastEndingStage;
+    s.texturing = fTexturing;
+    s.textureInvalid = fSettings.fVeryAnnoyingTextureInvalidFlag;
+    s.vertexShader = fSettings.fCurrVertexShader;
+    s.pixelShader = fSettings.fCurrPixelShader;
+    s.material = fCurrMaterial;
+    hsRefCnt_SafeRef(s.material);
+    s.layerIdx = fCurrLayerIdx;
+    s.numLayers = fCurrNumLayers;
+    s.lay = fCurrLay;
+    s.forceMatHandle = fForceMatHandle;
+    s.renderLayer = fCurrRenderLayer;
+    s.lightingMethod = fCurrLightingMethod;
+    s.liteState = fCurrD3DLiteState;
+    s.fog = fCurrFog;
+    s.bumpDu = fBumpDuMatrix;
+    s.bumpDv = fBumpDvMatrix;
+    s.bumpDw = fBumpDwMatrix;
+    s.unsupportedPass = fUnsupportedProgramPass;
+    s.rowCtx = fRowCtx;
+    s.cullMode = fDevice.fCurrCullMode;
+    s.matrixL2W = fDevice.fMatrixL2W;
+    s.matrixW2L = fDevice.fMatrixW2L;
+    s.matrixProj = fDevice.fMatrixProj;
+    s.matrixW2C = fDevice.fMatrixW2C;
+    s.matrixC2W = fDevice.fMatrixC2W;
+    std::copy(std::begin(fDevice.fViewport), std::end(fDevice.fViewport), s.viewport);
+    s.viewL2W = fView.GetLocalToWorld();
+    s.viewW2L = fView.GetWorldToLocal();
+    s.viewVectorsDirty = fView.fViewVectorsDirty;
+    s.leftHanded = fView.fLocalToWorldLeftHanded;
+    s.xformResetFlags = fView.fXformResetFlags;
+    s.frame = fFrame;
+    s.lightsEnabled = fLights.fEnabledFlags;
+    s.lightsHeld = fLights.fHoldFlags;
+    s.baseRenderTarget = fCurrBaseRenderTarget;
+    s.overLayers = fOverLayerStack.size();
+    s.piggyBacks = fPiggyBackStack.size();
+    s.activePiggyBacks = fActivePiggyBacks;
+    s.overBase = fOverBaseLayer;
+    s.overAll = fOverAllLayer;
+    s.matOverOn = fMatOverOn;
+    s.matOverOff = fMatOverOff;
+    s.renderTarget = fCurrRenderTarget;
+    s.renderTargetRef = fCurrRenderTargetRef;
+    s.renderTargets = fRenderTargets.size();
+    s.views = fViewStack.size();
+    s.overrideMats = fOverrideMat.size();
+
+    // fForceMatHandle makes the first IHandleMaterial compute its state (IClearMembers, BeginRender).
+    fPrewarmWalk = true;
+    fPrewarmSeat = seat;
+    fPrewarmTally = PrewarmTally();
+    fForceMatHandle = true;
+    fDevice.BeginPrewarmWalk();
+}
+
+void plWGPUPipeline::IPrewarmEnd(PrewarmSaved& s)
+{
+    fDevice.EndPrewarmWalk();
+    fPrewarmWalk = false;
+    fPrewarmSeat = nullptr;
+
+    fDevice.fD3D = s.d3d;
+    for (int i = 0; i < 8; i++) {
+        fLayerState[i] = s.layerState[i];
+        fOldLayerState[i] = s.oldLayerState[i];
+        fLayerTransform[i] = s.layerTransform[i];
+        fLayerLODBias[i] = s.layerLODBias[i];
+        fLayerUVWSrcs[i] = s.layerUVWSrcs[i];
+        fLayerXformFlags[i] = s.layerXformFlags[i];
+        if (fLayerRef[i] != s.layerRef[i])
+            plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "pipeline prewarm: stage {} texture ref changed by the walk", i);
+    }
+    fLastEndingStage = s.lastEndingStage;
+    fTexturing = s.texturing;
+    fSettings.fVeryAnnoyingTextureInvalidFlag = s.textureInvalid;
+    fSettings.fCurrVertexShader = s.vertexShader;
+    fSettings.fCurrPixelShader = s.pixelShader;
+    hsRefCnt_SafeAssign(fCurrMaterial, s.material);
+    hsRefCnt_SafeUnRef(s.material);
+    fCurrLayerIdx = s.layerIdx;
+    fCurrNumLayers = s.numLayers;
+    fCurrLay = s.lay;
+    fForceMatHandle = s.forceMatHandle;
+    fCurrRenderLayer = s.renderLayer;
+    fCurrLightingMethod = s.lightingMethod;
+    fCurrD3DLiteState = s.liteState;
+    fCurrFog = s.fog;
+    fBumpDuMatrix = s.bumpDu;
+    fBumpDvMatrix = s.bumpDv;
+    fBumpDwMatrix = s.bumpDw;
+    fUnsupportedProgramPass = s.unsupportedPass;
+    fRowCtx = s.rowCtx;
+    fDevice.fCurrCullMode = s.cullMode;
+    fDevice.fMatrixL2W = s.matrixL2W;
+    fDevice.fMatrixW2L = s.matrixW2L;
+    fDevice.fMatrixProj = s.matrixProj;
+    fDevice.fMatrixW2C = s.matrixW2C;
+    fDevice.fMatrixC2W = s.matrixC2W;
+    std::copy(std::begin(s.viewport), std::end(s.viewport), fDevice.fViewport);
+    fView.SetLocalToWorld(s.viewL2W);
+    fView.SetWorldToLocal(s.viewW2L);
+    fView.fViewVectorsDirty = s.viewVectorsDirty;
+    fView.fLocalToWorldLeftHanded = s.leftHanded;
+    fView.fXformResetFlags = s.xformResetFlags;
+    fFrame = s.frame;
+    fLights.fEnabledFlags = s.lightsEnabled;
+    fLights.fHoldFlags = s.lightsHeld;
+    fCurrBaseRenderTarget = s.baseRenderTarget;
+    if (fOverLayerStack.size() != s.overLayers || fPiggyBackStack.size() != s.piggyBacks ||
+        fActivePiggyBacks != s.activePiggyBacks || fOverBaseLayer != s.overBase || fOverAllLayer != s.overAll ||
+        s.matOverOn != fMatOverOn || s.matOverOff != fMatOverOff)
+        plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "pipeline prewarm: the material overrides changed in the walk");
+    if (fCurrRenderTarget != s.renderTarget || fCurrRenderTargetRef != s.renderTargetRef ||
+        fRenderTargets.size() != s.renderTargets || fViewStack.size() != s.views || fOverrideMat.size() != s.overrideMats) {
+        plStatusLog::AddLineSF("pipeline.log", 0xffff0000,
+                               "pipeline prewarm: the render target, view or override material stack changed in the walk");
+        fCurrRenderTarget = s.renderTarget;
+        hsRefCnt_SafeAssign(fCurrRenderTargetRef, s.renderTargetRef);
+    }
+}
+
+bool plWGPUPipeline::IPrewarmWalk(const std::vector<plDrawableSpans*>& drawables, const char* seat, const char* detail)
+{
+#ifdef PLASMA_TEST_HOOKS
+    plWGPUPipelineObserver::PrewarmView view;
+    view.seat = seat;
+    view.detail = detail;
+    view.drawables = uint32_t(drawables.size());
+    const auto report = [&]() {
+        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+            observer->OnPrewarm(*this, view);
+    };
+#endif
+    if (const char* skipped = IPrewarmSkipped()) {
+#ifdef PLASMA_TEST_HOOKS
+        view.skipped = skipped;
+        report();
+#endif
+        return false;
+    }
+
+    // Once per drawable under the walked set's conditions (IPrewarmFrameStart).
+    std::vector<plDrawableSpans*> toWalk;
+    for (plDrawableSpans* drawable : drawables) {
+        if (fPrewarmWalked.insert(drawable->GetKey()->GetUoid()).second)
+            toWalk.push_back(drawable);
+    }
+    if (toWalk.empty()) {
+#ifdef PLASMA_TEST_HOOKS
+        view.walkedBefore = view.drawables;
+        view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
+        report();
+#endif
+        return true;
+    }
+
+    PrewarmSaved saved;
+    IPrewarmBegin(saved, seat);
+    for (plDrawableSpans* drawable : toWalk)
+        IPrewarmDrawable(drawable, nullptr);
+    const PrewarmTally tally = fPrewarmTally;
+    IPrewarmEnd(saved);
+    const double walkMs = emscripten_get_now() - saved.t0;
+
+#ifdef PLASMA_TEST_HOOKS
+    view.walkedBefore = view.drawables - uint32_t(toWalk.size());
+    view.spans = tally.spans;
+    view.requests = tally.requests;
+    view.started = tally.started;
+    view.opacityPasses = tally.opacityPasses;
+    view.opacityStarted = tally.opacityStarted;
+    view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
+    view.walkMs = walkMs;
+    fPrewarmCensusDue = true;
+    report();
+#endif
+    if (walkMs > 100.0)
+        plStatusLog::AddLineSF("pipeline.log", 0xff00ffff, "pipeline prewarm ({}): {} drawables, {} pipelines started; walk {.1f} ms",
+                               seat, toWalk.size(), tally.started, walkMs);
+    return true;
+}
+
+void plWGPUPipeline::IPrewarmTargets()
+{
+    // This frame's render-target passes, before BeginRender draws them, in its order (plDXPipeline::BeginRender,
+    // plDXPipeline.cpp:2972-2973): the shadow maps (IPreprocessShadows' loop, plDXPipeline.cpp:11199-11248), then the
+    // clothing composites (IPreprocessAvatarTextures). They run under the walk with the live device state, as the frame
+    // will: between here and IPreprocessShadows the frame's BeginRender sets only ZENABLE TRUE, which nothing in the
+    // port ever sets FALSE. Every slave and outfit is walked every scene frame, and the device's record lookup
+    // (PrewarmPipelineStateFor) is the only deduplication: a cast pass's key takes state the cast does not set
+    // (BLENDOP, kMiscTwoSided, the bound pixel shader) and per-span state (format, matrices, handedness), and a
+    // caster's spans are collected again each frame.
+    if (fShadows.empty() && fClothingOutfits.empty())
+        return;
+#ifdef PLASMA_TEST_HOOKS
+    const uint32_t inFlightBefore = uint32_t(fDevice.PipelineBuildsPending());
+#endif
+    PrewarmSaved saved;
+    IPrewarmBegin(saved, "targets");
+    if (!fShadows.empty()) {
+        // IPreprocessShadows without its own state changes: the pool cursors and the blur's scratch and destination
+        // targets start where IResetRenderTargetPools starts them (plDXPipeline.cpp:11065-11075) and are restored
+        // after; no slave leaves fShadows when its cast fails; no counter, row or anisotropy change (ISetAnisotropy
+        // sets sampler state only).
+        uint32_t        next[kMaxRenderTargetNext];
+        plRenderTarget* blurScratch[kMaxRenderTargetNext];
+        plRenderTarget* blurDest[kMaxRenderTargetNext];
+        std::copy(std::begin(fRenderTargetNext), std::end(fRenderTargetNext), next);
+        std::copy(std::begin(fBlurScratchRTs), std::end(fBlurScratchRTs), blurScratch);
+        std::copy(std::begin(fBlurDestRTs), std::end(fBlurDestRTs), blurDest);
+        std::fill(std::begin(fRenderTargetNext), std::end(fRenderTargetNext), 0);
+        std::fill(std::begin(fBlurScratchRTs), std::end(fBlurScratchRTs), nullptr);
+        std::fill(std::begin(fBlurDestRTs), std::end(fBlurDestRTs), nullptr);
+        for (plShadowSlave* slave : fShadows) {
+            // What IFindRenderTarget, SetupViewTransform, IPushShadowCastState (the map, fPipeData) and the blur (the
+            // debug blur scale, the swapped map) write, restored: the frame's cast computes them again from the same
+            // inputs (plShadowSlave::ISetupOrthoViewTransform and ISetupPerspViewTransform, plShadowSlave.cpp:53-216;
+            // plPerspDirSlave::SetupViewTransform, plPerspDirSlave.cpp:120-333; plDXPipeline::IRenderShadowCaster,
+            // plDXPipeline.cpp:11172-11182).
+            const uint32_t        width = slave->fWidth, height = slave->fHeight, flags = slave->fFlags;
+            const plViewTransform view = slave->fView;
+            const hsVector3       lightDir = slave->fLightDir;
+            const hsPoint3        lightPos = slave->fLightPos;
+            const hsMatrix44      worldToTexture = slave->fWorldToTexture;
+            void* const           pipeData = slave->fPipeData;
+            const float           blurScale = slave->fBlurScale;
+            IRenderShadowCaster(slave);
+            slave->fWidth = width;
+            slave->fHeight = height;
+            slave->fFlags = flags;
+            slave->fView = view;
+            slave->fLightDir = lightDir;
+            slave->fLightPos = lightPos;
+            slave->fWorldToTexture = worldToTexture;
+            slave->fPipeData = pipeData;
+            slave->fBlurScale = blurScale;
+        }
+        std::copy(next, next + kMaxRenderTargetNext, fRenderTargetNext);
+        std::copy(blurScratch, blurScratch + kMaxRenderTargetNext, fBlurScratchRTs);
+        std::copy(blurDest, blurDest + kMaxRenderTargetNext, fBlurDestRTs);
+    }
+    if (!fClothingOutfits.empty())
+        IPreprocessAvatarTextures();
+    IPrewarmEnd(saved);
+#ifdef PLASMA_TEST_HOOKS
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+        plWGPUPipelineObserver::PrewarmView view;
+        const ST::string                    detail = ST::format("{} slaves, {} outfits", fShadows.size(), fClothingOutfits.size());
+        view.seat = "targets";
+        view.detail = detail.c_str();
+        view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
+        view.started = view.inFlightAfter - inFlightBefore;
+        view.walkMs = emscripten_get_now() - saved.t0;
+        observer->OnPrewarm(*this, view);
+    }
+#endif
+}
+
+void plWGPUPipeline::IPrewarmRequests(const std::vector<plRenderRequest*>& preRequests,
+                                      const std::vector<plRenderRequest*>& postRequests, plPageTreeMgr* pageMgr)
+{
+    // This frame's render requests, as plClient::IDraw draws them: the pre list (IProcessPreRenderRequests,
+    // plClient.cpp:1942), then the post list (IProcessPostRenderRequests, :1952), each in its order, each through
+    // plRenderRequest::Render with plClient's page tree (IProcessRenderRequests, plClient.cpp:2154-2161), without its
+    // ack (plRenderRequest::Render, plRenderRequest.cpp:118-136; a dynamic environment map counts its outstanding faces
+    // on the ack, plDynamicEnvMap::MsgReceive, plDynamicEnvMap.cpp:285-289): the request's visibility forcing,
+    // PushRenderRequest (its target, view, render state, fog and override material), its clear
+    // (ClearRenderTarget(GetClearDrawable()): a clear drawable is drawn, as a waveset's bump composite,
+    // plWaveSet7::ICreateRenderRequest, plWaveSet7.cpp:2072-2095), its page tree's Render (its own, as a GUI dialog's,
+    // plPostEffectMod::ISetupRenderRequest, plPostEffectMod.cpp:87-109, else plClient's, as an environment map face's,
+    // plDynamicEnvMap::ISetupRenderRequests, plDynamicEnvMap.cpp:181-214), whose draws reach PrepForRender and
+    // RenderSpans' walk branches, and PopRenderRequest. A request is walked once per render target under the walked
+    // set's conditions (cleared by the re-walk, IPrewarmFrameStart). Its drawables are walked under its own target and
+    // view, never added to the walked set (a GUI dialog's drawables draw cull-front only through their request).
+    // The post requests follow the main Render in the frame: a key input their passes do not set themselves comes
+    // from a different predecessor here (a named residual, counted by the trace's draw-time creations).
+    std::vector<plRenderRequest*> requests;
+    for (const std::vector<plRenderRequest*>* list : {&preRequests, &postRequests}) {
+        for (plRenderRequest* req : *list) {
+            if (req && fPrewarmRequestsWalked.emplace(req, req->GetRenderTarget()).second)
+                requests.push_back(req);
+        }
+    }
+    if (requests.empty())
+        return;
+#ifdef PLASMA_TEST_HOOKS
+    const uint32_t inFlightBefore = uint32_t(fDevice.PipelineBuildsPending());
+    PrewarmTally   seatTally;
+#endif
+    PrewarmSaved saved;
+    IPrewarmBegin(saved, "requests");
+    for (plRenderRequest* req : requests) {
+        plPageTreeMgr* mgr = req->GetPageTreeMgr() ? req->GetPageTreeMgr() : pageMgr;
+#ifdef PLASMA_TEST_HOOKS
+        plWGPUPipelineObserver::PrewarmRequestView view;
+        view.request = req;
+        view.ownPageMgr = req->GetPageTreeMgr() != nullptr;
+        view.pageMgr = mgr;
+        const double   t0 = emscripten_get_now();
+        const uint32_t inFlight0 = uint32_t(fDevice.PipelineBuildsPending());
+        const auto     report = [&]() {
+            if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+                observer->OnPrewarmRenderRequest(*this, view);
+        };
+#endif
+        // A forcing no Eval would consume (an empty page tree, IBuildSpaceTree bails at plPageTreeMgr.cpp:142, or no
+        // vis manager) would outlive the walk: such a request is not walked. No shipped request is one.
+        if (!req->GetVisForce().Empty() && (!mgr || mgr->Empty() || !plPageTreeMgr::VisMgrEnabled() || !mgr->GetVisMgr())) {
+            plStatusLog::AddLineSF("pipeline.log", 0xffff0000,
+                                   "pipeline prewarm: a render request forces visibility its page tree never evaluates: not walked");
+#ifdef PLASMA_TEST_HOOKS
+            view.skipped = "its visibility forcing would outlive the walk";
+            report();
+#endif
+            continue;
+        }
+        fPrewarmTally = PrewarmTally();
+
+        // plRenderRequest::Render
+        if (!req->GetVisForce().Empty()) {
+            plGlobalVisMgr::Instance()->DisableNormal();
+            plGlobalVisMgr::Instance()->ForceVisSets(req->GetVisForce(), false);
+        }
+        PushRenderRequest(req);
+#ifdef PLASMA_TEST_HOOKS
+        view.walkTargetValid = fDevice.PrewarmTargetValid();
+#endif
+        ClearRenderTarget(req->GetClearDrawable());
+        if (mgr)
+            mgr->Render(this);
+        PopRenderRequest(req);
+
+#ifdef PLASMA_TEST_HOOKS
+        view.spans = fPrewarmTally.spans;
+        view.requests = fPrewarmTally.requests;
+        view.started = uint32_t(fDevice.PipelineBuildsPending()) - inFlight0;
+        view.opacityPasses = fPrewarmTally.opacityPasses;
+        view.opacityStarted = fPrewarmTally.opacityStarted;
+        view.walkMs = emscripten_get_now() - t0;
+        seatTally.spans += fPrewarmTally.spans;
+        seatTally.requests += fPrewarmTally.requests;
+        seatTally.opacityPasses += fPrewarmTally.opacityPasses;
+        seatTally.opacityStarted += fPrewarmTally.opacityStarted;
+        report();
+#endif
+    }
+    IPrewarmEnd(saved);
+#ifdef PLASMA_TEST_HOOKS
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+        plWGPUPipelineObserver::PrewarmView view;
+        const ST::string                    detail = ST::format("{} requests", requests.size());
+        view.seat = "requests";
+        view.detail = detail.c_str();
+        view.spans = seatTally.spans;
+        view.requests = seatTally.requests;
+        view.opacityPasses = seatTally.opacityPasses;
+        view.opacityStarted = seatTally.opacityStarted;
+        view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
+        view.started = view.inFlightAfter - inFlightBefore;
+        view.walkMs = emscripten_get_now() - saved.t0;
+        observer->OnPrewarm(*this, view);
+    }
+#endif
+}
+
+bool plWGPUPipeline::IPrewarmSpanFormat(plDrawableSpans* drawable, const plIcicle& span, uint8_t& vertexFormat,
+                                        int& numTris)
+{
+    // The span's buffers, for a walk. A room not drawn yet has no device refs (CheckVertexBufferRef runs in
+    // PrepForRender): the draw's vertex format is then the one SetupVertexBufferRef will give it. The refs are read
+    // only where they exist (GetVertexRef/GetIndexRef would grow the group's ref vectors). False where the draw would
+    // not draw (no buffers, IRenderBufferSpan's nil pair, no triangle). A particle span has its triangles only while
+    // its system has particles (plParticleSystem::IHandleRenderMsg: ResetParticleSystem, then
+    // AssignEmitterToParticleSystem, plDrawableSpans.cpp:3309-3367, at plRenderMsg): it is walked with one triangle,
+    // since the count is no key input (plWGPUDevice::IFixedFunctionKey, IShaderKey).
+    if (span.fGroupIdx >= drawable->GetNumBufferGroups())
+        return false;
+    plGBufferGroup* group = drawable->GetBufferGroup(span.fGroupIdx);
+    if (!group || span.fVBufferIdx >= group->GetNumVertexBuffers() || span.fIBufferIdx >= group->GetNumIndexBuffers())
+        return false;
+    if (span.fILength >= 3)
+        numTris = int(span.fILength / 3);
+    else if (span.fTypeMask & plSpan::kParticleSpan)
+        numTris = 1;
+    else
+        return false;
+    if (group->VertexReady(span.fVBufferIdx)) {
+        plWGPUVertexBufferRef* vRef = (plWGPUVertexBufferRef*)group->GetVertexBufferRef(span.fVBufferIdx);
+        if (!vRef->GetBuffer())
+            return false;
+        vertexFormat = vRef->fFormat;
+    } else
+        vertexFormat = plWGPUDevice::VertexBufferFormat(group->GetVertexFormat());
+    if (group->IndexReady(span.fIBufferIdx) && !((plWGPUIndexBufferRef*)group->GetIndexBufferRef(span.fIBufferIdx))->GetBuffer())
+        return false;
+    return true;
+}
+
+void plWGPUPipeline::IPrewarmDrawable(plDrawableSpans* drawable, const std::vector<int16_t>* visList)
+{
+    // RenderSpans (plDXPipeline::RenderSpans) for every span (visList null: a room's walk) or for the visible spans in
+    // their order (RenderSpans' walk branch: a render request's draws), each its own icicle: the same material,
+    // transforms and buffers as a merged run (CanMergeInto merges only spans that share them, plSpanTypes.cpp:226-285),
+    // and the triangle count is no key input. The material is RenderSpans' (an override material pushed by a render
+    // request replaces the span's). Not called: IEnableLights (no key carries a light), ICheckDynBuffers and the buffer
+    // checks (nothing is uploaded), ICountPass (nothing is drawn). Adds to fPrewarmTally.
+    hsMatrix44 lastL2W;
+    lastL2W.Reset();
+    ISetLocalToWorld(lastL2W, lastL2W);
+    const std::vector<plSpan*>& spanArray = drawable->GetSpanArray();
+    const size_t                count = visList ? visList->size() : spanArray.size();
+    for (size_t n = 0; n < count; n++) {
+        const size_t i = visList ? size_t((*visList)[n]) : n;
+        plSpan*      span = i < spanArray.size() ? spanArray[i] : nullptr;
+        if (!span || !(span->fTypeMask & plSpan::kIcicleSpan))
+            continue;
+        hsGMaterial* material = GetOverrideMaterial() ? GetOverrideMaterial() : drawable->GetMaterial(span->fMaterialIdx);
+        if (!material)
+            continue;
+        // A copy, so the walk changes no span; with no lights (the frame's lists are stale between frames), as a
+        // span the frame has not lit.
+        plIcicle ice(*static_cast<plIcicle*>(span));
+        ice.ClearLights();
+
+        uint8_t vertexFormat;
+        int     numTris;
+        if (!IPrewarmSpanFormat(drawable, ice, vertexFormat, numTris))
+            continue;
+
+        // The trace's pass, as RenderSpans names the span's draw (restored by IPrewarmEnd).
+        fRowCtx = RowContext();
+        fRowCtx.drawable = drawable;
+        fRowCtx.spanIndex = int(i);
+        fRowCtx.material = material;
+
+        ISetupTransforms(drawable, ice, lastL2W);
+
+        fPrewarmTally.spans++;
+        plWGPUPrewarmTriListFunc prewarm(this, vertexFormat, numTris);
+        ILoopOverLayers(prewarm, material, ice);
+        fPrewarmTally.requests += prewarm.fRequests;
+        fPrewarmTally.started += prewarm.fStarted;
+    }
+}
+
+#ifdef PLASMA_TEST_HOOKS
+void plWGPUPipeline::IPrewarmCensus()
+{
+    // Every loaded page's loaded plDrawableSpans against the walked set: the coverage of the room
+    // seat. A census only; nothing is walked from it. The iterators collect; the counting runs after the iteration.
+    plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get();
+    if (!observer)
+        return;
+    class plPrewarmCensus : public plRegistryPageIterator, public plRegistryKeyIterator
+    {
+    public:
+        std::vector<std::pair<plUoid, ST::string>> fDrawables; // a loaded drawable and its page's name
+        ST::string                                 fPage;
+        bool                                       EatPage(plRegistryPageNode* page) override
+        {
+            fPage = ST::format("{}_{}", page->GetPageInfo().GetAge(), page->GetPageInfo().GetPage());
+            page->IterateKeys(this, plDrawableSpans::Index());
+            return true;
+        }
+        bool EatKey(const plKey& key) override
+        {
+            if (plDrawableSpans::ConvertNoRef(key->ObjectIsLoaded()))
+                fDrawables.emplace_back(key->GetUoid(), fPage);
+            return true;
+        }
+    } census;
+    static_cast<plResManager*>(hsgResMgr::ResMgr())->IteratePages(&census);
+
+    uint32_t                                notWalked = 0;
+    std::vector<std::pair<ST::string, int>> byPage;
+    std::vector<plDrawableSpans*>           named;
+    for (const auto& [uoid, page] : census.fDrawables) {
+        if (fPrewarmWalked.count(uoid))
+            continue;
+        notWalked++;
+        if (named.size() < 16) {
+            if (plDrawableSpans* drawable = plDrawableSpans::ConvertNoRef(IPrewarmLoadedObject(uoid)))
+                named.push_back(drawable);
+        }
+        auto it = std::find_if(byPage.begin(), byPage.end(), [&page = page](const auto& p) { return p.first == page; });
+        if (it == byPage.end())
+            byPage.emplace_back(page, 1);
+        else
+            it->second++;
+    }
+    ST::string_stream pages;
+    for (size_t i = 0; i < byPage.size(); i++)
+        pages << (i ? ", " : "") << byPage[i].first << " (" << byPage[i].second << ")";
+    observer->OnPrewarmCensus(*this, uint32_t(census.fDrawables.size()), notWalked, pages.to_string().c_str());
+    for (plDrawableSpans* drawable : named)
+        observer->OnPrewarmCensusDrawable(*this, drawable);
+}
+#endif
 
 bool plWGPUPipeline::SetGamma(float eR, float eG, float eB)
 {
@@ -2097,6 +3077,11 @@ bool plWGPUPipeline::PrepForRender(plDrawable* d, std::vector<int16_t>& visList,
     if (!drawable)
         return false;
 
+    // The prewarm's walk of a render request (IPrewarmRequests) changes no span or buffer: every step below writes
+    // them (the spans' light lists, the index order, the particle and dynamic buffers, the skinned vertices).
+    if (fPrewarmWalk)
+        return true;
+
     // Find our lights
     ICheckLighting(drawable, visList, visMgr);
 
@@ -2179,6 +3164,13 @@ bool plWGPUPipeline::ICheckAuxBuffers(const plAuxSpan* span)
 void plWGPUPipeline::RenderSpans(plDrawableSpans* drawable, const std::vector<int16_t>& visList)
 {
     // plDXPipeline::RenderSpans
+    // The prewarm's walk of a render request (IPrewarmRequests): the visible spans go through this draw's material
+    // code with a render functor that draws nothing, and their pipelines are started (IPrewarmDrawable).
+    if (fPrewarmWalk) {
+        IPrewarmDrawable(drawable, &visList);
+        return;
+    }
+
     hsMatrix44   lastL2W;
     hsGMaterial* material;
 
@@ -2277,6 +3269,26 @@ void plWGPUPipeline::IRenderBufferSpan(const plIcicle& span, hsGDeviceRef* vb, h
     ILoopOverLayers(render, material, span);
 }
 
+const plLayerAnimation* plWGPUPipeline::IOpacityAnimation(plLayerInterface* lay, const plLayerAnimation** firstAnim)
+{
+    // The layer animation in the layer's chain (plLayerInterface::GetAttached) whose opacity controller drives the
+    // layer's opacity (plLayerAnimationBase::GetOpacityCtl, evaluated by
+    // plLayerAnimationBase::IEvalConvertedTime, plLayerAnimation.cpp:184-188), or null; firstAnim receives the chain's first layer animation.
+    const plLayerAnimation* opacityAnim = nullptr;
+    if (firstAnim)
+        *firstAnim = nullptr;
+    for (plLayerInterface* li = lay; li && !opacityAnim; li = li->GetAttached()) {
+        const plLayerAnimation* anim = plLayerAnimation::ConvertNoRef(li);
+        if (!anim)
+            continue;
+        if (firstAnim && !*firstAnim)
+            *firstAnim = anim;
+        if (anim->GetOpacityCtl())
+            opacityAnim = anim;
+    }
+    return opacityAnim;
+}
+
 bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMaterial* material, const plSpan& span)
 {
     // plDXPipeline::ILoopOverLayers (the kFlagNoRender and kFlagOverlayWire debug paths are
@@ -2298,27 +3310,35 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
             break;
         passIndex++;
 
+        // Set for the prewarm's walk of a pass the opacity test below skips this frame.
+        bool opacityAnimated = false;
         if ((fLayerState[0].fBlendFlags & hsGMatState::kBlendAlpha) && (material->GetLayer(iCurrMat)->GetOpacity() <= 0) && (fCurrLightingMethod != plSpan::kLiteVtxPreshaded)) // This opt isn't good for particles, since their
                                                                                                                                                                                 // material opacity is undefined/unused... -mcn
         {
+            // The prewarm's walk goes on with a pass whose opacity an animation drives (a link fade,
+            // plLayerLinkAnimation::Eval, plLayerAnimation.cpp:468-539): the opacity is no key input (the draw uploads
+            // it as a value), so the walk's key is the one the draw needs once the animation makes the pass visible.
+            if (!fPrewarmWalk || !IOpacityAnimation(material->GetLayer(iCurrMat), nullptr)) {
 #ifdef PLASMA_TEST_HOOKS
-            if (fRowsArmed) {
-                // The dump frame's skipped transparent layers: material, layer, opacity, and
-                // whether an opacity controller animates it (plLayerAnimation::GetOpacityCtl).
-                plLayerInterface*       lay = material->GetLayer(iCurrMat);
-                const plLayerAnimation* anim = nullptr;
-                for (plLayerInterface* li = lay; li && !anim; li = li->GetAttached())
-                    anim = plLayerAnimation::ConvertNoRef(li);
-                plWGPULog(
-                    "transparent layer skipped: material {} layer {} (index {}) opacity {.6f} "
-                    "opacity controller {}",
-                    material->GetKey() ? material->GetKey()->GetUoid().StringIze() : ST_LITERAL("-"),
-                    lay && lay->GetKey() ? lay->GetKey()->GetUoid().StringIze() : ST_LITERAL("-"), iCurrMat,
-                    lay ? lay->GetOpacity() : -1.f,
-                    anim ? (anim->GetOpacityCtl() ? (anim->GetKey() ? anim->GetKey()->GetUoid().StringIze() : ST_LITERAL("yes")) : ST_LITERAL("none (animation layer without one)")) : ST_LITERAL("none"));
-            }
+                if (fRowsArmed && !fPrewarmWalk) {
+                    // The dump frame's skipped transparent layers: material, layer, opacity, and
+                    // whether an opacity controller animates it (plLayerAnimation::GetOpacityCtl).
+                    plLayerInterface*       lay = material->GetLayer(iCurrMat);
+                    const plLayerAnimation* firstAnim = nullptr;
+                    const plLayerAnimation* opacityAnim = IOpacityAnimation(lay, &firstAnim);
+                    const plLayerAnimation* anim = opacityAnim ? opacityAnim : firstAnim;
+                    plWGPULog(
+                        "transparent layer skipped: material {} layer {} (index {}) opacity {.6f} "
+                        "opacity controller {}",
+                        material->GetKey() ? material->GetKey()->GetUoid().StringIze() : ST_LITERAL("-"),
+                        lay && lay->GetKey() ? lay->GetKey()->GetUoid().StringIze() : ST_LITERAL("-"), iCurrMat,
+                        lay ? lay->GetOpacity() : -1.f,
+                        anim ? (anim->GetOpacityCtl() ? (anim->GetKey() ? anim->GetKey()->GetUoid().StringIze() : ST_LITERAL("yes")) : ST_LITERAL("none (animation layer without one)")) : ST_LITERAL("none"));
+                }
 #endif
-            continue;
+                continue;
+            }
+            opacityAnimated = true;
         }
 
         ISetFogParameters(&span, material->GetLayer(iCurrMat));
@@ -2332,10 +3352,17 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
             IRestoreSpanLights();
 
         // Do the regular draw.
-        render.RenderPrims();
+        if (opacityAnimated) {
+            const size_t inFlight = fDevice.PipelineBuildsPending();
+            render.RenderPrims();
+            fPrewarmTally.opacityPasses++;
+            fPrewarmTally.opacityStarted += uint32_t(fDevice.PipelineBuildsPending() - inFlight);
+        } else {
+            render.RenderPrims();
+        }
 
-        // Take care of projections that get applied to each pass.
-        if (!fLights.fProjEach.empty() && !(fView.fRenderState & kRenderNoProjection)) {
+        // Take care of projections that get applied to each pass (not in the prewarm's walk).
+        if (!fPrewarmWalk && !fLights.fProjEach.empty() && !(fView.fRenderState & kRenderNoProjection)) {
             // Disable all the normal lights.
             IDisableSpanLights();
             normalLightsDisabled = true;
@@ -2351,19 +3378,20 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
     if (normalLightsDisabled)
         IRestoreSpanLights();
 
-    // Render any aux spans associated.
-    if (span.GetNumAuxSpans())
+    // Render any aux spans associated (not in the prewarm's walk).
+    if (!fPrewarmWalk && span.GetNumAuxSpans())
         IRenderAuxSpans(span);
 
     // Only render projections and shadows if we successfully rendered the span.
-    // j == -1 means we aborted render.
+    // j == -1 means we aborted render. The prewarm's walk renders no projection (it has no lights), and the receive
+    // pass of a span that could receive a shadow (IRenderShadowsOntoSpan).
     if (j >= 0) {
         // Projections that get applied to the frame buffer (after all passes).
-        if (!fLights.fProjAll.empty() && !(fView.fRenderState & kRenderNoProjection))
+        if (!fPrewarmWalk && !fLights.fProjAll.empty() && !(fView.fRenderState & kRenderNoProjection))
             IRenderProjections(render);
 
         // Handle render of shadows onto geometry.
-        if (!fShadows.empty())
+        if (!fShadows.empty() || fPrewarmWalk)
             IRenderShadowsOntoSpan(render, &span, material);
     }
 
@@ -2507,6 +3535,23 @@ void plWGPUPipeline::IRenderShadowsOntoSpan(const plWGPURenderPrimFunc& render, 
     // plDXPipeline::IRenderShadowsOntoSpan: after the usual render of a span (all
     // passes), project the shadows that affect it. slaveBits records them (pl3DPipeline
     // IAttachSlaveToReceivers, ISetShadowFromGroup).
+    if (fPrewarmWalk) {
+        // The prewarm's walk: the receive pass's pipeline for a span that could receive a shadow. A slave is attached
+        // to a span per frame (pl3DPipeline::IAttachSlaveToReceivers, ISetShadowFromGroup), always after
+        // IReceivesShadows(span, mat) and only while shadows are cast; the pass is what the first attached slave's
+        // iteration below draws, without the slave's textures and transforms (ISetupShadowSlaveTextures), its light's
+        // power and enable: no key field. No slave is read and nothing is counted.
+        if (plShadowCaster::ShadowCastDisabled() || !IReceivesShadows(span, mat))
+            return;
+        ISetupShadowRcvTextureStages(mat);
+        if (!IsDebugFlagSet(plPipeDbg::kFlagNoShadowApply)) {
+            const int kind = fRowCtx.kind;
+            fRowCtx.kind = kRowShadowReceive;
+            render.RenderPrims();
+            fRowCtx.kind = kind;
+        }
+        return;
+    }
     const hsBitVector& slaveBits = span->GetShadowSlaves();
 
     bool first = true;
@@ -2666,7 +3711,9 @@ void plWGPUPipeline::ISetShaders(plShader* vShader, plShader* pShader)
         hsAssert(vShader->IsVertexShader(), "Wrong type shader as vertex shader");
         ISetPipeConsts(vShader);
         // the waveset clock this frame draws with (plBiasVS::kTexU0 = c0, w)
-        if (vShader->GetDecl() && vShader->GetDecl()->GetID() == plShaderID::vs_BiasNormals) {
+        // (a draw's: not the prewarm's walk, which runs between frames, before the next frame's render dump settle
+        // reads this frame's clock in plWGPUPipelineObserver::OnBeginRender)
+        if (!fPrewarmWalk && vShader->GetDecl() && vShader->GetDecl()->GetID() == plShaderID::vs_BiasNormals) {
             const float w = vShader->GetFloat(plBiasVS::kTexU0, 3);
             uint32_t    bits;
             memcpy(&bits, &w, sizeof(bits));
@@ -2743,6 +3790,8 @@ void plWGPUPipeline::INoteUnsupportedProgram(plShader* shader, const ST::string&
     // (RenderPrims). Any other GetShader failure (no bytecode) also skips the pass, where
     // plDXPipeline would draw it with the fixed-function stages.
     fUnsupportedProgramPass = true;
+    if (fPrewarmWalk)
+        return; // the walk's pass is not drawn either; the draw counts and logs it
     const plShaderDecl* decl = shader->GetDecl();
     const uint32_t      id = decl ? uint32_t(decl->GetID()) : 0;
     if (id < plShaderID::kNumShaders) {
@@ -3678,7 +4727,7 @@ bool plWGPUPipeline::IDrawFixedFunction(const plWGPUDevice::FixedFunctionDraw& d
 #endif
     const bool ok = fDevice.DrawFixedFunction(draw);
 #ifdef PLASMA_TEST_HOOKS
-    // the armed frame's per-draw row (testhooks/wgpu/plTestHooksDrawRows.cpp)
+    // the armed frame's per-draw row (the private test harness's)
     if (fRowsArmed && fDevice.fLastDrawValid)
         if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
             plWGPUDrawView view;
@@ -3696,7 +4745,7 @@ bool plWGPUPipeline::IDrawShader(const plWGPUDevice::FixedFunctionDraw& draw, ui
 #endif
     const bool ok = fDevice.DrawShader(draw);
 #ifdef PLASMA_TEST_HOOKS
-    // the armed frame's shader row and its fixed-function row (testhooks/wgpu/plTestHooksShaderRows.cpp)
+    // the armed frame's shader row and its fixed-function row (the private test harness's)
     if (fRowsArmed && fDevice.fLastShaderDrawValid)
         if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
             plWGPUDrawView view;

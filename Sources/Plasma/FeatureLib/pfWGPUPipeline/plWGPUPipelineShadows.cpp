@@ -220,8 +220,10 @@ void plWGPUPipeline::IRenderBlurFromShadowMap(plRenderTarget* scratchRT, plRende
     fD3DDevice->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
     fLayerState[0].fBlendFlags = uint32_t(-1);
 
-    hsRefCnt_SafeAssign(fLayerRef[0], ref);
-    fD3DDevice->SetTexture(0, ref);
+    if (!fPrewarmWalk) { // the prewarm's walk binds no texture: no key reads one
+        hsRefCnt_SafeAssign(fLayerRef[0], ref);
+        fD3DDevice->SetTexture(0, ref);
+    }
 
     if (D3DTTFF_COUNT2 != fLayerXformFlags[0]) {
         fLayerXformFlags[0] = D3DTTFF_COUNT2;
@@ -245,8 +247,10 @@ void plWGPUPipeline::IRenderBlurFromShadowMap(plRenderTarget* scratchRT, plRende
         fD3DDevice->SetTextureStageState(i, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
         fLayerState[i].fBlendFlags = uint32_t(-1);
 
-        hsRefCnt_SafeAssign(fLayerRef[i], ref);
-        fD3DDevice->SetTexture(i, ref);
+        if (!fPrewarmWalk) {
+            hsRefCnt_SafeAssign(fLayerRef[i], ref);
+            fD3DDevice->SetTexture(i, ref);
+        }
 
         if (D3DTTFF_COUNT2 != fLayerXformFlags[i]) {
             fLayerXformFlags[i] = D3DTTFF_COUNT2;
@@ -317,15 +321,19 @@ void plWGPUPipeline::IRenderBlurBackToShadowMap(plRenderTarget* smap, plRenderTa
     hsAssert(ref, "Blur scratch map ref should have been made when it was rendered");
     if (!ref)
         return;
-    hsRefCnt_SafeAssign(fLayerRef[0], ref);
-    fD3DDevice->SetTexture(0, ref);
+    if (!fPrewarmWalk) { // the prewarm's walk binds no texture: no key reads one
+        hsRefCnt_SafeAssign(fLayerRef[0], ref);
+        fD3DDevice->SetTexture(0, ref);
+    }
 
     ref = (plWGPUTextureRef*)smap->GetDeviceRef();
     hsAssert(ref, "Blur src map ref should have been made when it was rendered");
     if (!ref)
         return;
-    hsRefCnt_SafeAssign(fLayerRef[1], ref);
-    fD3DDevice->SetTexture(1, ref);
+    if (!fPrewarmWalk) {
+        hsRefCnt_SafeAssign(fLayerRef[1], ref);
+        fD3DDevice->SetTexture(1, ref);
+    }
 
     // Color is ADDSIGNED2X(TFACTOR = black, scratch); alpha SELECTARG1(smap) in stage 1.
     fD3DDevice->SetRenderState(D3DRS_TEXTUREFACTOR, 0L);
@@ -362,6 +370,19 @@ void plWGPUPipeline::IRenderBlurBackToShadowMap(plRenderTarget* smap, plRenderTa
 void plWGPUPipeline::IDrawBlurQuad()
 {
     // DrawPrimitive(D3DPT_TRIANGLESTRIP, 0, 2) from the stream ISetBlurQuadToRender set.
+    // The prewarm's walk: the draw's pipeline, started; nothing drawn, no buffer, no counter.
+    if (fPrewarmWalk) {
+        const int kind = fRowCtx.kind;
+        fRowCtx.kind = kRowBlur;
+        plWGPUDevice::FixedFunctionDraw draw;
+        draw.xyzTex1 = true;
+        draw.start = 0;
+        draw.count = 4;
+        draw.topology = WGPUPrimitiveTopology_TriangleStrip;
+        fDevice.PrewarmFixedFunction(draw);
+        fRowCtx.kind = kind;
+        return;
+    }
     if (!fBlurQuad)
         return;
     fCounters.shadowBlurPasses++;
@@ -478,6 +499,12 @@ bool plWGPUPipeline::ISetBlurQuadToRender(plRenderTarget* smap)
             return false;
     }
 
+    // The prewarm's walk makes no buffer and leaves the stream source as it is (IDrawBlurQuad's walk draws none).
+    if (fPrewarmWalk) {
+        fD3DDevice->SetVertexShader(nullptr);
+        return true;
+    }
+
     // If we haven't created (or have lost) our resources, make them
     WGPUBuffer vBuffer = fBlurVBuffers[which];
     if (!vBuffer) {
@@ -499,29 +526,40 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
 {
     // plDXPipeline::IRenderShadowCasterSpan: render the span into the slave's map, generating a depth
     // map from this light to that span.
-    // Check that it's ready to render.
+    // The prewarm's walk (plWGPUPipeline::IPrewarmTargets) checks, uploads and marks no buffer: it takes the span's
+    // vertex format as the room walk does (IPrewarmSpanFormat) and starts the draw's pipeline.
+    plWGPUVertexBufferRef* vRef = nullptr;
+    plWGPUIndexBufferRef*  iRef = nullptr;
+    uint8_t                walkVertexFormat = 0;
+    int                    walkTris = 0;
+    if (fPrewarmWalk) {
+        if (!IPrewarmSpanFormat(drawable, span, walkVertexFormat, walkTris))
+            return;
+    } else {
+        // Check that it's ready to render.
 #ifdef PLASMA_TEST_HOOKS
-    fDevice.fUploadDrawable = drawable;
-    fDevice.fUploadGroup = span.fGroupIdx;
+        fDevice.fUploadDrawable = drawable;
+        fDevice.fUploadGroup = span.fGroupIdx;
 #endif
-    ICheckDynBuffers(drawable, drawable->GetBufferGroup(span.fGroupIdx), &span);
-    // The WebGPU buffers are made or refilled where Metal's are (RenderSpans).
-    CheckVertexBufferRef(drawable->GetBufferGroup(span.fGroupIdx), span.fVBufferIdx);
-    CheckIndexBufferRef(drawable->GetBufferGroup(span.fGroupIdx), span.fIBufferIdx);
+        ICheckDynBuffers(drawable, drawable->GetBufferGroup(span.fGroupIdx), &span);
+        // The WebGPU buffers are made or refilled where Metal's are (RenderSpans).
+        CheckVertexBufferRef(drawable->GetBufferGroup(span.fGroupIdx), span.fVBufferIdx);
+        CheckIndexBufferRef(drawable->GetBufferGroup(span.fGroupIdx), span.fIBufferIdx);
 #ifdef PLASMA_TEST_HOOKS
-    fDevice.fUploadDrawable = nullptr; // the upload record's owner context ends here
+        fDevice.fUploadDrawable = nullptr; // the upload record's owner context ends here
 #endif
 
-    plWGPUVertexBufferRef* vRef = (plWGPUVertexBufferRef*)drawable->GetVertexRef(span.fGroupIdx, span.fVBufferIdx);
-    plWGPUIndexBufferRef*  iRef = (plWGPUIndexBufferRef*)drawable->GetIndexRef(span.fGroupIdx, span.fIBufferIdx);
+        vRef = (plWGPUVertexBufferRef*)drawable->GetVertexRef(span.fGroupIdx, span.fVBufferIdx);
+        iRef = (plWGPUIndexBufferRef*)drawable->GetIndexRef(span.fGroupIdx, span.fIBufferIdx);
 
-    if (vRef == nullptr || iRef == nullptr || vRef->GetBuffer() == nullptr || iRef->GetBuffer() == nullptr) {
-        hsAssert(false, "Trying to render a nil buffer pair!");
-        return;
+        if (vRef == nullptr || iRef == nullptr || vRef->GetBuffer() == nullptr || iRef->GetBuffer() == nullptr) {
+            hsAssert(false, "Trying to render a nil buffer pair!");
+            return;
+        }
+
+        vRef->SetRebuiltSinceUsed(false);
+        iRef->SetRebuiltSinceUsed(false);
     }
-
-    vRef->SetRebuiltSinceUsed(false);
-    iRef->SetRebuiltSinceUsed(false);
 
     uint32_t vStart = span.fVStartIdx;
     uint32_t vLength = span.fVLength;
@@ -529,10 +567,8 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
     uint32_t iLength = span.fILength;
 
     // As DX: the FVF of the buffer and no vertex shader (the pixel shader
-    // is left as it is, as DX leaves it).
+    // is left as it is, as DX leaves it). The walk's render functor reads it too.
     fD3DDevice->SetVertexShader(nullptr);
-
-    plWGPURenderTriListFunc render(this, vRef, iRef, iRef->fOffset, vStart, vLength, iStart, iLength / 3);
 
     static hsMatrix44 emptyMatrix;
     hsMatrix44        m = emptyMatrix;
@@ -550,8 +586,14 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
     fRowCtx.group = drawable->GetBufferGroup(span.fGroupIdx);
     fRowCtx.vbIdx = span.fVBufferIdx;
     fRowCtx.slave = slave;
-    fCounters.shadowCastSpans++;
-    render.RenderPrims();
+    if (fPrewarmWalk) {
+        plWGPUPrewarmTriListFunc prewarm(this, walkVertexFormat, walkTris);
+        prewarm.RenderPrims();
+    } else {
+        plWGPURenderTriListFunc render(this, vRef, iRef, iRef->fOffset, vStart, vLength, iStart, iLength / 3);
+        fCounters.shadowCastSpans++;
+        render.RenderPrims();
+    }
     fRowCtx = saved;
 }
 
@@ -741,11 +783,13 @@ bool plWGPUPipeline::IPushShadowCastState(plShadowSlave* slave)
     fD3DDevice->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
     fLayerState[1].fBlendFlags = uint32_t(-1);
 
-    // Set texture to U_LUT
-    plWGPUTextureRef* ref = IGetULutTextureRef();
+    // Set texture to U_LUT (the prewarm's walk makes and binds no texture: no key reads one)
+    if (!fPrewarmWalk) {
+        plWGPUTextureRef* ref = IGetULutTextureRef();
 
-    hsRefCnt_SafeAssign(fLayerRef[0], ref);
-    fD3DDevice->SetTexture(0, ref);
+        hsRefCnt_SafeAssign(fLayerRef[0], ref);
+        fD3DDevice->SetTexture(0, ref);
+    }
 
     fD3DDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
     fD3DDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
@@ -753,7 +797,7 @@ bool plWGPUPipeline::IPushShadowCastState(plShadowSlave* slave)
 
     fD3DDevice->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_ALWAYS);
 
-    slave->fPipeData = renderTarg;
+    slave->fPipeData = renderTarg; // restored after the prewarm's walk (IPrewarmTargets)
 
     // Enable ZBuffering w/ write
     fD3DDevice->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
@@ -781,8 +825,10 @@ bool plWGPUPipeline::IPushShadowCastState(plShadowSlave* slave)
 
     // See ISetupShadowLight below for how the shadow light is used.
     // The shadow light isn't used in generating the shadow map, it's used
-    // in projecting the shadow map onto the scene.
-    ISetupShadowLight(slave);
+    // in projecting the shadow map onto the scene. (Not in the prewarm's walk: it takes a light and a D3D index for
+    // the frame, and no key carries a light.)
+    if (!fPrewarmWalk)
+        ISetupShadowLight(slave);
 
     return true;
 }
@@ -1021,8 +1067,9 @@ bool plWGPUPipeline::IRenderShadowCaster(plShadowSlave* slave)
     if (!IPushShadowCastState(slave))
         return false;
 
-    // Get the shadow caster ready to render.
-    if (!IPrepShadowCaster(slave->fCaster))
+    // Get the shadow caster ready to render (not in the prewarm's walk: PrepForRender and the software skinning
+    // write the caster's buffers, which the walk does not read).
+    if (!fPrewarmWalk && !IPrepShadowCaster(slave->fCaster))
         return false;
 
     // for each shadowCaster.fSpans
@@ -1039,9 +1086,12 @@ bool plWGPUPipeline::IRenderShadowCaster(plShadowSlave* slave)
         // Keep track of which shadow slaves this span was rendered into.
         // If self-shadowing is off, we use that to determine not to
         // project the shadow map onto its source geometry.
-        sp->SetShadowBit(slave->fIndex); // index set in SubmitShadowSlave
+        if (!fPrewarmWalk)
+            sp->SetShadowBit(slave->fIndex); // index set in SubmitShadowSlave
     }
 
+    // The prewarm's walk blurs too (IPrewarmTargets restores the pools, the blur targets and the slave): its passes
+    // record the pool targets' formats and start their pipelines.
     // Debug only.
     float blurScale = plShadowMaster::GetGlobalMaxBlur();
     if (blurScale >= 0.f)
@@ -1147,10 +1197,12 @@ void plWGPUPipeline::ISetupShadowRcvTextureStages(hsGMaterial* mat)
     fLayerState[0].fClampFlags = hsGMatState::kClampTexture;
 
     // Stage 1: the ULut. ColorArg1 = 1 - ULut, ColorArg2 = Current, ColorOp = Modulate;
-    // AlphaArg1 = ULut, AlphaArg2 = Current, AlphaOp = Subtract.
-    plWGPUTextureRef* ref = IGetULutTextureRef();
-    hsRefCnt_SafeAssign(fLayerRef[1], ref);
-    fD3DDevice->SetTexture(1, ref);
+    // AlphaArg1 = ULut, AlphaArg2 = Current, AlphaOp = Subtract. (The prewarm's walk makes and binds no texture.)
+    if (!fPrewarmWalk) {
+        plWGPUTextureRef* ref = IGetULutTextureRef();
+        hsRefCnt_SafeAssign(fLayerRef[1], ref);
+        fD3DDevice->SetTexture(1, ref);
+    }
 
     fD3DDevice->SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_TEXTURE | D3DTA_COMPLEMENT);
     fD3DDevice->SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_CURRENT);
@@ -1240,11 +1292,13 @@ void plWGPUPipeline::ISetupShadowRcvTextureStages(hsGMaterial* mat)
             fD3DDevice->SetTextureStageState(iNextStage, D3DTSS_TEXTURETRANSFORMFLAGS, xformFlags);
         }
 
-        // This ref should be pretty safe to use, because we just rendered it.
-        plWGPUTextureRef* lRef = (plWGPUTextureRef*)layer->GetTexture()->GetDeviceRef();
+        // This ref should be pretty safe to use, because we just rendered it. (Not bound by the prewarm's walk.)
+        if (!fPrewarmWalk) {
+            plWGPUTextureRef* lRef = (plWGPUTextureRef*)layer->GetTexture()->GetDeviceRef();
 
-        hsRefCnt_SafeAssign(fLayerRef[iNextStage], lRef);
-        fD3DDevice->SetTexture(iNextStage, lRef);
+            hsRefCnt_SafeAssign(fLayerRef[iNextStage], lRef);
+            fD3DDevice->SetTexture(iNextStage, lRef);
+        }
 
         iNextStage++;
 

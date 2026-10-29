@@ -84,11 +84,15 @@ void LogStats(double nowMs);
 // has run what was queued (a MessageChannel message, no timer clamp). For callers that pace their own draws, like the
 // progress manager's draws during a load (plClient::IProgressMgrCallbackProc draws at most at kMaxFrameRate, 60 Hz):
 // native presents there without waiting for the display (EndRender), so the load does not wait either.
-void plEmscriptenPresentYield();
+// Returns how long the thread was suspended, in ms, or -1 when the yield was refused (off the client thread, or
+// outside the tick's own stack) and returned at once. The pipeline's build pacing reads each suspension
+// (plWGPUDevice::NoteYield).
+double plEmscriptenPresentYield();
 
 // plEmscriptenFrameYield: as above, but the caller resumes at the next animation frame of the client thread's worker.
-// For loops that draw as fast as they run and rely on the present to pace them, like plClient::IPlayIntroMovie.
-void plEmscriptenFrameYield();
+// For loops that draw as fast as they run and rely on the present to pace them, like plClient::IPlayIntroMovie and
+// plClient::IWaitPipelineBuilds.
+double plEmscriptenFrameYield();
 
 // A wait on a JS promise from deep inside a tick (the GPU readback of
 // plWGPUPipeline::CaptureScreen and CompletePendingCaptures, wgpuInstanceWaitAny, which suspends
@@ -104,7 +108,7 @@ bool plEmscriptenSuspendBegin(const char* how);
 void plEmscriptenSuspendEnd();
 
 #ifdef PLASMA_TEST_HOOKS
-// The frame-loop test seam: what a harness build's frame-loop instrument (testhooks/em/plTestHooksFrameLoop.cpp) sees
+// The frame-loop test seam: what the private test harness's frame-loop instrument sees
 // of the loop's ticks, suspensions, yields and GPU waits. The product build has none of it: this class is declared only
 // under PLASMA_TEST_HOOKS, and every call site is under the same switch, so the product's loop is the same code without
 // the calls. In a harness build the pointer is null until plTestHooks::Install sets it, and every default does nothing.

@@ -142,6 +142,15 @@ protected:
     bool                    IUpdate();
     bool                    IDraw();
     bool                    IDrawProgress();
+#ifdef PLASMA_PIPELINE_WGPU
+    // The first scene frame after a load waits for the pipeline builds pending (queued or in
+    // flight) drawing progress frames, as the load drew them (IWaitPipelineBuilds). fPipelineLoadWait: a progress frame
+    // was drawn and no scene frame has been drawn since; fPipelineLoadDrops: the scene frames not drawn since then
+    // (plWGPUPipeline::PrewarmBeforeScene's mayDefer).
+    bool     fPipelineLoadWait = false;
+    uint32_t fPipelineLoadDrops = 0;
+    void     IWaitPipelineBuilds(class plWGPUPipeline* pipe);
+#endif
     
     plVirtualCam1*          fNewCamera;
 

@@ -59,6 +59,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <set>
 #include <string_theory/string>
 #include <string_theory/string_stream>
+#include <utility>
 #include <vector>
 
 #include "hsGMatState.h"
@@ -67,13 +68,20 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plWGPUDevice.h"
 #include "plWGPUSettings.h"
 #include "plWGPUShader.h"
+#include "pnKeyedObject/plUoid.h"
 
+class hsKeyedObject;
 class plAuxSpan;
 class plClothingOutfit;
+class plDrawable;
 class plGBufferGroup;
 class plIcicle;
+class plLayerAnimation;
+class plLayerInterface;
 class plMipmap;
+class plPageTreeMgr;
 class plRenderRequest;
+class plSceneNode;
 class plShadowCaster;
 class plShadowSlave;
 class plPlate;
@@ -142,10 +150,11 @@ protected:
     friend class plWGPUPlateManager;
     friend class plWGPUTextFont;
     friend class plWGPURenderTriListFunc;
+    friend class plWGPUPrewarmTriListFunc;
     friend class plWGPUVertexShader;
     friend class plWGPUFragmentShader;
 #ifdef PLASMA_TEST_HOOKS
-    // The test harness's pipeline observer (plWGPUPipelineObserver.h, testhooks/wgpu/plTestHooksPipelineObserver.h):
+    // The private test harness's pipeline observer (plWGPUPipelineObserver.h, the seam it implements):
     // its render dump reads and arms the frame's state, and the dump frame's per-draw and shader rows read each
     // draw's state.
     friend class plTestHooksPipelineObserver;
@@ -266,6 +275,41 @@ public:
     /// plCaptureRender::Update (the update phase), where no canvas texture is held. A readback
     /// that fails takes the capture back out of plCaptureRender (DropFailedCapture).
     void CompletePendingCaptures();
+
+    /// Pipelines built ahead of their first draw. plClient::IRoomLoaded: start the
+    /// builds of a loaded room's drawables (held rooms too); they compile in the browser's GPU process while the
+    /// load goes on. Between frames only; a room that cannot be walked now waits for the next frame start.
+    /// afterAgeSettings: the room is a page of an Age load whose .fni has not run yet; it waits for PrewarmAgeSettings.
+    void PrewarmRoom(plSceneNode* node, bool afterAgeSettings);
+    /// plClient::IDraw, at every frame (progress or scene) once no Age .fni is pending: the rooms PrewarmRoom kept for
+    /// the Age's settings are walked at the next frame start.
+    void PrewarmAgeSettings();
+    /// plClient::IDraw, immediately before the scene frame's BeginRender (no canvas texture is held): the frame
+    /// start's walks, this frame's render-target passes (the shadow slaves and clothing outfits submitted during
+    /// plRenderMsg) and its render requests (queued during plRenderMsg, drawn through pageMgr, plClient's page tree,
+    /// unless they have their own), then wait for every build queued or in flight, so the frame draws with none
+    /// pending. Progress frames (plClient::IDrawProgress) do not wait.
+    /// mayDefer: plClient is past a load and before its first scene frame, while the Age's initial state loads; then
+    /// a frame whose walks leave builds pending is not drawn, as a frame whose device is not ready
+    /// (plDXPipeline::BeginRender's IResetDevice, plDXPipeline.cpp:1903-1922, 2921-2926): its shadow slaves are
+    /// cleared, the builds are issued as the pacing allows, and it returns true; plClient then flushes the render
+    /// requests (IFlushRenderRequests) and waits for the builds drawing progress frames at the next IDraw
+    /// (IWaitPipelineBuilds). detail: the client's state, for the trace.
+    bool PrewarmBeforeScene(const std::vector<plRenderRequest*>& preRequests,
+                            const std::vector<plRenderRequest*>& postRequests, plPageTreeMgr* pageMgr,
+                            bool mayDefer = false, const char* detail = nullptr);
+
+    /// plClient::IWaitPipelineBuilds, before a scene frame that follows a load: the frame start's walks, a pump
+    /// (plWGPUDevice::PumpPipelineBuilds), and the builds then pending (queued or in flight).
+    size_t   PrewarmPending();
+    /// One pump of the builds' pacing, and the builds pending after it.
+    size_t   PumpPipelineBuilds();
+    /// True while the device is lost or being reset (BeginRender returns true then).
+    bool     PrewarmDeviceLost() const { return fDeviceLost; }
+    uint32_t PrewarmGeneration() const { return fDevice.Generation(); }
+    /// The trace of plClient's wait (IWaitPipelineBuilds): the builds pending before and after, the progress frames
+    /// drawn, the wait, and the client's state.
+    void     NotePrewarmWait(uint32_t before, uint32_t after, uint32_t frames, double ms, const char* detail);
 
     /// The frame loop's bracket around a GPU readback wait (CompletePendingCaptures, CaptureScreen's front-buffer
     /// read): begin(how) before the wait, end() after it. begin returns false where the loop cannot suspend, and then
@@ -418,6 +462,85 @@ private:
     void IRenderAuxSpan(const plSpan& span, const plAuxSpan* aux);
     void IRenderAuxSpans(const plSpan& span);
     void ISetupTransforms(plDrawableSpans* drawable, const plSpan& span, hsMatrix44& lastL2W);
+
+    // The layer animation that drives a layer's opacity (ILoopOverLayers' prewarm walk and its dump rows).
+    static const plLayerAnimation* IOpacityAnimation(plLayerInterface* lay, const plLayerAnimation** firstAnim);
+
+    // Pipelines built ahead of their first draw. A loaded room's drawables
+    // (PrewarmRoom) go through the draw's own material code (RenderSpans' path, with a render functor that draws
+    // nothing, plWGPUPrewarmTriListFunc) and each draw's pipeline is started on the device
+    // (plWGPUDevice::PrewarmFixedFunction, PrewarmShader); the next scene frame waits for them before it begins
+    // (PrewarmBeforeScene, plWGPUDevice::DrainPipelineBuilds). fPrewarmWalk is set while a walk runs: the steps that
+    // draw, count, log or touch textures are skipped then. A drawable is walked once per device generation, main
+    // target and default-fog signature (by Uoid); when one of them changes, the frame start walks the walked
+    // drawables again (IPrewarmFrameStart).
+    // The walk also renders a span's shadow-receive pass (IRenderShadowsOntoSpan), walks the drawables that
+    // join a walked room later (a cluster group's, plClusterGroup::UnPack; a clone in the clone room) or whose spans
+    // change after their walk (an avatar's clothing), this frame's shadow maps with their blur and clothing composites
+    // at PrewarmBeforeScene (IPrewarmTargets: IRenderShadowCaster, IPreprocessAvatarTextures) and its render requests
+    // as plRenderRequest::Render draws them (IPrewarmRequests: their clear drawables and their page trees' draws,
+    // under their own targets and views), and keeps an Age's rooms until its .fni has run.
+    struct PrewarmSaved;
+    // What the walks of one seat walked (IPrewarmDrawable, ILoopOverLayers), for its trace line.
+    struct PrewarmTally
+    {
+        uint32_t spans = 0;          // spans walked
+        uint32_t requests = 0;       // the draws they would make (the dry render functor's calls)
+        uint32_t started = 0;        // of them, the builds started
+        uint32_t opacityPasses = 0;  // passes walked though their opacity skips them now (an opacity animation's)
+        uint32_t opacityStarted = 0; // builds started for those
+    };
+    const char*           IPrewarmSkipped() const;
+    void                  IPrewarmBegin(PrewarmSaved& saved, const char* seat);
+    void                  IPrewarmEnd(PrewarmSaved& saved);
+    bool                  IPrewarmWalk(const std::vector<plDrawableSpans*>& drawables, const char* seat, const char* detail);
+    void                  IPrewarmDrawable(plDrawableSpans* drawable, const std::vector<int16_t>* visList);
+    bool                  IPrewarmSpanFormat(plDrawableSpans* drawable, const plIcicle& span, uint8_t& vertexFormat,
+                                             int& numTris);
+    void                  IPrewarmFrameStart();
+    void                  IPrewarmDrain();
+    void                  IPrewarmTargets();
+    void                  IPrewarmRequests(const std::vector<plRenderRequest*>& preRequests,
+                                           const std::vector<plRenderRequest*>& postRequests, plPageTreeMgr* pageMgr);
+    void                  IPrewarmNoteRoom(plSceneNode* node);
+    static void           IPrewarmPoolSpans(const std::vector<plDrawable*>& pool, std::vector<size_t>& spans);
+    void                  IPrewarmFog(uint8_t& type, bool& degenerate) const;
+    static hsKeyedObject* IPrewarmLoadedObject(const plUoid& uoid);
+    static void           IPrewarmRoomDrawables(plSceneNode* node, std::vector<plDrawableSpans*>& drawables);
+    struct PrewarmUoidLess
+    {
+        bool operator()(const plUoid& a, const plUoid& b) const;
+    };
+    bool                              fPrewarmWalk;
+    std::set<plUoid, PrewarmUoidLess> fPrewarmWalked;
+    std::vector<plUoid>               fPrewarmPendingRooms;  // scene nodes PrewarmRoom could not walk
+    std::vector<plUoid>               fPrewarmDeferredRooms; // an Age's scene nodes kept until its .fni has run
+    std::vector<plUoid>               fPrewarmReleasedRooms; // those, released by PrewarmAgeSettings
+    struct PrewarmRoomPool
+    {
+        plUoid                   node;
+        std::vector<plDrawable*> pool;  // the scene node's draw pool when it was walked
+        std::vector<size_t>      spans; // each pooled drawable's span count then (IPrewarmPoolSpans)
+    };
+    // A walked render request: the request and its render target.
+    using PrewarmRequestKey = std::pair<const plRenderRequest*, const plRenderTarget*>;
+
+    std::vector<PrewarmRoomPool> fPrewarmRooms;          // the walked rooms (IPrewarmNoteRoom)
+    std::set<PrewarmRequestKey>  fPrewarmRequestsWalked; // the render requests walked (IPrewarmRequests)
+    const char*                  fPrewarmSeat;           // the walk's seat, for the trace
+    PrewarmTally                 fPrewarmTally;          // the current walk's (IPrewarmWalk, IPrewarmRequests)
+    uint32_t                     fPrewarmGeneration;
+    WGPUTextureFormat            fPrewarmColor;
+    WGPUTextureFormat            fPrewarmDepth;
+    uint32_t                     fPrewarmSamples;
+    uint8_t                      fPrewarmFogType;
+    bool                         fPrewarmFogDegenerate;
+    bool                         fPrewarmConditionsSet;
+#ifdef PLASMA_TEST_HOOKS
+    bool fPrewarmCensusDue; // a walk ran since the last census (IPrewarmCensus)
+    void IPrewarmCensus();
+#endif
+
     bool IAvatarSort(plDrawableSpans* d, const std::vector<int16_t>& visList);
     bool ISoftwareVertexBlend(plDrawableSpans* drawable, const std::vector<int16_t>& visList);
 
@@ -497,7 +620,7 @@ private:
     void ICountPass();
 
     /// The context of the current draw. The test harness's pipeline observer records it in a dump frame's
-    /// per-draw rows (testhooks/wgpu/plTestHooksDrawRows.cpp): the render_ops fields, plus the emulated D3D9
+    /// per-draw rows: the render_ops fields, plus the emulated D3D9
     /// state each draw used and its lit colour and stage outputs at the draw's first vertex.
     enum RowKind
     {
@@ -542,7 +665,7 @@ private:
 
     /// A pass drawn with the device's vertex and pixel programs (plWGPURenderTriListFunc), and a request for a
     /// program this pipeline does not support. The test harness's pipeline observer records a dump frame's shader
-    /// rows (testhooks/wgpu/plTestHooksShaderRows.cpp).
+    /// rows.
     bool IDrawShader(const plWGPUDevice::FixedFunctionDraw& draw, uint32_t numVerts);
     void INoteUnsupportedProgram(plShader* shader, const ST::string& error);
 

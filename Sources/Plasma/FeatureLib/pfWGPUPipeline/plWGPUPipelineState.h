@@ -202,8 +202,9 @@ public:
     }
     size_t GetHash() const override;
 
-    uint16_t             GetID() const override { return plWGPUPipelineType::MaterialShader; }
-    plWGPUPipelineState* Clone() override { return new plWGPUFixedFunctionPipelineState(*this); }
+    uint16_t                      GetID() const override { return plWGPUPipelineType::MaterialShader; }
+    plWGPUPipelineState*          Clone() override { return new plWGPUFixedFunctionPipelineState(*this); }
+    const plWGPUFixedFunctionKey& GetKey() const { return fKey; }
 
     const char*      GetShaderSource() const override;
     const char*      GetVertexFunction() const override { return "fixedVertex"; }
@@ -249,19 +250,20 @@ public:
         const plWGPUShaderPipelineState* o = static_cast<const plWGPUShaderPipelineState*>(&p);
         return o->fKey.Pack() == fKey.Pack();
     }
-    size_t               GetHash() const override;
-    uint16_t             GetID() const override { return plWGPUPipelineType::Dynamic; }
-    plWGPUPipelineState* Clone() override { return new plWGPUShaderPipelineState(*this); }
-    const char*          GetShaderSource() const override;
-    const char*          GetVertexFunction() const override;
-    const char*          GetFragmentFunction() const override;
-    const char*          GetDescription() const override { return GetFragmentFunction(); }
-    plWGPUBindLayout     GetBindLayout() const override { return plWGPUBindLayout::kShader; }
-    bool                 ConfigureBlend(WGPUBlendState& blend) const override;
-    WGPUColorWriteMask   GetWriteMask() const override;
-    void                 ConfigureVertexDescriptor(std::vector<WGPUVertexBufferLayout>& layouts,
-                                                   std::vector<WGPUVertexAttribute>&    attributes) const override;
-    void                 ConfigureConstants(WGPUShaderStage stage, std::vector<WGPUConstantEntry>& constants) const override;
+    size_t                 GetHash() const override;
+    uint16_t               GetID() const override { return plWGPUPipelineType::Dynamic; }
+    plWGPUPipelineState*   Clone() override { return new plWGPUShaderPipelineState(*this); }
+    const plWGPUShaderKey& GetKey() const { return fKey; }
+    const char*            GetShaderSource() const override;
+    const char*            GetVertexFunction() const override;
+    const char*            GetFragmentFunction() const override;
+    const char*            GetDescription() const override { return GetFragmentFunction(); }
+    plWGPUBindLayout       GetBindLayout() const override { return plWGPUBindLayout::kShader; }
+    bool                   ConfigureBlend(WGPUBlendState& blend) const override;
+    WGPUColorWriteMask     GetWriteMask() const override;
+    void                   ConfigureVertexDescriptor(std::vector<WGPUVertexBufferLayout>& layouts,
+                                                     std::vector<WGPUVertexAttribute>&    attributes) const override;
+    void                   ConfigureConstants(WGPUShaderStage stage, std::vector<WGPUConstantEntry>& constants) const override;
 
 private:
     plWGPUShaderKey            fKey;

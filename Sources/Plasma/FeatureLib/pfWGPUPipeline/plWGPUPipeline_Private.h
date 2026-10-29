@@ -130,6 +130,56 @@ public:
     }
 };
 
+// The prewarm's render functor (plWGPUPipeline::IPrewarmWalk): the draw
+// plWGPURenderTriListFunc::RenderPrims would make, as far as its pipeline, which is started on the device. Its draw
+// carries the span's vertex format (the vertex ref's, or for a buffer not prepared yet the one
+// plWGPUDevice::SetupVertexBufferRef will give it) and no buffer. It draws nothing and counts nothing (no ICountPass,
+// no profile counts, no row context): it returns where RenderPrims and the device's draws refuse (an unsupported
+// program, no primitives, half a program pair, two program families).
+class plWGPUPrewarmTriListFunc : public plWGPURenderPrimFunc
+{
+protected:
+    plWGPUPipeline* fPipe;
+    uint8_t         fVertexFormat;
+    int             fNumTris;
+
+public:
+    mutable uint32_t fRequests; // the draws the span's passes would make
+    mutable uint32_t fStarted;  // of them, the ones whose pipeline build was started (neither built nor in flight)
+
+    plWGPUPrewarmTriListFunc(plWGPUPipeline* pipe, uint8_t vertexFormat, int iNumTris)
+        : fPipe(pipe), fVertexFormat(vertexFormat), fNumTris(iNumTris), fRequests(), fStarted()
+    {
+    }
+
+    bool RenderPrims() const override
+    {
+        if (fPipe->fUnsupportedProgramPass || !fNumTris)
+            return false;
+
+        plWGPUDevice::FixedFunctionDraw draw;
+        draw.vertexFormat = fVertexFormat;
+        draw.plateVertex = false;
+        draw.count = fNumTris * 3;
+        draw.topology = WGPUPrimitiveTopology_TriangleList;
+
+        const plWGPUD3DDevice* d3d = fPipe->fD3DDevice;
+        bool                   started;
+        if (d3d->fVertexShader || d3d->fPixelShader) {
+            if (!d3d->fVertexShader || !d3d->fPixelShader)
+                return false;
+            fRequests++;
+            started = fPipe->fDevice.PrewarmShader(draw);
+        } else {
+            fRequests++;
+            started = fPipe->fDevice.PrewarmFixedFunction(draw);
+        }
+        if (started)
+            fStarted++;
+        return false;
+    }
+};
+
 // plShadowVertStruct (plDXPipeline.cpp) with the D3D9 (u, v, 1) of a 2-float
 // coordinate (plWGPUFixedFunctionPipelineState::Layout).
 struct plWGPUXYZTex1Vert

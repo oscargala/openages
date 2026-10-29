@@ -57,6 +57,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <webgpu/webgpu.h>
 
 #include <array>
+#include <deque>
 #include <map>
 #include <memory>
 #include <string>
@@ -77,6 +78,7 @@ class plMipmap;
 class plCubicEnvironmap;
 class plWGPUPipelineState;
 enum class plWGPUBindLayout;
+struct plWGPUFixedFunctionKey;
 struct plWGPUShaderKey;
 struct plWGPUShaderUniforms;
 struct plWGPUFixedState;
@@ -149,13 +151,16 @@ public:
     bool BeginRender();
 
     /* Device Ref Functions **************************************************/
-    void SetupVertexBufferRef(plGBufferGroup* owner, uint32_t idx, VertexBufferRef* vRef);
-    void CheckStaticVertexBuffer(VertexBufferRef* vRef, plGBufferGroup* owner, uint32_t idx);
-    void FillVertexBufferRef(VertexBufferRef* ref, plGBufferGroup* group, uint32_t idx);
-    void FillVolatileVertexBufferRef(VertexBufferRef* ref, plGBufferGroup* group, uint32_t idx);
-    void SetupIndexBufferRef(plGBufferGroup* owner, uint32_t idx, IndexBufferRef* iRef);
-    void CheckIndexBuffer(IndexBufferRef* iRef);
-    void FillIndexBufferRef(IndexBufferRef* iRef, plGBufferGroup* owner, uint32_t idx);
+    void           SetupVertexBufferRef(plGBufferGroup* owner, uint32_t idx, VertexBufferRef* vRef);
+    /// The format of the vertex buffer SetupVertexBufferRef makes for a buffer group's format (the draw's
+    /// FixedFunctionDraw::vertexFormat).
+    static uint8_t VertexBufferFormat(uint8_t groupFormat);
+    void           CheckStaticVertexBuffer(VertexBufferRef* vRef, plGBufferGroup* owner, uint32_t idx);
+    void           FillVertexBufferRef(VertexBufferRef* ref, plGBufferGroup* group, uint32_t idx);
+    void           FillVolatileVertexBufferRef(VertexBufferRef* ref, plGBufferGroup* group, uint32_t idx);
+    void           SetupIndexBufferRef(plGBufferGroup* owner, uint32_t idx, IndexBufferRef* iRef);
+    void           CheckIndexBuffer(IndexBufferRef* iRef);
+    void           FillIndexBufferRef(IndexBufferRef* iRef, plGBufferGroup* owner, uint32_t idx);
 
     void SetupTextureRef(plBitmap* img, TextureRef* tRef);
     void CheckTexture(TextureRef* tRef);
@@ -246,6 +251,53 @@ public:
     /// pipeline keeps (blend, Z, cull, alpha test, fog). Both programs must be set.
     bool DrawShader(const FixedFunctionDraw& draw);
 
+    /// Pipelines built ahead of their first draw: upstream Metal's build machinery
+    /// (plMetalDevice::StartPipelineBuild and PrewarmPipelineStateFor, plMetalDevice.cpp:1083-1201), for the walk
+    /// plWGPUPipeline makes over a loaded room's drawables (plWGPUPipeline::PrewarmRoom, IPrewarmWalk).
+    /// The main target's formats are known once the canvas has given a texture (CreateNewCommandBuffer).
+    bool     CanPrewarm() const { return fCanvasFormatKnown; }
+    /// Start building the pipeline that a fixed-function draw, or a shader-program draw, with the current D3D9 state
+    /// would use on the main target. Nothing when that pipeline is built or being built. True if a build started.
+    bool     PrewarmFixedFunction(const FixedFunctionDraw& draw);
+    bool     PrewarmShader(const FixedFunctionDraw& draw);
+    /// The bracket of plWGPUPipeline's prewarm walks. Inside it the walk's target is the main target until the walk
+    /// pushes a render target: SetRenderTarget then records the target a draw would bind, without binding it
+    /// (IPrewarmBindTarget), Clear starts the clear quad's pipeline where the draw would draw that quad
+    /// (IPrewarmClear), and the Prewarm entries build for the walk's target.
+    void     BeginPrewarmWalk();
+    void     EndPrewarmWalk();
+    /// In a walk: whether the walk's target can be built for (a render target without a clean device ref cannot).
+    bool     PrewarmTargetValid() const { return fWalkTargetValid; }
+    bool     InPrewarmWalk() const { return fPrewarmWalkActive; }
+    /// Issue the builds still queued, then wait for every build in flight (wgpuInstanceWaitAny, a JSPI suspension
+    /// inside a BeginGPUWait/EndGPUWait bracket) and keep the pipelines they made. Called before a scene frame acquires
+    /// the canvas (plWGPUPipeline::PrewarmBeforeScene). When the frame loop refuses the wait they stay in flight; a
+    /// draw that needs one meanwhile creates it synchronously (PipelineState). waitMs accumulates.
+    void     DrainPipelineBuilds(double& waitMs);
+    /// The builds' pacing, at every frame start (plWGPUPipeline::BeginRender) and in plClient's wait for them
+    /// (IWaitPipelineBuilds); it never suspends. The walks' builds wait in a queue (PrewarmPipelineStateFor), and
+    /// the pump keeps at most fPipelineCap of them in flight: it takes the finished builds' pipelines
+    /// (wgpuInstanceWaitAny with timeout 0), adapts the cap to how long the client thread was held after builds
+    /// were issued (the frame loop's yields, NoteYield, and the frames' submits, NoteHeld), then issues queued builds
+    /// up to the cap. A browser that compiles a pipeline on the GPU process's command stream (WebKit) holds the
+    /// client thread's next task, a submit or the canvas's present until the builds issued before it are compiled;
+    /// the cap keeps that to one build at a time there, and grows to the whole queue where builds compile beside
+    /// the stream (Chromium). D3D9 has no pipeline compile (render state is set per
+    /// draw) and Metal never paces its builds (plMetalDevice::StartPipelineBuild, plMetalDevice.cpp:1083-1135):
+    /// the pacing is the port's own scheduling, and it changes only when a build is issued, never what is built.
+    void     PumpPipelineBuilds();
+    /// Bumped when the device's objects are released (ReleaseAllDeviceObjects): the pipelines and the builds queued
+    /// and in flight belong to one generation.
+    uint32_t Generation() const { return fGeneration; }
+    /// The builds in flight, and those queued or in flight.
+    size_t   PipelineBuildsInFlight() const { return fPipelineBuilds.size(); }
+    size_t   PipelineBuildsPending() const { return fPipelineBuilds.size() + fPipelineQueued.size(); }
+
+    /// The frame loop's yields (plEmscriptenFrameLoop's Yield): how long each suspended the client thread.
+    static void NoteYield(double waitedMs);
+    /// A frame's submit (SubmitCommandBuffer): how long it held the client thread.
+    static void NoteHeld(double heldMs);
+
 #ifdef PLASMA_TEST_HOOKS
     /// The last shader draw's uniforms, kept for the rows (fKeepLastDraw).
     bool                 fLastShaderDrawValid;
@@ -320,6 +372,111 @@ private:
 
     WGPUShaderModule   ShaderModule(const char* source, const char* label);
     WGPUPipelineLayout PipelineLayout(plWGPUBindLayout layout);
+
+    // The render pipeline descriptor of one record, with the storage it points into: the synchronous create
+    // (PipelineState) and the asynchronous one (PrewarmPipelineStateFor) build it with the same function.
+    struct PipelineDescriptor
+    {
+        std::vector<WGPUVertexBufferLayout> layouts;
+        std::vector<WGPUVertexAttribute>    attributes;
+        std::vector<WGPUConstantEntry>      vertexConstants;
+        std::vector<WGPUConstantEntry>      fragmentConstants;
+        WGPUBlendState                      blend;
+        WGPUColorTargetState                target;
+        WGPUFragmentState                   fs;
+        WGPUDepthStencilState               ds;
+        WGPURenderPipelineDescriptor        desc;
+    };
+    void IPipelineDescriptor(const plWGPUPipelineRecord& record, plWGPUPipelineState* pipelineState, PipelineDescriptor& d);
+
+    // A build in flight (wgpuDeviceCreateRenderPipelineAsync, WaitAnyOnly). Its callback writes only the shared
+    // result (as IReadTexture's map); DrainPipelineBuilds moves a delivered pipeline into fNewPipelineStateMap, and a
+    // result nobody takes releases its pipeline (~PipelineBuildResult).
+    struct PipelineBuildResult
+    {
+        PipelineBuildResult() = default;
+        PipelineBuildResult(const PipelineBuildResult&) = delete;
+        PipelineBuildResult& operator=(const PipelineBuildResult&) = delete;
+        ~PipelineBuildResult()
+        {
+            if (pipeline)
+                wgpuRenderPipelineRelease(pipeline);
+        }
+
+        bool                          done = false;
+        WGPUCreatePipelineAsyncStatus status = WGPUCreatePipelineAsyncStatus_Force32;
+        WGPURenderPipeline            pipeline = nullptr;
+        std::string                   message;
+    };
+    struct PipelineBuild
+    {
+        WGPUFuture                           future{};
+        std::shared_ptr<PipelineBuildResult> result;
+        uint32_t                             generation = 0;     // fGeneration at the start
+        double                               startMs = 0.0;      // queued
+        bool                                 duplicated = false; // a draw created the pipeline while this was in flight
+#ifdef PLASMA_TEST_HOOKS
+        uint32_t serial = 0; // the trace's build number
+#endif
+    };
+    std::unordered_map<plWGPUPipelineRecord, PipelineBuild, plWGPUPipelineRecordHashFunction> fPipelineBuilds;
+    uint32_t                                                                                  fGeneration;
+    bool                                                                                      fCanvasFormatKnown;
+
+    // The builds waiting to be issued (PumpPipelineBuilds), in the order the walks asked for them. A draw that needs
+    // one takes it out of fPipelineQueued (PipelineState); its entry in the order is then skipped.
+    struct PipelineQueued
+    {
+        uint32_t generation = 0; // fGeneration when queued
+        double   queuedMs = 0.0;
+#ifdef PLASMA_TEST_HOOKS
+        uint32_t serial = 0;
+#endif
+    };
+    std::deque<plWGPUPipelineRecord>                                                           fPipelineQueue;
+    std::unordered_map<plWGPUPipelineRecord, PipelineQueued, plWGPUPipelineRecordHashFunction> fPipelineQueued;
+
+    // The pacing (PumpPipelineBuilds): the builds kept in flight, and whether builds were issued since the cap was
+    // last adapted (the yields after an issue decide it).
+    uint32_t fPipelineCap = 1;
+    uint32_t fPaceIssued = 0;
+
+    // The pump's steps: the finished builds' results, and one queued build's start.
+    void ICollectPipelineBuilds();
+    bool IIssuePipelineBuild(const plWGPUPipelineRecord& record, const PipelineQueued& queued);
+#ifdef PLASMA_TEST_HOOKS
+    // The trace's builds: their numbers, and the prewarmed pipelines no draw has asked for yet (by record, the build's
+    // number), so the first draw that uses one is seen (plWGPUPipelineObserver::OnPipelineBuild, kBuildUsed).
+    uint32_t                                                                             fPipelineBuildSerial = 0;
+    std::unordered_map<plWGPUPipelineRecord, uint32_t, plWGPUPipelineRecordHashFunction> fPrewarmUnused;
+#endif
+
+    // The key and fixed state of a fixed-function draw (DrawFixedFunction's), and of a shader-program draw on a target
+    // whose depth format is depthFormat (DrawShader's; both programs set), from the current D3D9 state. The draws and
+    // the prewarm compute their pipelines with these.
+    void IFixedFunctionKey(const FixedFunctionDraw& draw, plWGPUFixedFunctionKey& key, plWGPUFixedState& fixed) const;
+    void IShaderKey(const FixedFunctionDraw& draw, WGPUTextureFormat depthFormat, plWGPUShaderKey& key,
+                    plWGPUFixedState& fixed) const;
+    // plMetalDevice::PrewarmPipelineStateFor (plMetalDevice.cpp:1183) with the test it means: start a build when the
+    // record is neither built nor in flight (Metal's test, plMetalDevice.cpp:1196, starts one only when a build is
+    // already in flight). The record is the walk's target's (formats and sample count): the main target's outside a
+    // render target the walk pushed. The build is queued with the record's own state (a clone, as
+    // plMetalDevice::StartPipelineBuild builds from record.state, plMetalDevice.cpp:1095); PumpPipelineBuilds issues it.
+    bool PrewarmPipelineStateFor(plWGPUPipelineState* pipelineState);
+
+    // The walk's target (BeginPrewarmWalk). fWalkTargetValid is false for a render target whose device ref is missing
+    // or dirty: the walk makes no ref (MakeRenderTargetRef creates textures), so that target's draws build at the
+    // draw.
+    void              IPrewarmBindTarget(plRenderTarget* target);
+    void              IPrewarmClear(bool shouldClearColor, bool shouldClearDepth);
+    bool              fPrewarmWalkActive = false;
+    bool              fWalkTargetValid = true;
+    plRenderTarget*   fWalkTarget = nullptr; // nullptr: the main target
+    WGPUTextureFormat fWalkColorFormat = WGPUTextureFormat_Undefined;
+    WGPUTextureFormat fWalkDepthFormat = WGPUTextureFormat_Undefined;
+    uint32_t          fWalkSampleCount = 1;
+    uint32_t          fWalkWidth = 0;
+    uint32_t          fWalkHeight = 0;
 
 protected:
     WGPURenderPipeline PipelineState(plWGPUPipelineState* pipelineState);

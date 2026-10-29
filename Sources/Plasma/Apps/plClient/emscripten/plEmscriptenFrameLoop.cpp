@@ -69,6 +69,9 @@ bool      s_started = false;
 // true while the tick's own stack is executing; false while it is suspended (then any wasm
 // that runs on this thread is a callback from the event loop, which must not suspend)
 bool      s_inTick = false;
+#ifdef PLASMA_PIPELINE_WGPU
+double s_tickEndMs = -1.0; // when the last tick returned
+#endif
 
 void Tick()
 {
@@ -76,9 +79,17 @@ void Tick()
     if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
         observer->OnTickBegin();
 #endif
+#ifdef PLASMA_PIPELINE_WGPU
+    // The wait between two ticks is a yield too, for the pipeline's build pacing (Yield below).
+    if (s_tickEndMs >= 0.0)
+        plWGPUDevice::NoteYield(emscripten_get_now() - s_tickEndMs);
+#endif
     s_inTick = true;
     s_tick();
     s_inTick = false;
+#ifdef PLASMA_PIPELINE_WGPU
+    s_tickEndMs = emscripten_get_now();
+#endif
 #ifdef PLASMA_TEST_HOOKS
     if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
         observer->OnTickEnd();
@@ -123,15 +134,15 @@ void LogStats(double nowMs)
 
 namespace
 {
-// how names what ends the task, for a harness build's observer only.
-void Yield(bool nextFrame, [[maybe_unused]] const char* how)
+// how names what ends the task, for a harness build's observer only. Returns the suspension in ms, -1 if refused.
+double Yield(bool nextFrame, [[maybe_unused]] const char* how)
 {
     if (!pthread_equal(pthread_self(), s_owner) || !s_inTick) {
 #ifdef PLASMA_TEST_HOOKS
         if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
             observer->OnYieldRefused();
 #endif
-        return;
+        return -1.0;
     }
     // The yield suspends inside a Python frame as anywhere else (plEmscriptenFrameLoop.h).
     s_inTick = false;
@@ -139,27 +150,33 @@ void Yield(bool nextFrame, [[maybe_unused]] const char* how)
     if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
         observer->OnSuspendBegin(how, true);
 #endif
-    [[maybe_unused]] const double waited = nextFrame ? plFrameLoop_waitFrame() : plFrameLoop_waitTask();
+    const double waited = nextFrame ? plFrameLoop_waitFrame() : plFrameLoop_waitTask();
 #ifdef PLASMA_TEST_HOOKS
     if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
         observer->OnSuspendEnd();
 #endif
     s_inTick = true;
+#ifdef PLASMA_PIPELINE_WGPU
+    // The pipeline's build pacing: a browser that compiles render pipelines on its GPU process's command stream holds
+    // this resume until the builds issued before it are compiled (plWGPUDevice::PumpPipelineBuilds).
+    plWGPUDevice::NoteYield(waited);
+#endif
 #ifdef PLASMA_TEST_HOOKS
     if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
         observer->OnYield(waited);
 #endif
+    return waited;
 }
 } // namespace
 
-void plEmscriptenPresentYield()
+double plEmscriptenPresentYield()
 {
-    Yield(false, "a present-yield");
+    return Yield(false, "a present-yield");
 }
 
-void plEmscriptenFrameYield()
+double plEmscriptenFrameYield()
 {
-    Yield(true, "a frame-yield");
+    return Yield(true, "a frame-yield");
 }
 
 bool plEmscriptenSuspendBegin([[maybe_unused]] const char* how)

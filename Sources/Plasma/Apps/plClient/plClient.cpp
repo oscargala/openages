@@ -176,7 +176,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #ifdef PLASMA_TEST_HOOKS
 // Harness builds only: the test harness's pins of the camera, the avatar, the field of view, the
-// game clock and the physics accumulator (testhooks/client) run at three points of IUpdate and IDraw.
+// game clock and the physics accumulator (the private test harness) run at three points of IUpdate and IDraw.
 #    include "emscripten/plEmscriptenTestHooks.h"
 #endif
 
@@ -711,6 +711,12 @@ bool plClient::MsgReceive(plMessage* msg)
                         {
                             fRooms.emplace_back(pNode, 0);
                             fPageMgr->AddNode(pNode);
+#ifdef PLASMA_PIPELINE_WGPU
+                            // A room like any other (the clone room, plNetClientMgr::IAddCloneRoom): its drawables
+                            // are walked as they join it (plWGPUPipeline::PrewarmRoom, the frame start's joined seat).
+                            if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline))
+                                wgpuPipe->PrewarmRoom(pNode, false);
+#endif
                         }
                     }
                 }
@@ -1239,6 +1245,20 @@ void plClient::IRoomLoaded(plSceneNode* node, bool hold)
             fPageMgr->AddNode(fCurrentNode);
         }
     }
+
+#ifdef PLASMA_PIPELINE_WGPU
+    // The browser compiles a render pipeline in its GPU process: the room's pipelines
+    // are started here, while the load goes on, and the first scene frame waits for them before it begins
+    // (plWGPUPipeline::PrewarmRoom, PrewarmBeforeScene). A page of an Age load whose .fni has not run waits for it
+    // (the .fni sets the Age's fog at plAgeLoaded2Msg, after the last page: plAgeLoader::ExecPendingAgeFniFiles); this
+    // runs before FinishedPagingInRoom below, so the page is still pending.
+    if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline)) {
+        plAgeLoader* ageLoader = plAgeLoader::GetInstance();
+        const bool   afterAgeSettings = ageLoader && !ageLoader->PendingAgeFniFiles().empty() &&
+                                      ageLoader->IsPendingPageInRoomKey(fCurrentNode->GetKey());
+        wgpuPipe->PrewarmRoom(fCurrentNode, afterAgeSettings);
+    }
+#endif
 
     fNumLoadingRooms--;
     
@@ -1817,8 +1837,32 @@ bool plClient::IDraw()
         testHooks->BeforeDraw(fPipeline);
 #endif
 
-    if (plProgressMgr::GetInstance()->IsActive())
+#ifdef PLASMA_PIPELINE_WGPU
+    // An Age's rooms kept for its .fni (plWGPUPipeline::PrewarmRoom) are walked once it has run, at the next frame
+    // start, progress or scene.
+    if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline)) {
+        plAgeLoader* ageLoader = plAgeLoader::GetInstance();
+        if (!ageLoader || ageLoader->PendingAgeFniFiles().empty())
+            wgpuPipe->PrewarmAgeSettings();
+    }
+#endif
+
+    if (plProgressMgr::GetInstance()->IsActive()) {
+#ifdef PLASMA_PIPELINE_WGPU
+        fPipelineLoadWait = true;
+        fPipelineLoadDrops = 0;
+#endif
         return IDrawProgress();
+    }
+
+#ifdef PLASMA_PIPELINE_WGPU
+    // The first scene frame after a load: the pipeline builds the load's walks left pending are
+    // waited for here, drawing progress frames (IWaitPipelineBuilds), before plRenderMsg.
+    if (fPipelineLoadWait) {
+        if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline))
+            IWaitPipelineBuilds(wgpuPipe);
+    }
+#endif
 
 #ifdef PLASMA_TEST_HOOKS
     // harness builds: the fixed time, avatar, field-of-view and camera pins
@@ -1851,6 +1895,35 @@ bool plClient::IDraw()
     plProfile_EndTiming(UpdateTime);
 
     plProfile_BeginTiming(DrawTime);
+
+#ifdef PLASMA_PIPELINE_WGPU
+    // The scene frame waits for the pipeline builds in flight before it acquires the
+    // canvas texture, so none of its draws finds one in flight (plWGPUPipeline::PrewarmBeforeScene). This frame's render
+    // requests are queued by now (plRenderMsg), and their draws are started with the rest, through fPageMgr as
+    // IProcessRenderRequests draws them.
+    // After a load, while the Age's initial state loads (plNCAgeJoiner::Start sets
+    // kLoadingInitialAgeState, plNetCliAgeJoiner.cpp:196, and clears it before it sends the link-in's
+    // plLinkEffectsTriggerMsg, :459-477), a frame whose walks leave builds pending is not drawn, as a frame whose
+    // device is not ready (plDXPipeline::BeginRender returning true): the next IDraw waits for the builds drawing
+    // progress frames. Afterwards the frame waits here, blocking, as before.
+    if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline)) {
+        constexpr uint32_t kMaxLoadDrops = 16; // a backstop only
+        plNetClientApp*    netApp = plNetClientApp::GetInstance();
+        const bool         loadingState = netApp && netApp->IsLoadingInitialAgeState();
+        const bool         mayDefer = fPipelineLoadWait && loadingState && fPipelineLoadDrops < kMaxLoadDrops;
+        ST::string         detail;
+#ifdef PLASMA_TEST_HOOKS
+        detail = ST::format("loading state {} playing {} drop {}", loadingState ? 1 : 0,
+                            netApp && netApp->GetFlagsBit(plNetClientApp::kPlayingGame) ? 1 : 0,
+                            fPipelineLoadDrops + 1);
+#endif
+        if (wgpuPipe->PrewarmBeforeScene(fPreRenderRequests, fPostRenderRequests, fPageMgr, mayDefer,
+                                         detail.c_str())) {
+            fPipelineLoadDrops++;
+            return IFlushRenderRequests();
+        }
+    }
+#endif
 
     plProfile_BeginTiming(BeginRender);
     if( fPipeline->BeginRender() )
@@ -1907,10 +1980,80 @@ bool plClient::IDraw()
     fPipeline->EndRender();
     plProfile_EndTiming(EndRender);
 
+#ifdef PLASMA_PIPELINE_WGPU
+    // A scene frame was drawn: the next load sets the wait again.
+    fPipelineLoadWait = false;
+    fPipelineLoadDrops = 0;
+#endif
+
     plProfile_EndTiming(DrawTime); 
 
     return false;
 }
+
+#ifdef PLASMA_PIPELINE_WGPU
+void plClient::IWaitPipelineBuilds(plWGPUPipeline* pipe)
+{
+    // The browser compiles render pipelines, which D3D9 does not have (its render state is
+    // set per draw): the builds an Age's load started (plWGPUPipeline::PrewarmRoom and the frame start's walks) may
+    // still be compiling when its first scene frame comes. That frame waits for them, as plMetalDevice::PipelineState
+    // waits at the draw for a build in flight (plMetalDevice.cpp:1150-1180), and meanwhile the client draws progress
+    // frames, as it does through the load: IDrawProgress, drawn at most at 60 Hz by plClient::IProgressMgrCallbackProc
+    // (plClient.cpp:1379-1404) while an operation exists (IDraw, plProgressMgr::IsActive). The wait is one such
+    // operation, with no title and no length: plDTProgressMgr draws its glyph only (plDTProgressMgr.cpp:100-108,
+    // 201-244), as for the Age joiner's own operation in a release build
+    // (plNCAgeJoiner::ExecNextOp, plNetCliAgeJoiner.cpp:233-237).
+    // Nothing else runs meanwhile, as in Metal's wait: no update (the game does not advance), no message pump.
+    const size_t before = pipe->PrewarmPending();
+    if (!before)
+        return;
+
+    // The progress callback draws a frame at every update of an operation, the registration's and the deletion's
+    // included (plProgressMgr::IRegisterOperation, plProgressMgr.cpp:138; ~plOperationProgress, :273-278): here inside
+    // IDraw it would draw a frame inside this one, so it is set aside around both (SetCallbackProc, :216-220).
+    plProgressMgr*            progressMgr = plProgressMgr::GetInstance();
+    plProgressMgrCallbackProc callback = progressMgr->SetCallbackProc(nullptr);
+    plOperationProgress*      hold = progressMgr->RegisterOperation(0.f, nullptr, plProgressMgr::kNone);
+    progressMgr->SetCallbackProc(callback);
+
+    const double                 t0 = hsTimer::GetMilliSeconds();
+    const uint32_t               generation = pipe->PrewarmGeneration();
+    uint32_t                     frames = 0;
+    [[maybe_unused]] const char* end = "built";
+    size_t                       pending = before;
+    while (true) {
+        pending = pipe->PumpPipelineBuilds();
+        if (!pending)
+            break;
+        if (pipe->PrewarmDeviceLost() || pipe->PrewarmGeneration() != generation) {
+            end = "device"; // reset: the builds belong to the released device
+            break;
+        }
+        IDrawProgress();
+        frames++;
+        // As the intro movie loop (IPlayIntroMovie): the frame reaches the canvas, and the loop resumes at the next
+        // animation frame, when the builds' callbacks can have been delivered. A refused yield returns at once and no
+        // build could complete: the scene frame's drain waits for them instead (PrewarmBeforeScene).
+        if (plEmscriptenFrameYield() < 0.0) {
+            end = "refused";
+            break;
+        }
+    }
+
+    progressMgr->SetCallbackProc(nullptr);
+    delete hold;
+    progressMgr->SetCallbackProc(callback);
+
+    ST::string detail;
+#ifdef PLASMA_TEST_HOOKS
+    plNetClientApp* netApp = plNetClientApp::GetInstance();
+    detail = ST::format("loading state {} playing {} end {}", netApp && netApp->IsLoadingInitialAgeState() ? 1 : 0,
+                        netApp && netApp->GetFlagsBit(plNetClientApp::kPlayingGame) ? 1 : 0, end);
+#endif
+    pipe->NotePrewarmWait(uint32_t(before), uint32_t(pending), frames, hsTimer::GetMilliSeconds() - t0,
+                          detail.c_str());
+}
+#endif
 
 void plClient::IServiceMovies()
 {
