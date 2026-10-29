@@ -187,7 +187,7 @@ public:
     struct PrewarmView
     {
         const char* seat = nullptr;   // "room", "pending rooms", "deferred rooms", "re-walk", "joined", "targets",
-                                      // "requests", "drain", "wait" or "dropped"
+                                      // "outfits", "requests", "drain", "wait" or "dropped"
         const char* detail = nullptr; // the room's name, the re-walk's cause; for a wait or a drop, the client's state
         const char* skipped = nullptr;
         uint32_t    drawables = 0;      // drawables given to the walk
@@ -202,6 +202,12 @@ public:
         uint32_t    frames = 0;         // wait: the progress frames it drew
         double      walkMs = 0.0;
         double      drainMs = 0.0; // the wait
+
+        // Of the spans, those on a volatile vertex buffer the draw has not filled yet
+        // (plWGPUPipeline::IPrewarmSpanFormat): a skinned buffer's, a particle span's, another volatile buffer's.
+        uint32_t unfilledSkinned = 0;
+        uint32_t unfilledParticle = 0;
+        uint32_t unfilledOther = 0;
     };
     virtual void OnPrewarm(plWGPUPipeline& pipeline, const PrewarmView& view) {}
 
@@ -212,6 +218,7 @@ public:
     {
         const plRenderRequest* request = nullptr;
         const plPageTreeMgr*   pageMgr = nullptr;
+        bool                   unqueued = false; // a walked room's waveset's, before the waveset queues it
         bool                   ownPageMgr = false;
         bool                   walkTargetValid = true;
         const char*            skipped = nullptr;
@@ -220,6 +227,11 @@ public:
         uint32_t               started = 0;
         uint32_t               opacityPasses = 0;
         uint32_t               opacityStarted = 0;
+        uint32_t               unfilledSkinned = 0; // as PrewarmView's
+        uint32_t               unfilledParticle = 0;
+        uint32_t               unfilledOther = 0;
+        uint32_t               outfits = 0;  // the submitted clothing outfits
+        uint32_t               standIns = 0; // of them, those whose target layer held the walk's stand-in
         double                 walkMs = 0.0;
     };
     virtual void OnPrewarmRenderRequest(plWGPUPipeline& pipeline, const PrewarmRequestView& view) {}
@@ -249,9 +261,30 @@ public:
     };
     virtual void OnPrewarmRequest(plWGPUDevice& device, const plWGPUPipelineState& state, PrewarmRequestResult result) {}
 
+    // When the device has the pipeline key and the fragment program of a fixed-function draw
+    // (plWGPUDevice::DrawFixedFunction) or of a walk's dry draw (plWGPUDevice::PrewarmFixedFunction), before the
+    // pipeline is looked up: the observer reads the rest of the D3D9 state the draw's uniforms carry (plWGPUD3DDevice)
+    // itself. walk: the prewarm's dry draw. program: 0 for the uber shader; sig: the draw's program signature
+    // (plWGPUFixedFragment::Signature), whatever program it runs.
+    virtual void OnFixedFunctionKey(plWGPUDevice& device, const plWGPUFixedFunctionKey& key,
+                                    const plWGPUFixedState& fixed, bool walk, uint32_t program,
+                                    const plWGPUFixedFragmentSig& sig) {}
+
+    // When the device first sees a fixed-function program signature (plWGPUDevice::IFixedProgram): the id it gave the
+    // program and its module text, or 0 and nullptr when the signature is outside the fallback domain (inDomain false)
+    // and its draws keep the uber shader.
+    virtual void OnFixedProgram(plWGPUDevice& device, const plWGPUFixedFragmentSig& sig, uint32_t program,
+                                const char* text, bool inDomain) {}
+
     // Read by RenderScreenElements: true while the frame is to be drawn without plates and debug text, so a
     // screenshot films the scene alone.
     virtual bool SceneCaptureFrame() const { return false; }
+
+    // Asked by plWGPUEnumerate's adapter callback only for an adapter the product keeps on the uber shader whose
+    // specialised fixed-function programs a harness run may measure: WebKit on Metal (vendor and architecture
+    // "apple"). True runs that adapter's fixed-function draws on the specialised programs. Asked again on a device
+    // re-acquire, so the answer must not change within a run.
+    virtual bool AdmitFixedPrograms(const char* vendor, const char* architecture) { return false; }
 
     static plWGPUPipelineObserver* Get() { return fObserver; }
     static void                    Set(plWGPUPipelineObserver* observer) { fObserver = observer; }

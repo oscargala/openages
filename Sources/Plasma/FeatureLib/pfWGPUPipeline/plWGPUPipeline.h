@@ -72,6 +72,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 class hsKeyedObject;
 class plAuxSpan;
+class plBitmap;
 class plClothingOutfit;
 class plDrawable;
 class plGBufferGroup;
@@ -135,6 +136,11 @@ public:
     static void          NoteCanvasTexture(WGPUTexture texture);
     /// Uncaptured WebGPU errors so far (validation, out of memory, internal).
     static unsigned long ErrorCount();
+    /// Whether fixed-function draws may run the specialised fragment programs (plWGPUFixedFragment): only on an
+    /// adapter where they were measured to draw what the uber shader draws, an Apple GPU on Metal in Dawn
+    /// (GPUAdapterInfo vendor "apple", architecture "metal-<n>"). WebKit on Metal (architecture "apple") and every
+    /// other adapter keep the uber shader for every draw. Decided, and logged, per adapter (OnAdapter).
+    static bool          SpecialisedFixedPrograms();
     /// The client loop's once-a-second report: the test harness build's STATS line (its pipeline observer);
     /// nothing in the product build.
     static void          LogStats();
@@ -280,7 +286,9 @@ public:
     /// builds of a loaded room's drawables (held rooms too); they compile in the browser's GPU process while the
     /// load goes on. Between frames only; a room that cannot be walked now waits for the next frame start.
     /// afterAgeSettings: the room is a page of an Age load whose .fni has not run yet; it waits for PrewarmAgeSettings.
-    void PrewarmRoom(plSceneNode* node, bool afterAgeSettings);
+    /// clientTree: plClient's page tree. A room not in it is held (plRoomRec::kHeld, plClient::IRoomLoaded): its
+    /// drawables are drawn only through the render request of the plPostEffectMod that pages it.
+    void PrewarmRoom(plSceneNode* node, bool afterAgeSettings, const plPageTreeMgr* clientTree);
     /// plClient::IDraw, at every frame (progress or scene) once no Age .fni is pending: the rooms PrewarmRoom kept for
     /// the Age's settings are walked at the next frame start.
     void PrewarmAgeSettings();
@@ -474,12 +482,14 @@ private:
     // draw, count, log or touch textures are skipped then. A drawable is walked once per device generation, main
     // target and default-fog signature (by Uoid); when one of them changes, the frame start walks the walked
     // drawables again (IPrewarmFrameStart).
-    // The walk also renders a span's shadow-receive pass (IRenderShadowsOntoSpan), walks the drawables that
-    // join a walked room later (a cluster group's, plClusterGroup::UnPack; a clone in the clone room) or whose spans
-    // change after their walk (an avatar's clothing), this frame's shadow maps with their blur and clothing composites
-    // at PrewarmBeforeScene (IPrewarmTargets: IRenderShadowCaster, IPreprocessAvatarTextures) and its render requests
-    // as plRenderRequest::Render draws them (IPrewarmRequests: their clear drawables and their page trees' draws,
-    // under their own targets and views), and keeps an Age's rooms until its .fni has run.
+    // The walk also renders a span's shadow-receive pass (IRenderShadowsOntoSpan) in a view that draws the drawable
+    // (never a held room's drawable), walks the drawables that join a walked room later (a cluster group's,
+    // plClusterGroup::UnPack; a clone in the clone room) or whose spans change after their walk (an avatar's
+    // clothing), this frame's shadow maps with their blur and clothing composites at PrewarmBeforeScene
+    // (IPrewarmTargets: IRenderShadowCaster, IPreprocessAvatarTextures) and its render requests as
+    // plRenderRequest::Render draws them (IPrewarmRequests: their clear drawables and their page trees' draws, under
+    // their own targets and views; with them a walked room's wavesets' requests from the frame they exist, before the
+    // waveset first queues them), and keeps an Age's rooms until its .fni has run.
     struct PrewarmSaved;
     // What the walks of one seat walked (IPrewarmDrawable, ILoopOverLayers), for its trace line.
     struct PrewarmTally
@@ -489,6 +499,11 @@ private:
         uint32_t started = 0;        // of them, the builds started
         uint32_t opacityPasses = 0;  // passes walked though their opacity skips them now (an opacity animation's)
         uint32_t opacityStarted = 0; // builds started for those
+        // Of the spans, those on a volatile vertex buffer the draw has not filled yet (IPrewarmSpanFormat): a skinned
+        // buffer's, a particle span's, another volatile buffer's.
+        uint32_t unfilledSkinned = 0;
+        uint32_t unfilledParticle = 0;
+        uint32_t unfilledOther = 0;
     };
     const char*           IPrewarmSkipped() const;
     void                  IPrewarmBegin(PrewarmSaved& saved, const char* seat);
@@ -500,9 +515,13 @@ private:
     void                  IPrewarmFrameStart();
     void                  IPrewarmDrain();
     void                  IPrewarmTargets();
+    void                  IPrewarmOutfits();
+    void                  IPrewarmClearStandIns();
     void                  IPrewarmRequests(const std::vector<plRenderRequest*>& preRequests,
                                            const std::vector<plRenderRequest*>& postRequests, plPageTreeMgr* pageMgr);
     void                  IPrewarmNoteRoom(plSceneNode* node);
+    void                  IPrewarmNoteWaveSets(const plSceneNode* node);
+    bool                  IPrewarmHeldRoom(const plDrawableSpans* drawable) const;
     static void           IPrewarmPoolSpans(const std::vector<plDrawable*>& pool, std::vector<size_t>& spans);
     void                  IPrewarmFog(uint8_t& type, bool& degenerate) const;
     static hsKeyedObject* IPrewarmLoadedObject(const plUoid& uoid);
@@ -536,6 +555,15 @@ private:
     uint8_t                      fPrewarmFogType;
     bool                         fPrewarmFogDegenerate;
     bool                         fPrewarmConditionsSet;
+
+    // The loaded rooms plClient holds (PrewarmRoom's clientTree), the walked rooms' wavesets (IPrewarmNoteWaveSets), and
+    // whether the drawable IPrewarmDrawable walks is in a held room (IRenderShadowsOntoSpan's walk).
+    std::set<plUoid, PrewarmUoidLess> fPrewarmHeldRooms;
+    std::set<plUoid, PrewarmUoidLess> fPrewarmWaveSets;
+    bool                              fPrewarmHeldDrawable;
+
+    // The outfits whose target layer holds the walk's stand-in (IPrewarmOutfits, IPrewarmClearStandIns).
+    std::vector<plClothingOutfit*> fPrewarmStandIns;
 #ifdef PLASMA_TEST_HOOKS
     bool fPrewarmCensusDue; // a walk ran since the last census (IPrewarmCensus)
     void IPrewarmCensus();
@@ -574,6 +602,10 @@ private:
     void               IHandleZMode();
     void               IHandleMiscMode();
     void               IHandleTextureStage(uint32_t stage, plLayerInterface* layer);
+    // The kind of texture a draw would bind for a layer's texture, which the prewarm's walk records at each place a
+    // draw binds one (plWGPUDevice::WalkTexture): a cube map for a plCubicEnvironmap (MakeTextureRef) and a
+    // plCubicRenderTarget (IRenderTargetSetTexture), 2D for any other bitmap or render target and for no texture.
+    static bool        IWalkCube(plBitmap* texture);
     void               IHandleFirstStageBlend();
     void               IHandleBumpEnv(int stage, uint32_t blendFlags);
     void               IHandleStageBlend(int stage);

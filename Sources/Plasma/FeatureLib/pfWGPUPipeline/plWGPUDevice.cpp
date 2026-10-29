@@ -1969,18 +1969,29 @@ void plWGPUDevice::NoteHeld(double heldMs)
 
 void plWGPUDevice::PumpPipelineBuilds()
 {
-    // The finished builds first: the timeout-0 wait completes every ready future without suspending
-    // (emdawnwebgpu's wgpuInstanceWaitAny, timeoutNS 0), and runs their callbacks.
-    if (!fPipelineBuilds.empty()) {
+    // The finished builds first, and the error scopes of the specialised programs' synchronous creates: the timeout-0
+    // wait completes every ready future without suspending (emdawnwebgpu's wgpuInstanceWaitAny, timeoutNS 0), and
+    // runs their callbacks.
+    if (!fPipelineBuilds.empty() || !fFixedScopeChecks.empty()) {
         std::vector<WGPUFutureWaitInfo> infos;
-        infos.reserve(fPipelineBuilds.size());
+        infos.reserve(fPipelineBuilds.size() + 2 * fFixedScopeChecks.size());
         for (const auto& [record, build] : fPipelineBuilds) {
             WGPUFutureWaitInfo info = WGPU_FUTURE_WAIT_INFO_INIT;
             info.future = build.future;
             infos.push_back(info);
         }
+        for (const FixedScopeCheck& check : fFixedScopeChecks) {
+            for (const WGPUFuture& future : check.futures) {
+                if (!future.id)
+                    continue;
+                WGPUFutureWaitInfo info = WGPU_FUTURE_WAIT_INFO_INIT;
+                info.future = future;
+                infos.push_back(info);
+            }
+        }
         wgpuInstanceWaitAny(plWGPUEnumerate::Instance(), infos.size(), infos.data(), 0);
         ICollectPipelineBuilds();
+        ICollectFixedScopeChecks();
     }
 
     // The cap, from the window that the first issue after the last decision opened: how long the client thread was
@@ -2091,9 +2102,19 @@ void plWGPUDevice::ICollectPipelineBuilds()
         plWGPUPipelineObserver::PipelineBuildStep step;
 #endif
         if (r->status != WGPUCreatePipelineAsyncStatus_Success || !r->pipeline) {
-            // No pipeline: the draw takes the synchronous path (a failed create stores a null pipeline there).
+            // No pipeline: the draw takes the synchronous path (a failed create stores a null pipeline there). A
+            // specialised fixed-function program's failure makes its pipeline key keep the uber shader instead
+            // (IFixedProgramFailed), so no draw creates the failed program again.
             plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "pipeline '{}' build failed (status {}): {}",
                                    record.state->GetDescription(), int(r->status), r->message.c_str());
+            if (record.state->GetID() == plWGPUPipelineType::MaterialShader && build.generation == fGeneration) {
+                const plWGPUFixedFunctionPipelineState* state =
+                    static_cast<const plWGPUFixedFunctionPipelineState*>(record.state.get());
+                if (state->GetProgram())
+                    IFixedProgramFailed(IFixedPipelineKey(state->GetKey(), state->GetFixedState(), record.colorFormat,
+                                                          record.depthFormat, record.sampleCount),
+                                        state->GetProgram(), "build", r->message);
+            }
 #ifdef PLASMA_TEST_HOOKS
             step = plWGPUPipelineObserver::kBuildFailed;
 #endif
@@ -2116,6 +2137,25 @@ void plWGPUDevice::ICollectPipelineBuilds()
             observer->OnPipelineBuild(*this, *record.state, step, build.serial, emscripten_get_now() - build.startMs);
 #endif
         it = fPipelineBuilds.erase(it);
+    }
+}
+
+void plWGPUDevice::ICollectFixedScopeChecks()
+{
+    // The error scopes whose two pops have answered (inside the pump's wgpuInstanceWaitAny): an error in either makes
+    // the pipeline key keep the uber shader (IFixedProgramFailed). A released generation's checks are dropped.
+    for (auto it = fFixedScopeChecks.begin(); it != fFixedScopeChecks.end();) {
+        if (it->generation != fGeneration) {
+            it = fFixedScopeChecks.erase(it);
+            continue;
+        }
+        if (it->result->pending) {
+            ++it;
+            continue;
+        }
+        if (it->result->failed)
+            IFixedProgramFailed(it->id.key, it->id.program, "create", it->result->message);
+        it = fFixedScopeChecks.erase(it);
     }
 }
 
@@ -2632,14 +2672,123 @@ void plWGPUDevice::IFixedFunctionKey(const FixedFunctionDraw& draw, plWGPUFixedF
 bool plWGPUDevice::PrewarmFixedFunction(const FixedFunctionDraw& draw)
 {
     // The fixed-function draw's pipeline (DrawFixedFunction) on the main target. Nothing is drawn: the walk's draw
-    // carries the buffer's vertex format and no buffer (a room not drawn yet has none).
+    // carries the buffer's vertex format and no buffer (a room not drawn yet has none). Its fragment program comes from
+    // the same uniforms the draw would upload, with the walk's record of the stages' texture kinds (WalkTexture).
     if (!draw.count)
         return false;
     plWGPUFixedFunctionKey key;
     plWGPUFixedState       fixed;
     IFixedFunctionKey(draw, key, fixed);
-    plWGPUFixedFunctionPipelineState state(this, key, fixed);
+    uint32_t               program = 0;
+    plWGPUFixedFragmentSig sig{};
+    if (fCanvasFormatKnown && (!fPrewarmWalkActive || fWalkTargetValid)) {
+        const bool       walk = fPrewarmWalkActive;
+        plWGPUFFUniforms u{};
+        IFixedFragmentUniforms(key, fWalkCube, u);
+        program = IFixedProgram(u, key,
+                                IFixedPipelineKey(key, fixed, walk ? fWalkColorFormat : fFramebufferFormat,
+                                                  walk ? fWalkDepthFormat : fDepthFormat,
+                                                  walk ? fWalkSampleCount : fSampleCount),
+                                sig);
+    }
+#ifdef PLASMA_TEST_HOOKS
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+        observer->OnFixedFunctionKey(*this, key, fixed, true, program, sig);
+#endif
+    plWGPUFixedFunctionPipelineState state(this, key, fixed, program,
+                                           program ? fFixedProgramTexts[program - 1].c_str() : nullptr);
     return PrewarmPipelineStateFor(&state);
+}
+
+uint64_t plWGPUDevice::IFixedPipelineKey(const plWGPUFixedFunctionKey& key, const plWGPUFixedState& fixed,
+                                         WGPUTextureFormat color, WGPUTextureFormat depth, uint32_t samples)
+{
+    hsAssert(uint32_t(color) < 128 && uint32_t(depth) < 128, "render target format id over 127");
+    const uint64_t fixedBits = (uint64_t(fixed.topology) & 0x7) | ((uint64_t(fixed.cullMode) & 0x3) << 3) |
+                               ((uint64_t(fixed.depthCompare) & 0xf) << 5) | (uint64_t(fixed.depthWrite) << 9);
+    return key.Pack() | (fixedBits << 34) | ((uint64_t(color) & 0x7f) << 44) | ((uint64_t(depth) & 0x7f) << 51) |
+           ((uint64_t(samples) & 0x7) << 58);
+}
+
+void plWGPUDevice::IFixedFragmentUniforms(const plWGPUFixedFunctionKey& key, const bool* cube, plWGPUFFUniforms& u) const
+{
+    const DWORD* rs = fD3D.fRenderState;
+    for (uint32_t s = 0; s < key.stages && s < plWGPUD3DDevice::kNumStages; s++) {
+        const DWORD*   ts = fD3D.fStageState[s];
+        plWGPUFFStage& st = u.stages[s];
+        st.ops[0] = ts[D3DTSS_COLOROP];
+        st.ops[1] = ts[D3DTSS_COLORARG1];
+        st.ops[2] = ts[D3DTSS_COLORARG2];
+        st.ops[3] = ts[D3DTSS_ALPHAOP];
+        st.ops2[0] = ts[D3DTSS_ALPHAARG1];
+        st.ops2[1] = ts[D3DTSS_ALPHAARG2];
+        st.flags[0] = cube[s] ? 1 : 0;
+    }
+    u.lighting[0] = rs[D3DRS_SPECULARENABLE] ? 1 : 0;
+    u.fog[0] = key.fog == 1 ? rs[D3DRS_FOGTABLEMODE] : 0;
+    u.fog[2] = rs[D3DRS_ALPHATESTENABLE] ? rs[D3DRS_ALPHAFUNC] : 0;
+}
+
+uint32_t plWGPUDevice::IFixedProgram(const plWGPUFFUniforms& u, const plWGPUFixedFunctionKey& key, uint64_t pipelineKey,
+                                     plWGPUFixedFragmentSig& sig)
+{
+    sig = plWGPUFixedFragment::Signature(u, key.stages, key.fog);
+    if (!fFixedFragmentTried) {
+        fFixedFragmentTried = true;
+        if (!fFixedFragment.Bind(plWGPUFixedFunctionPipelineState::UberSource()))
+            plWGPULog("FIXED PROGRAMS: off: {}", fFixedFragment.Error());
+    }
+    if (!fFixedFragment.Bound() || !plWGPUEnumerate::SpecialisedFixedPrograms())
+        return 0;
+
+    uint32_t program;
+    if (auto it = fFixedProgramIds.find(sig); it != fFixedProgramIds.end()) {
+        program = it->second;
+    } else {
+        const bool admitted = plWGPUFixedFragment::InDomain(sig);
+        program = 0;
+        if (admitted) {
+            fFixedProgramTexts.push_back(fFixedFragment.Module(sig));
+            program = uint32_t(fFixedProgramTexts.size());
+        } else {
+            // Content uses a combination outside the fallback domain: it keeps the uber shader, said once.
+            ST::string_stream stages;
+            for (uint32_t s = 0; s < sig.stages && s < 8; s++) {
+                const plWGPUFixedFragmentSig::Stage& st = sig.st[s];
+                stages << ST::format(" [{} {x} {x} {} {} {x} {x} {}{}]", st.op, st.c1, st.c2, st.alpha, st.aop, st.a1,
+                                     st.a2, st.sampled, st.cube);
+            }
+            plStatusLog::AddLineSF("pipeline.log", 0xffff8000,
+                                   "fixed-function program outside the fallback domain, kept on the uber shader: fog {} "
+                                   "mode {} spec {} func {} stages{}",
+                                   sig.fog, sig.fogMode, sig.spec, sig.func, stages.to_string());
+        }
+        fFixedProgramIds.emplace(sig, program);
+#ifdef PLASMA_TEST_HOOKS
+        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+            observer->OnFixedProgram(*this, sig, program, program ? fFixedProgramTexts[program - 1].c_str() : nullptr,
+                                     admitted);
+#endif
+    }
+    if (program && fFixedFailed.count({pipelineKey, program}))
+        return 0;
+    return program;
+}
+
+void plWGPUDevice::IFixedProgramFailed(uint64_t pipelineKey, uint32_t program, const char* how,
+                                       const std::string& message)
+{
+    if (!fFixedFailed.insert({pipelineKey, program}).second)
+        return;
+    plStatusLog::AddLineSF("pipeline.log", 0xffff0000,
+                           "fixed-function program {} failed ({}) for pipeline key 0x{x}: the draws keep the uber "
+                           "shader: {}",
+                           program, how, pipelineKey, message.c_str());
+    plWGPULog("FIXED PROGRAM {} failed ({}) for pipeline key 0x{x}: uber shader from now on: {}", program, how,
+              pipelineKey, message);
+    // The draw's lookup forgets the failed pipeline, so its next draw picks program 0 (IFixedProgram).
+    for (auto& map : fFixedPipelines)
+        map.erase({pipelineKey, program});
 }
 
 bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
@@ -2657,29 +2806,7 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
     IFixedFunctionKey(draw, key, fixed);
     const uint32_t numStages = key.stages;
 
-    // Pipeline, by packed key and the target's formats.
-    // Bits 0-33 the key (vertex kind in 32-33), 34-43 the fixed state, 44-50 the colour
-    // format, 51-57 the depth format, 58-60 the sample count (render target formats are all
-    // below 128).
-    hsAssert(uint32_t(fCurrentColorFormat) < 128 && uint32_t(fCurrentDepthFormat) < 128, "render target format id over 127");
-    const uint64_t fixedBits = (uint64_t(fixed.topology) & 0x7) | ((uint64_t(fixed.cullMode) & 0x3) << 3) |
-                               ((uint64_t(fixed.depthCompare) & 0xf) << 5) | (uint64_t(fixed.depthWrite) << 9);
-    const uint64_t pipelineKey = key.Pack() | (fixedBits << 34) | ((uint64_t(fCurrentColorFormat) & 0x7f) << 44) |
-                                 ((uint64_t(fCurrentDepthFormat) & 0x7f) << 51) |
-                                 ((uint64_t(CurrentTargetSampleCount()) & 0x7) << 58);
-    WGPURenderPipeline pipeline;
-    auto               pit = fFixedPipelines[key.plateVertex].find(pipelineKey);
-    if (pit != fFixedPipelines[key.plateVertex].end()) {
-        pipeline = pit->second;
-    } else {
-        plWGPUFixedFunctionPipelineState state(this, key, fixed);
-        pipeline = PipelineState(&state);
-        fFixedPipelines[key.plateVertex][pipelineKey] = pipeline;
-    }
-    if (!pipeline)
-        return false;
-
-    // Uniforms
+    // Uniforms first: the pipeline's fragment program is chosen from them (IFixedProgram).
     plWGPUFFUniforms u{}; // zero-initialised, so the bytes no module reads are deterministic
     if (fFixedTransformSerial != fD3D.fTransformSerial) {
         for (int i = 0; i < 2; i++) {
@@ -2704,15 +2831,11 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
         textures[8 + s] = fWhiteCubeTextureView;
         textures[16 + s] = nullptr;
     }
+    // Each stage's texture kind once, for its binding slot and its program (flags[0], IFixedFragmentUniforms).
+    bool cube[plWGPUD3DDevice::kNumStages] = {};
     for (uint32_t s = 0; s < numStages; s++) {
         const DWORD*   ts = fD3D.fStageState[s];
         plWGPUFFStage& st = u.stages[s];
-        st.ops[0] = ts[D3DTSS_COLOROP];
-        st.ops[1] = ts[D3DTSS_COLORARG1];
-        st.ops[2] = ts[D3DTSS_COLORARG2];
-        st.ops[3] = ts[D3DTSS_ALPHAOP];
-        st.ops2[0] = ts[D3DTSS_ALPHAARG1];
-        st.ops2[1] = ts[D3DTSS_ALPHAARG2];
         st.ops2[2] = ts[D3DTSS_TEXCOORDINDEX];
         st.ops2[3] = ts[D3DTSS_TEXTURETRANSFORMFLAGS];
         st.bias[0] = fD3D.SamplerStateFloat(s, D3DSAMP_MIPMAPLODBIAS);
@@ -2721,18 +2844,18 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
 
         plWGPUTextureRef* tex = fD3D.fTextures[s];
         const bool        bound = tex && tex->fTextureView;
-        const bool        cube = bound && tex->fCubic;
-        st.flags[0] = cube ? 1 : 0;
+        cube[s] = bound && tex->fCubic;
         st.flags[1] = bound ? 1 : 0;
         st.flags[2] = st.flags[3] = 0;
         if (bound) {
-            if (cube)
+            if (cube[s])
                 textures[8 + s] = tex->fTextureView;
             else
                 textures[s] = tex->fTextureView;
         }
         textures[16 + s] = ID3DSampler(s);
     }
+    IFixedFragmentUniforms(key, cube, u);
     for (uint32_t s = numStages; s < plWGPUD3DDevice::kNumStages; s++)
         textures[16 + s] = ID3DSampler(s);
 
@@ -2782,7 +2905,6 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
     u.fogParams[2] = fD3D.RenderStateFloat(D3DRS_FOGDENSITY);
     u.fogParams[3] = 0.f;
     D3DColorToFloat(rs[D3DRS_TEXTUREFACTOR], u.textureFactor);
-    u.lighting[0] = rs[D3DRS_SPECULARENABLE] ? 1 : 0;
     u.lighting[1] = numLights;
     u.lighting[2] = rs[D3DRS_LOCALVIEWER] ? 1 : 0;
     u.lighting[3] = rs[D3DRS_NORMALIZENORMALS] ? 1 : 0;
@@ -2792,9 +2914,7 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
     u.sources[3] = rs[D3DRS_EMISSIVEMATERIALSOURCE];
     if (!rs[D3DRS_COLORVERTEX])
         u.sources[0] = u.sources[1] = u.sources[2] = u.sources[3] = D3DMCS_MATERIAL;
-    u.fog[0] = key.fog == 1 ? rs[D3DRS_FOGTABLEMODE] : 0;
     u.fog[1] = key.fog == 2 ? rs[D3DRS_FOGVERTEXMODE] : 0;
-    u.fog[2] = rs[D3DRS_ALPHATESTENABLE] ? rs[D3DRS_ALPHAFUNC] : 0;
     u.fog[3] = rs[D3DRS_ALPHAREF] & 0xff;
     u.vertex[0] = layout.diffuse >= 0 ? 1 : 0;
     u.vertex[1] = layout.specular >= 0 ? 1 : 0;
@@ -2804,6 +2924,68 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
     u.misc[1] = fViewport[3] > 0.f ? -1.f / fViewport[3] : 0.f;
     u.misc[2] = fD3D.fMaterial.Power;
     u.misc[3] = 0.f;
+
+    // Pipeline, by packed key and the target's formats (IFixedPipelineKey) and fragment program.
+    const uint64_t         pipelineKey = IFixedPipelineKey(key, fixed, fCurrentColorFormat, fCurrentDepthFormat,
+                                                           CurrentTargetSampleCount());
+    plWGPUFixedFragmentSig sig;
+    const uint32_t         program = IFixedProgram(u, key, pipelineKey, sig);
+#ifdef PLASMA_TEST_HOOKS
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+        observer->OnFixedFunctionKey(*this, key, fixed, false, program, sig);
+#endif
+    WGPURenderPipeline pipeline;
+    auto               pit = fFixedPipelines[key.plateVertex].find({pipelineKey, program});
+    if (pit != fFixedPipelines[key.plateVertex].end()) {
+        pipeline = pit->second;
+    } else {
+        plWGPUFixedFunctionPipelineState state(this, key, fixed, program,
+                                               program ? fFixedProgramTexts[program - 1].c_str() : nullptr);
+        if (program) {
+            // A specialised program's synchronous create, inside error scopes (ICollectFixedScopeChecks): an error
+            // makes this pipeline key keep the uber shader from the next draw on.
+            wgpuDevicePushErrorScope(fWGPUDevice, WGPUErrorFilter_Validation);
+            wgpuDevicePushErrorScope(fWGPUDevice, WGPUErrorFilter_Internal);
+        }
+        pipeline = PipelineState(&state);
+        if (program) {
+            FixedScopeCheck check;
+            check.result = std::make_shared<FixedScopeResult>();
+            check.id = {pipelineKey, program};
+            check.plate = key.plateVertex;
+            check.generation = fGeneration;
+            for (WGPUFuture& future : check.futures) {
+                WGPUPopErrorScopeCallbackInfo ci = WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+                ci.mode = WGPUCallbackMode_WaitAnyOnly;
+                ci.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type, WGPUStringView message,
+                                 void* userdata1, void*) {
+                    std::unique_ptr<std::shared_ptr<FixedScopeResult>> hold(
+                        static_cast<std::shared_ptr<FixedScopeResult>*>(userdata1));
+                    FixedScopeResult* r = hold->get();
+                    if (r->pending)
+                        r->pending--;
+                    if (status == WGPUPopErrorScopeStatus_Success && type != WGPUErrorType_NoError) {
+                        r->failed = true;
+                        if (message.data && r->message.empty())
+                            r->message.assign(message.data,
+                                              message.length == WGPU_STRLEN ? strlen(message.data) : message.length);
+                    }
+                };
+                ci.userdata1 = new std::shared_ptr<FixedScopeResult>(check.result);
+                future = wgpuDevicePopErrorScope(fWGPUDevice, ci);
+                if (!future.id) {
+                    // The callback is never called: nothing to wait for.
+                    delete static_cast<std::shared_ptr<FixedScopeResult>*>(ci.userdata1);
+                    check.result->pending--;
+                }
+            }
+            if (check.result->pending)
+                fFixedScopeChecks.push_back(std::move(check));
+        }
+        fFixedPipelines[key.plateVertex][{pipelineKey, program}] = pipeline;
+    }
+    if (!pipeline)
+        return false;
 
 #ifdef PLASMA_TEST_HOOKS
     if (fKeepLastDraw) {
@@ -2972,6 +3154,15 @@ void plWGPUDevice::BeginPrewarmWalk()
 {
     fPrewarmWalkActive = true;
     IPrewarmBindTarget(nullptr);
+    // A walk starts with no texture bound (WalkTexture).
+    for (bool& cube : fWalkCube)
+        cube = false;
+}
+
+void plWGPUDevice::WalkTexture(uint32_t stage, bool cube)
+{
+    if (fPrewarmWalkActive && stage < plWGPUD3DDevice::kNumStages)
+        fWalkCube[stage] = cube;
 }
 
 void plWGPUDevice::EndPrewarmWalk()
@@ -3644,6 +3835,10 @@ void plWGPUDevice::ReleaseAllDeviceObjects()
     fShaderModules.clear();
     for (auto& map : fFixedPipelines)
         map.clear();
+    // A program that failed on the released device gets another try on the next one. The program texts and ids stay
+    // (they name the modules by address, ShaderModule).
+    fFixedFailed.clear();
+    fFixedScopeChecks.clear();
     fShaderPipelines.clear();
     for (auto& [key, sampler] : fD3DSamplers)
         wgpuSamplerRelease(sampler);

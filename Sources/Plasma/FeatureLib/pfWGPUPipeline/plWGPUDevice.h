@@ -63,6 +63,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <string>
 #include <string_theory/string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "HeadSpin.h"
@@ -70,6 +71,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "hsMatrix44.h"
 #include "plWGPUD3DDevice.h"
 #include "plWGPUDeviceRef.h"
+#include "plWGPUFixedFragment.h"
 
 class plWGPUPipeline;
 class plRenderTarget;
@@ -82,6 +84,7 @@ struct plWGPUFixedFunctionKey;
 struct plWGPUShaderKey;
 struct plWGPUShaderUniforms;
 struct plWGPUFixedState;
+struct plWGPUFFUniforms;
 
 class plWGPUDevice
 {
@@ -260,6 +263,11 @@ public:
     /// would use on the main target. Nothing when that pipeline is built or being built. True if a build started.
     bool     PrewarmFixedFunction(const FixedFunctionDraw& draw);
     bool     PrewarmShader(const FixedFunctionDraw& draw);
+    /// In a walk: the texture the draw would bind at a stage is a cube map (true) or 2D or none (false). The walk binds
+    /// no texture, but a specialised fragment program samples a cube map or a 2D texture by the stage's binding, so the
+    /// walk records which at each place the draw would bind one (plWGPUPipeline's walk sites). Like D3D9's bindings
+    /// they persist across draws; BeginPrewarmWalk clears them.
+    void     WalkTexture(uint32_t stage, bool cube);
     /// The bracket of plWGPUPipeline's prewarm walks. Inside it the walk's target is the main target until the walk
     /// pushes a render target: SetRenderTarget then records the target a draw would bind, without binding it
     /// (IPrewarmBindTarget), Clear starts the clear quad's pipeline where the draw would draw that quad
@@ -455,6 +463,30 @@ private:
     // whose depth format is depthFormat (DrawShader's; both programs set), from the current D3D9 state. The draws and
     // the prewarm compute their pipelines with these.
     void IFixedFunctionKey(const FixedFunctionDraw& draw, plWGPUFixedFunctionKey& key, plWGPUFixedState& fixed) const;
+    // The uniforms a fixed-function program's signature reads (plWGPUFixedFragment::Signature), from the current D3D9
+    // state: per enabled stage COLOROP, COLORARG1/2, ALPHAOP and ALPHAARG1/2 (ops, ops2[0..1]) and whether its texture
+    // is a cube map (flags[0], from cube: the draw's bound texture, or the walk's WalkTexture); SPECULARENABLE
+    // (lighting[0]), the table fog mode (fog[0]) and the alpha test (fog[2]). The only writer of those fields, so the
+    // draw's program is chosen from the bytes it uploads, and the walk's the same way.
+    void IFixedFragmentUniforms(const plWGPUFixedFunctionKey& key, const bool* cube, plWGPUFFUniforms& u) const;
+
+    // The pipeline cache key of a fixed-function record: the packed key in bits 0-33, the fixed state in 34-43, the
+    // colour format in 44-50, the depth format in 51-57 and the sample count in 58-60 (render target formats are all
+    // below 128).
+    static uint64_t IFixedPipelineKey(const plWGPUFixedFunctionKey& key, const plWGPUFixedState& fixed,
+                                      WGPUTextureFormat color, WGPUTextureFormat depth, uint32_t samples);
+
+    // The fragment program of a fixed-function draw (or a walk's dry draw) whose uniforms are u: 0 (the uber shader)
+    // unless the adapter runs specialised programs (plWGPUEnumerate::SpecialisedFixedPrograms), the table matches the
+    // embedded source (plWGPUFixedFragment::Bind), the signature is in the fallback domain
+    // (plWGPUFixedFragment::InDomain) and the program has not failed for this pipeline key (IFixedProgramFailed).
+    // A new admitted signature gets the next id and its module text; a refused one is logged once. sig: the signature.
+    uint32_t IFixedProgram(const plWGPUFFUniforms& u, const plWGPUFixedFunctionKey& key, uint64_t pipelineKey,
+                           plWGPUFixedFragmentSig& sig);
+    // A specialised program's pipeline failed (an asynchronous build's status, or the error scope of a synchronous
+    // create): the pipeline key keeps the uber shader from now on, and the failure is logged.
+    void     IFixedProgramFailed(uint64_t pipelineKey, uint32_t program, const char* how, const std::string& message);
+
     void IShaderKey(const FixedFunctionDraw& draw, WGPUTextureFormat depthFormat, plWGPUShaderKey& key,
                     plWGPUFixedState& fixed) const;
     // plMetalDevice::PrewarmPipelineStateFor (plMetalDevice.cpp:1183) with the test it means: start a build when the
@@ -477,6 +509,51 @@ private:
     uint32_t          fWalkSampleCount = 1;
     uint32_t          fWalkWidth = 0;
     uint32_t          fWalkHeight = 0;
+    bool              fWalkCube[plWGPUD3DDevice::kNumStages] = {}; // WalkTexture
+
+    // The specialised fixed-function fragment programs (IFixedProgram). The texts are append-only and never freed, so
+    // an id and the address of its text name one program for the device's life (ShaderModule keys its modules by
+    // that address); id n is fFixedProgramTexts[n - 1]. fFixedProgramIds holds every signature seen, a refused one
+    // as 0. fFixedFailed: the (pipeline key, program) pairs whose pipeline failed, which keep the uber shader.
+    struct FixedPipelineId
+    {
+        uint64_t key;
+        uint32_t program;
+        bool     operator==(const FixedPipelineId& o) const { return key == o.key && program == o.program; }
+    };
+    struct FixedPipelineIdHash
+    {
+        size_t operator()(const FixedPipelineId& id) const noexcept
+        {
+            return std::hash<uint64_t>()(id.key) ^ (std::hash<uint32_t>()(id.program) * 0x9e3779b97f4a7c15ULL);
+        }
+    };
+    using FixedPipelineMap = std::unordered_map<FixedPipelineId, WGPURenderPipeline, FixedPipelineIdHash>;
+    plWGPUFixedFragment                                                              fFixedFragment;
+    bool                                                                             fFixedFragmentTried = false;
+    std::unordered_map<plWGPUFixedFragmentSig, uint32_t, plWGPUFixedFragmentSigHash> fFixedProgramIds;
+    std::deque<std::string>                                                          fFixedProgramTexts;
+    std::unordered_set<FixedPipelineId, FixedPipelineIdHash>                         fFixedFailed;
+
+    // A synchronous create of a specialised program's pipeline (DrawFixedFunction) runs inside a validation and an
+    // internal error scope; their pops are waited for with the builds (PumpPipelineBuilds), and an error makes the
+    // pipeline key keep the uber shader (IFixedProgramFailed). The pops' callbacks write only the shared result.
+    struct FixedScopeResult
+    {
+        uint32_t    pending = 2; // the two pops
+        bool        failed = false;
+        std::string message;
+    };
+    struct FixedScopeCheck
+    {
+        WGPUFuture                        futures[2]{};
+        std::shared_ptr<FixedScopeResult> result;
+        FixedPipelineId                   id;
+        uint8_t                           plate = 0;
+        uint32_t                          generation = 0;
+    };
+    std::vector<FixedScopeCheck> fFixedScopeChecks;
+    void                         ICollectFixedScopeChecks();
 
 protected:
     WGPURenderPipeline PipelineState(plWGPUPipelineState* pipelineState);
@@ -537,7 +614,7 @@ private:
     std::map<std::array<plWGPUD3D9::DWORD, 7>, WGPUSampler> fD3DSamplers;
     std::map<std::array<void*, 24>, WGPUBindGroup>          fFixedBindGroups;
     uint32_t                                                fFixedBindGroupSerial;
-    std::unordered_map<uint64_t, WGPURenderPipeline>        fFixedPipelines[3]; // [span, plate, XYZ|TEX1]
+    FixedPipelineMap                                        fFixedPipelines[3]; // [span, plate, XYZ|TEX1]
     uint32_t                                                fFixedTransformSerial;
     float                                                   fFixedWorldView[2][16];
     float                                                   fFixedNormal[2][16];

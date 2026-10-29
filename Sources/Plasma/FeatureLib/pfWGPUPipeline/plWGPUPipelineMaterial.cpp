@@ -49,6 +49,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plGImage/plCubicEnvironmap.h"
 #include "plGImage/plMipmap.h"
 #include "plGLight/plLightInfo.h"
+#include "plPipeline/plCubicRenderTarget.h"
 #include "plProfile.h"
 #include "plSurface/hsGMaterial.h"
 #include "plSurface/plLayer.h"
@@ -552,9 +553,13 @@ void plWGPUPipeline::IHandleTextureStage(uint32_t stage, plLayerInterface* layer
     IHandleStageTransform(stage, layer);
 
     // Create the texture (if necessary) and set it to the device. The prewarm's walk (plWGPUPipeline::
-    // IPrewarmPipelines) neither creates nor binds textures: no pipeline depends on them.
-    if (fPrewarmWalk)
+    // IPrewarmPipelines) neither creates nor binds textures: it records only whether the stage's texture is a cube
+    // map, which a specialised fragment program depends on, for the texture plDXPipeline::IHandleTextureStage binds
+    // (plDXPipeline.cpp:5806-5830).
+    if (fPrewarmWalk) {
+        fDevice.WalkTexture(stage, IWalkCube(layer->GetTexture()));
         return;
+    }
     if (texture = layer->GetTexture(); texture != nullptr) {
         ref = texture->GetDeviceRef();
         if (ref == nullptr || ref->IsDirty()) {
@@ -573,11 +578,18 @@ void plWGPUPipeline::IHandleTextureStage(uint32_t stage, plLayerInterface* layer
     }
 }
 
+bool plWGPUPipeline::IWalkCube(plBitmap* texture)
+{
+    return texture &&
+           (plCubicEnvironmap::ConvertNoRef(texture) != nullptr || plCubicRenderTarget::ConvertNoRef(texture) != nullptr);
+}
+
 void plWGPUPipeline::IHandleBumpEnv(int stage, uint32_t blendFlags)
 {
     // plDXPipeline::IHandleBumpEnv. D3DTOP_BUMPENVMAPLUMINANCE, the dyna-decal environment
-    // bump that DX notes is unused in production, is not supported: the WGSL combiner passes
-    // the current colour through for it, and DrawFixedFunction counts it.
+    // bump that DX notes is unused in production, is not supported: the WGSL combiner's stageOp
+    // has no branch for it and returns Arg1 (FixedPipelineShaders.wgsl), as a specialised
+    // program does (plWGPUFixedFragment). Nothing counts it.
     DWORD    current = stage ? D3DTA_CURRENT : D3DTA_DIFFUSE;
     uint32_t colorSrc = blendFlags & hsGMatState::kBlendInvertColor ? D3DTA_TEXTURE | D3DTA_COMPLEMENT : D3DTA_TEXTURE;
 
@@ -1435,6 +1447,11 @@ void plWGPUPipeline::IInvalidateState()
             fLayerRef[i] = nullptr;
             fD3DDevice->SetTexture(i, nullptr);
         }
+    } else {
+        // The walk records the unbinding of plDXPipeline::IInvalidateState (plDXPipeline.cpp:7040-7044): no texture,
+        // 2D (plWGPUDevice::WalkTexture).
+        for (i = 0; i < 8; i++)
+            fDevice.WalkTexture(i, false);
     }
 
     fLayerState[0].fZFlags = 0;

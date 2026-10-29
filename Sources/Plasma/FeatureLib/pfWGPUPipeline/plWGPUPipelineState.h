@@ -189,22 +189,30 @@ private:
 
 // MARK: Fixed function (plMetalPipelineState.h plMetalMaterialPassPipelineState)
 
-// The pipeline of a fixed-function pass (FixedPipelineShaders.wgsl), by plWGPUFixedFunctionKey.
+// The pipeline of a fixed-function pass (FixedPipelineShaders.wgsl), by plWGPUFixedFunctionKey and fragment program:
+// program 0 is the uber shader, any other the device's specialised fragment program of that id (plWGPUFixedFragment,
+// plWGPUDevice::IFixedProgram), whose module text is source. The device keeps a program's text for its whole life and
+// never reuses an id, so the text's address names the module (plWGPUDevice::ShaderModule).
 class plWGPUFixedFunctionPipelineState : public plWGPUPipelineState
 {
 public:
-    plWGPUFixedFunctionPipelineState(plWGPUDevice* device, const plWGPUFixedFunctionKey& key, const plWGPUFixedState& fixed);
+    plWGPUFixedFunctionPipelineState(plWGPUDevice* device, const plWGPUFixedFunctionKey& key, const plWGPUFixedState& fixed,
+                                     uint32_t program = 0, const char* source = nullptr);
 
     bool IsEqual(const plWGPUPipelineState& p) const override
     {
         const plWGPUFixedFunctionPipelineState* o = static_cast<const plWGPUFixedFunctionPipelineState*>(&p);
-        return o->fKey.Pack() == fKey.Pack();
+        return o->fKey.Pack() == fKey.Pack() && o->fProgram == fProgram;
     }
     size_t GetHash() const override;
 
     uint16_t                      GetID() const override { return plWGPUPipelineType::MaterialShader; }
     plWGPUPipelineState*          Clone() override { return new plWGPUFixedFunctionPipelineState(*this); }
     const plWGPUFixedFunctionKey& GetKey() const { return fKey; }
+    uint32_t                      GetProgram() const { return fProgram; }
+
+    /** The uber shader's WGSL, FixedPipelineShaders.wgsl as embedded: the source the specialised programs are cut from. */
+    static const char* UberSource();
 
     const char*      GetShaderSource() const override;
     const char*      GetVertexFunction() const override { return "fixedVertex"; }
@@ -233,6 +241,8 @@ public:
 
 private:
     plWGPUFixedFunctionKey fKey;
+    uint32_t               fProgram; // 0: the uber shader
+    const char*            fSource;  // the program's module text (fProgram != 0)
 };
 
 // MARK: Shader programs (plMetalPipelineState.h, plMetalDynamicMaterialPipelineState)

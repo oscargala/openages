@@ -715,7 +715,7 @@ bool plClient::MsgReceive(plMessage* msg)
                             // A room like any other (the clone room, plNetClientMgr::IAddCloneRoom): its drawables
                             // are walked as they join it (plWGPUPipeline::PrewarmRoom, the frame start's joined seat).
                             if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline))
-                                wgpuPipe->PrewarmRoom(pNode, false);
+                                wgpuPipe->PrewarmRoom(pNode, false, fPageMgr);
 #endif
                         }
                     }
@@ -1256,7 +1256,7 @@ void plClient::IRoomLoaded(plSceneNode* node, bool hold)
         plAgeLoader* ageLoader = plAgeLoader::GetInstance();
         const bool   afterAgeSettings = ageLoader && !ageLoader->PendingAgeFniFiles().empty() &&
                                       ageLoader->IsPendingPageInRoomKey(fCurrentNode->GetKey());
-        wgpuPipe->PrewarmRoom(fCurrentNode, afterAgeSettings);
+        wgpuPipe->PrewarmRoom(fCurrentNode, afterAgeSettings, fPageMgr);
     }
 #endif
 

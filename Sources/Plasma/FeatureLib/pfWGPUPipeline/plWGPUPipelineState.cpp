@@ -118,18 +118,26 @@ const char* plWGPUClearPipelineState::GetFragmentFunction() const
 // MARK: Fixed function
 
 plWGPUFixedFunctionPipelineState::plWGPUFixedFunctionPipelineState(plWGPUDevice* device, const plWGPUFixedFunctionKey& key,
-                                                                   const plWGPUFixedState& fixed)
-    : plWGPUPipelineState(device), fKey(key)
+                                                                   const plWGPUFixedState& fixed, uint32_t program,
+                                                                   const char* source)
+    : plWGPUPipelineState(device), fKey(key), fProgram(source ? program : 0), fSource(source)
 {
     fFixed = fixed;
 }
 
 size_t plWGPUFixedFunctionPipelineState::GetHash() const
 {
-    return plWGPUPipelineState::GetHash() ^ std::hash<uint64_t>()(fKey.Pack());
+    // The packed key fills bits 0-33 (plWGPUFixedFunctionKey::Pack): the program goes above it, and program 0 hashes
+    // as the key alone.
+    return plWGPUPipelineState::GetHash() ^ std::hash<uint64_t>()(fKey.Pack() | (uint64_t(fProgram) << 34));
 }
 
 const char* plWGPUFixedFunctionPipelineState::GetShaderSource() const
+{
+    return fProgram ? fSource : kFixedPipelineWGSL;
+}
+
+const char* plWGPUFixedFunctionPipelineState::UberSource()
 {
     return kFixedPipelineWGSL;
 }
@@ -336,6 +344,10 @@ void plWGPUFixedFunctionPipelineState::ConfigureConstants(WGPUShaderStage stage,
         e.value = value;
         constants.push_back(e);
     };
+    // A specialised program's fragment stage reads no override: its stages and fog are written out
+    // (plWGPUFixedFragment::Module). Its vertex stage is the uber's and reads them all.
+    if (fProgram && stage == WGPUShaderStage_Fragment)
+        return;
     add("kStages", fKey.stages);
     add("kFog", fKey.fog);
     if (stage == WGPUShaderStage_Vertex) {

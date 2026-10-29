@@ -507,6 +507,12 @@ public:
 
     float            EvalPoint(hsPoint3& pos, hsVector3& norm);
 
+#ifdef PLASMA_PIPELINE_WGPU
+    // The render requests ISubmitRenderRequests queues, those whose message exists, in its order: the requests
+    // plClient::IAddRenderRequest receives. Read only (a pipeline that builds ahead of their first draw).
+    void GetRenderRequests(std::vector<plRenderRequest*>& reqs) const;
+#endif
+
     // Getters and Setters for Python twiddling
     //
     // First a way to set new values. The secs parameter says how long to take

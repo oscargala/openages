@@ -40,13 +40,22 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
+#include <emscripten/emscripten.h>
+
+#include <string_theory/format>
+
 #include "HeadSpin.h"
+#include "plAvatar/plArmatureMod.h"
 #include "plAvatar/plAvatarClothing.h"
 #include "plAvatar/plClothingLayout.h"
+#include "plDrawable/plDrawableSpans.h"
 #include "plGImage/plMipmap.h"
 #include "plPipeline/plRenderTarget.h"
+#include "plSurface/hsGMaterial.h"
+#include "plSurface/plLayer.h"
 #include "plWGPUPipeline.h"
 #include "plWGPUPipeline_Private.h"
+#include "pnKeyedObject/plKey.h"
 #ifdef PLASMA_TEST_HOOKS
 #include "plWGPUPipelineObserver.h"
 #endif
@@ -219,11 +228,97 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
         fClothingOutfits.swap(fPrevClothingOutfits);
 }
 
+void plWGPUPipeline::IPrewarmOutfits()
+{
+    // The submitted outfits' drawables as this frame's scene and render requests draw them: after BeginRender's
+    // compose (IPreprocessAvatarTextures, plDXPipeline.cpp:2973) has given each outfit's target layer its render
+    // target (plDXPipeline.cpp:11766-11769). Every clothing span draws with the outfit's material
+    // (plClothingOutfit::fMaterial, plAvatarClothing.cpp:1401, plInstanceDrawInterface.cpp:121-123), so before the
+    // first compose, or after a link released the outfit (pl3DPipeline::IClearClothingOutfits), the room, joined and
+    // re-walk seats walk its base and receive passes untextured (IHandleTextureMode's no-texture branch,
+    // plDXPipeline.cpp:6384-6395; ISetupShadowRcvTextureStages' base-alpha stages need layer 0's texture,
+    // plDXPipeline.cpp:11459). Each outfit IPreprocessAvatarTextures will assign (a base texture and no target,
+    // plDXPipeline.cpp:11756-11769) is walked here with the target layer holding a stand-in, the first pool target (a
+    // 2D render target, as each the compose takes: pl3DPipeline::IFillAvRTPool); the avatar's drawable is the
+    // outfit's (plClothingOutfit::MsgReceive, plAvatarClothing.cpp:1196). Run by IPrewarmTargets' walk after the
+    // shadow casts and the composites, which see the state from before the compose (BeginRender: IPreprocessShadows,
+    // then IPreprocessAvatarTextures, plDXPipeline.cpp:2972-2973), under the main target. The stand-ins stay for
+    // IPrewarmRequests: the frame's render requests draw after BeginRender too (plClient::IDraw: BeginRender,
+    // plClient.cpp:1929, then IProcessPreRenderRequests, :1942, and IProcessPostRenderRequests, :1952), so their draws
+    // of the outfit's spans read the target. IPrewarmClearStandIns takes them out again.
+    if (fAvRTPool.empty())
+        return;
+    plRenderTarget* standIn = fAvRTPool.front();
+    for (plClothingOutfit* co : fClothingOutfits) {
+        if (co->fBase == nullptr || co->fBase->fBaseTexture == nullptr || co->fTargetLayer == nullptr ||
+            co->fTargetLayer->GetTexture() != nullptr || co->fAvatar == nullptr)
+            continue;
+        plDrawableSpans* drawable = plDrawableSpans::ConvertNoRef(co->fAvatar->FindDrawable());
+        if (!drawable)
+            continue;
+#ifdef PLASMA_TEST_HOOKS
+        const PrewarmTally before = fPrewarmTally;
+        const double       t0 = emscripten_get_now();
+#endif
+        co->fTargetLayer->SetTexture(standIn);
+#ifdef PLASMA_TEST_HOOKS
+        // The identity checks: the drawable's spans that draw with the outfit's material, and of them those whose
+        // layer 0 reads the stand-in (fTargetLayer itself or a layer over it).
+        uint32_t outfitSpans = 0, readStandIn = 0;
+        for (plSpan* span : drawable->GetSpanArray()) {
+            if (!span || drawable->GetMaterial(span->fMaterialIdx) != co->fMaterial)
+                continue;
+            outfitSpans++;
+            if (co->fMaterial->GetNumLayers() && co->fMaterial->GetLayer(0)->GetTexture() == standIn)
+                readStandIn++;
+        }
+#endif
+        fPrewarmStandIns.push_back(co);
+        IPrewarmDrawable(drawable, nullptr);
+#ifdef PLASMA_TEST_HOOKS
+        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+            const ST::string detail =
+                ST::format("material {} target layer {} drawable {}: {} spans with the outfit's material, {} reading the stand-in at layer 0",
+                           co->fMaterial->GetKey() ? co->fMaterial->GetKey()->GetUoid().StringIze() : ST_LITERAL("(no key)"),
+                           co->fTargetLayer->GetKey() ? co->fTargetLayer->GetKey()->GetUoid().StringIze() : ST_LITERAL("(no key)"),
+                           drawable->GetKey() ? drawable->GetKey()->GetUoid().StringIze() : ST_LITERAL("(no key)"),
+                           outfitSpans, readStandIn);
+            plWGPUPipelineObserver::PrewarmView view;
+            view.seat = "outfits";
+            view.detail = detail.c_str();
+            view.drawables = 1;
+            view.spans = fPrewarmTally.spans - before.spans;
+            view.requests = fPrewarmTally.requests - before.requests;
+            view.started = fPrewarmTally.started - before.started;
+            view.unfilledSkinned = fPrewarmTally.unfilledSkinned - before.unfilledSkinned;
+            view.unfilledParticle = fPrewarmTally.unfilledParticle - before.unfilledParticle;
+            view.unfilledOther = fPrewarmTally.unfilledOther - before.unfilledOther;
+            view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
+            view.walkMs = emscripten_get_now() - t0;
+            observer->OnPrewarm(*this, view);
+        }
+#endif
+    }
+}
+
+void plWGPUPipeline::IPrewarmClearStandIns()
+{
+    // The target layers IPrewarmOutfits gave a stand-in, cleared again before the frame goes on (its compose, or the
+    // dropped frame's return): the walk leaves no layer changed.
+    for (plClothingOutfit* co : fPrewarmStandIns)
+        co->fTargetLayer->SetTexture(nullptr);
+    fPrewarmStandIns.clear();
+}
+
 // plAVTexVert (plDXPipeline.cpp) with the D3D9 (u, v, 1) of a 2-float coordinate.
+
 void plWGPUPipeline::IDrawClothingQuad(float x, float y, float w, float h, float uOff, float vOff, plMipmap* tex)
 {
-    // plDXPipeline::IDrawClothingQuad (the prewarm's walk makes and binds no texture)
-    if (!fPrewarmWalk) {
+    // plDXPipeline::IDrawClothingQuad (the prewarm's walk makes and binds no texture; it records the 2D mipmap
+    // plDXPipeline::IDrawClothingQuad binds, plDXPipeline.cpp:11852)
+    if (fPrewarmWalk) {
+        fDevice.WalkTexture(0, false);
+    } else {
         plWGPUTextureRef* ref = (plWGPUTextureRef*)tex->GetDeviceRef();
         if (!ref || ref->IsDirty()) {
             MakeTextureRef(tex);

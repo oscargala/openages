@@ -4375,3 +4375,16 @@ void plWaveSet7::IUpdateGraphShaders(plPipeline* pipe, float dt)
             IUpdateGraphShader(dt, i-1);
     }
 }
+
+#ifdef PLASMA_PIPELINE_WGPU
+void plWaveSet7::GetRenderRequests(std::vector<plRenderRequest*>& reqs) const
+{
+    if (fBumpReqMsg)
+        reqs.push_back(fBumpReqMsg->Request());
+
+    for (int i = 0; i < kGraphShorePasses; i++) {
+        if (fGraphReqMsg[i])
+            reqs.push_back(fGraphReqMsg[i]->Request());
+    }
+}
+#endif

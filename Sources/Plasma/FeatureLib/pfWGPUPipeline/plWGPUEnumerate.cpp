@@ -82,6 +82,7 @@ struct State
     bool         failed = false;
     ST::string   adapterDesc;
     ST::string   adapterVendor;
+    bool         specialisedFixed = false; // plWGPUEnumerate::SpecialisedFixedPrograms
 
     unsigned long errors = 0;
 
@@ -194,6 +195,32 @@ void OnAdapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringV
         s.adapterDesc = ST::string::from_utf8(View(info.architecture).c_str());
     plWGPULog("ADAPTER after {.1f} ms: vendor '{}' architecture '{}' description '{}' backend {}",
               Now() - s.t0, View(info.vendor), View(info.architecture), View(info.description), int(info.backendType));
+    // The specialised fixed-function programs run only where they were measured to draw what the uber shader draws:
+    // an Apple GPU on Metal in Dawn, whose adapter info has vendor "apple" and architecture "metal-<n>" (Chromium
+    // reports "metal-3"). Two measurements make that claim. The pipeline bench drew every proven program against the
+    // uber, bit for bit, which covers the arithmetic. The client's own frames of six posed scenes matched the uber
+    // build's to the pixel, which covers what the bench cannot see: on Metal the frame also depends on which
+    // interstage variables a fragment program reads. WebKit on Metal (vendor "apple", architecture "apple", as Safari
+    // 27.0.1 reports it) has the bench's identity but no client frames yet, so it keeps the uber shader until its own
+    // frames of those scenes match. Every other adapter keeps it because the fma pins of FixedPipelineShaders.wgsl
+    // hold only where fma is fused, as Metal's is. A WebKit that reported "metal-<n>" would be admitted, so the
+    // FIXED PROGRAMS line below says which way each adapter went.
+    const std::string vendor = View(info.vendor), architecture = View(info.architecture);
+    s.specialisedFixed = vendor == "apple" && architecture.rfind("metal-", 0) == 0;
+    const char* admittedBy = "";
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build may run WebKit on Metal specialised, to take the measurement above (the observer's switch). No
+    // other adapter is ever offered.
+    if (!s.specialisedFixed && vendor == "apple" && architecture == "apple") {
+        plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get();
+        if (observer && observer->AdmitFixedPrograms(vendor.c_str(), architecture.c_str())) {
+            s.specialisedFixed = true;
+            admittedBy = " by PLASMA_TEST_FIXED_PROGRAMS_WEBKIT=1";
+        }
+    }
+#endif
+    plWGPULog("FIXED PROGRAMS: {}{} (adapter vendor '{}' architecture '{}')",
+              s.specialisedFixed ? "specialised" : "uber shader only", admittedBy, vendor, architecture);
     wgpuAdapterInfoFreeMembers(info);
 
     // DXT1/DXT5 upload as BC1/BC3 when the adapter has the optional feature, else they are
@@ -348,6 +375,8 @@ bool plWGPUEnumerate::FinishReacquire()
     return true;
 }
 unsigned long plWGPUEnumerate::ErrorCount() { return s.errors; }
+
+bool plWGPUEnumerate::SpecialisedFixedPrograms() { return s.specialisedFixed; }
 
 void plWGPUEnumerate::Enumerate(std::vector<hsG3DDeviceRecord>& records, hsDisplayHndl display)
 {

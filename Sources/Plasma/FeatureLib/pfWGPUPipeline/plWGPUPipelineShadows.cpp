@@ -220,9 +220,13 @@ void plWGPUPipeline::IRenderBlurFromShadowMap(plRenderTarget* scratchRT, plRende
     fD3DDevice->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
     fLayerState[0].fBlendFlags = uint32_t(-1);
 
-    if (!fPrewarmWalk) { // the prewarm's walk binds no texture: no key reads one
+    if (!fPrewarmWalk) {
         hsRefCnt_SafeAssign(fLayerRef[0], ref);
         fD3DDevice->SetTexture(0, ref);
+    } else {
+        // The walk binds no texture; it records the 2D render target plDXPipeline::IRenderBlurFromShadowMap binds
+        // (plDXPipeline.cpp:10161).
+        fDevice.WalkTexture(0, false);
     }
 
     if (D3DTTFF_COUNT2 != fLayerXformFlags[0]) {
@@ -250,6 +254,9 @@ void plWGPUPipeline::IRenderBlurFromShadowMap(plRenderTarget* scratchRT, plRende
         if (!fPrewarmWalk) {
             hsRefCnt_SafeAssign(fLayerRef[i], ref);
             fD3DDevice->SetTexture(i, ref);
+        } else {
+            // plDXPipeline::IRenderBlurFromShadowMap's stage i, a 2D render target (plDXPipeline.cpp:10188).
+            fDevice.WalkTexture(i, false);
         }
 
         if (D3DTTFF_COUNT2 != fLayerXformFlags[i]) {
@@ -321,9 +328,13 @@ void plWGPUPipeline::IRenderBlurBackToShadowMap(plRenderTarget* smap, plRenderTa
     hsAssert(ref, "Blur scratch map ref should have been made when it was rendered");
     if (!ref)
         return;
-    if (!fPrewarmWalk) { // the prewarm's walk binds no texture: no key reads one
+    if (!fPrewarmWalk) {
         hsRefCnt_SafeAssign(fLayerRef[0], ref);
         fD3DDevice->SetTexture(0, ref);
+    } else {
+        // The walk binds no texture; it records the 2D scratch target plDXPipeline::IRenderBlurBackToShadowMap binds
+        // (plDXPipeline.cpp:10283).
+        fDevice.WalkTexture(0, false);
     }
 
     ref = (plWGPUTextureRef*)smap->GetDeviceRef();
@@ -333,6 +344,9 @@ void plWGPUPipeline::IRenderBlurBackToShadowMap(plRenderTarget* smap, plRenderTa
     if (!fPrewarmWalk) {
         hsRefCnt_SafeAssign(fLayerRef[1], ref);
         fD3DDevice->SetTexture(1, ref);
+    } else {
+        // plDXPipeline::IRenderBlurBackToShadowMap's stage 1, the 2D shadow map (plDXPipeline.cpp:10290).
+        fDevice.WalkTexture(1, false);
     }
 
     // Color is ADDSIGNED2X(TFACTOR = black, scratch); alpha SELECTARG1(smap) in stage 1.
@@ -589,6 +603,9 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
     if (fPrewarmWalk) {
         plWGPUPrewarmTriListFunc prewarm(this, walkVertexFormat, walkTris);
         prewarm.RenderPrims();
+        fPrewarmTally.spans++;
+        fPrewarmTally.requests += prewarm.fRequests;
+        fPrewarmTally.started += prewarm.fStarted;
     } else {
         plWGPURenderTriListFunc render(this, vRef, iRef, iRef->fOffset, vStart, vLength, iStart, iLength / 3);
         fCounters.shadowCastSpans++;
@@ -783,12 +800,15 @@ bool plWGPUPipeline::IPushShadowCastState(plShadowSlave* slave)
     fD3DDevice->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
     fLayerState[1].fBlendFlags = uint32_t(-1);
 
-    // Set texture to U_LUT (the prewarm's walk makes and binds no texture: no key reads one)
+    // Set texture to U_LUT (the prewarm's walk makes and binds no texture; it records the 2D U_LUT that
+    // plDXPipeline::IPushShadowCastState binds, plDXPipeline.cpp:10832)
     if (!fPrewarmWalk) {
         plWGPUTextureRef* ref = IGetULutTextureRef();
 
         hsRefCnt_SafeAssign(fLayerRef[0], ref);
         fD3DDevice->SetTexture(0, ref);
+    } else {
+        fDevice.WalkTexture(0, false);
     }
 
     fD3DDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
@@ -1197,11 +1217,14 @@ void plWGPUPipeline::ISetupShadowRcvTextureStages(hsGMaterial* mat)
     fLayerState[0].fClampFlags = hsGMatState::kClampTexture;
 
     // Stage 1: the ULut. ColorArg1 = 1 - ULut, ColorArg2 = Current, ColorOp = Modulate;
-    // AlphaArg1 = ULut, AlphaArg2 = Current, AlphaOp = Subtract. (The prewarm's walk makes and binds no texture.)
+    // AlphaArg1 = ULut, AlphaArg2 = Current, AlphaOp = Subtract. (The prewarm's walk makes and binds no texture; it
+    // records the 2D U_LUT that plDXPipeline::ISetupShadowRcvTextureStages binds, plDXPipeline.cpp:11419.)
     if (!fPrewarmWalk) {
         plWGPUTextureRef* ref = IGetULutTextureRef();
         hsRefCnt_SafeAssign(fLayerRef[1], ref);
         fD3DDevice->SetTexture(1, ref);
+    } else {
+        fDevice.WalkTexture(1, false);
     }
 
     fD3DDevice->SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_TEXTURE | D3DTA_COMPLEMENT);
@@ -1292,12 +1315,16 @@ void plWGPUPipeline::ISetupShadowRcvTextureStages(hsGMaterial* mat)
             fD3DDevice->SetTextureStageState(iNextStage, D3DTSS_TEXTURETRANSFORMFLAGS, xformFlags);
         }
 
-        // This ref should be pretty safe to use, because we just rendered it. (Not bound by the prewarm's walk.)
+        // This ref should be pretty safe to use, because we just rendered it. (Not bound by the prewarm's walk, which
+        // records the kind of the layer's texture that plDXPipeline::ISetupShadowRcvTextureStages binds,
+        // plDXPipeline.cpp:11532.)
         if (!fPrewarmWalk) {
             plWGPUTextureRef* lRef = (plWGPUTextureRef*)layer->GetTexture()->GetDeviceRef();
 
             hsRefCnt_SafeAssign(fLayerRef[iNextStage], lRef);
             fD3DDevice->SetTexture(iNextStage, lRef);
+        } else {
+            fDevice.WalkTexture(iNextStage, IWalkCube(layer->GetTexture()));
         }
 
         iNextStage++;

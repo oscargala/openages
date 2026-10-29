@@ -63,6 +63,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plDrawable/plDrawableSpans.h"
 #include "plDrawable/plGBufferGroup.h"
 #include "plDrawable/plSpanTypes.h"
+#include "plDrawable/plWaveSet7.h"
 #include "plDrawable/plWaveSetShaderConsts.h"
 #include "plGImage/plCubicEnvironmap.h"
 #include "plGImage/plMipmap.h"
@@ -185,6 +186,7 @@ plWGPUPipeline::plWGPUPipeline(hsDisplayHndl display, hsWindowHndl window, const
     fFrameWaveBiasMixed = false;
     fFrameWaveBiasBits = 0;
     fPrewarmWalk = false;
+    fPrewarmHeldDrawable = false;
     fPrewarmSeat = nullptr;
     fPrewarmGeneration = 0;
     fPrewarmColor = WGPUTextureFormat_Undefined;
@@ -1395,10 +1397,19 @@ void plWGPUPipeline::IPrewarmFog(uint8_t& type, bool& degenerate) const
     }
 }
 
-void plWGPUPipeline::PrewarmRoom(plSceneNode* node, bool afterAgeSettings)
+void plWGPUPipeline::PrewarmRoom(plSceneNode* node, bool afterAgeSettings, const plPageTreeMgr* clientTree)
 {
     if (!node)
         return;
+    // A held room's drawables are drawn only through the render request of the plPostEffectMod that pages its node
+    // (plPostEffectMod.cpp:103-105, 221-224, 259-272): plClient::IRoomLoaded keeps it out of its page tree
+    // (plClient.cpp:1236-1245), and a re-delivered load keeps its first record. The receive walk reads the held set
+    // (IRenderShadowsOntoSpan).
+    const std::vector<plSceneNode*>& inTree = clientTree->GetNodes();
+    if (std::find(inTree.begin(), inTree.end(), node) == inTree.end())
+        fPrewarmHeldRooms.insert(node->GetKey()->GetUoid());
+    else
+        fPrewarmHeldRooms.erase(node->GetKey()->GetUoid());
     // A page of an Age load whose .fni has not run (plClient::IRoomLoaded): the .fni sets the Age's default fog at
     // plAgeLoaded2Msg, after the Age's last page (plAgeLoaderPaging.cpp:124-128, plNetCliAgeJoiner.cpp:413-416,
     // plAgeLoader::ExecPendingAgeFniFiles, plAgeLoader.cpp:422-430), so a walk now would build the room's pipelines
@@ -1452,6 +1463,7 @@ bool plWGPUPipeline::PrewarmBeforeScene(const std::vector<plRenderRequest*>& pre
     if (!IPrewarmSkipped()) {
         IPrewarmTargets();
         IPrewarmRequests(preRequests, postRequests, pageMgr);
+        IPrewarmClearStandIns();
     }
     if (mayDefer && fDevice.PipelineBuildsPending()) {
         // Not drawn, as a frame whose device is not ready: plDXPipeline::BeginRender returns true after IResetDevice
@@ -1541,6 +1553,38 @@ void plWGPUPipeline::IPrewarmNoteRoom(plSceneNode* node)
     room.node = uoid;
     room.pool = node->GetDrawPool();
     IPrewarmPoolSpans(room.pool, room.spans);
+    IPrewarmNoteWaveSets(node);
+}
+
+void plWGPUPipeline::IPrewarmNoteWaveSets(const plSceneNode* node)
+{
+    // The room page's wavesets, by class, for the requests seat (IPrewarmRequests): a waveset makes its render requests
+    // once (plWaveSet7::ICreateFixedMatPS, plWaveSet7.cpp:2213-2214; ISetupGraphShoreRenderReq, :4135-4136) and
+    // queues them only in a frame its bounds are visible (plWaveSet7::MsgReceive, :450-453). Only the node's own page
+    // is iterated; nothing is loaded (no FindKey, IPrewarmLoadedObject).
+    class plPrewarmWaveSets : public plRegistryKeyIterator
+    {
+    public:
+        std::vector<plUoid> fUoids;
+        bool                EatKey(const plKey& key) override
+        {
+            fUoids.push_back(key->GetUoid());
+            return true;
+        }
+    } waveSets;
+    plResManager*       resMgr = static_cast<plResManager*>(hsgResMgr::ResMgr());
+    plRegistryPageNode* page = resMgr->FindPage(node->GetKey()->GetUoid().GetLocation());
+    if (!page)
+        return;
+    page->IterateKeys(&waveSets, plWaveSet7::Index());
+    fPrewarmWaveSets.insert(waveSets.fUoids.begin(), waveSets.fUoids.end());
+}
+
+bool plWGPUPipeline::IPrewarmHeldRoom(const plDrawableSpans* drawable) const
+{
+    // The drawable's room now (plDrawableSpans::SetSceneNode moves it), against the rooms plClient holds.
+    const plKey node = drawable->GetSceneNode();
+    return node && fPrewarmHeldRooms.count(node->GetUoid()) != 0;
 }
 
 void plWGPUPipeline::IPrewarmFrameStart()
@@ -1589,6 +1633,11 @@ void plWGPUPipeline::IPrewarmFrameStart()
     // appends an avatar's spans to its drawable after the avatar joined the clone room (plClothingOutfit::IAddItem,
     // plAvatarClothing.cpp:553-589; plInstanceDrawInterface::AddSharedMesh; plDrawableSpans::AppendDISpans,
     // plDrawableSpans.cpp:2100), and removal (RemoveDISpans, IRemoveGarbage) shrinks it.
+    // The held rooms and the wavesets no longer loaded (PrewarmRoom, IPrewarmNoteWaveSets).
+    for (auto it = fPrewarmHeldRooms.begin(); it != fPrewarmHeldRooms.end();)
+        it = IPrewarmLoadedObject(*it) ? std::next(it) : fPrewarmHeldRooms.erase(it);
+    for (auto it = fPrewarmWaveSets.begin(); it != fPrewarmWaveSets.end();)
+        it = IPrewarmLoadedObject(*it) ? std::next(it) : fPrewarmWaveSets.erase(it);
     {
         std::vector<plDrawableSpans*> drawables;
         std::vector<size_t>           spans;
@@ -1927,6 +1976,9 @@ bool plWGPUPipeline::IPrewarmWalk(const std::vector<plDrawableSpans*>& drawables
     view.started = tally.started;
     view.opacityPasses = tally.opacityPasses;
     view.opacityStarted = tally.opacityStarted;
+    view.unfilledSkinned = tally.unfilledSkinned;
+    view.unfilledParticle = tally.unfilledParticle;
+    view.unfilledOther = tally.unfilledOther;
     view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
     view.walkMs = walkMs;
     fPrewarmCensusDue = true;
@@ -1942,9 +1994,10 @@ void plWGPUPipeline::IPrewarmTargets()
 {
     // This frame's render-target passes, before BeginRender draws them, in its order (plDXPipeline::BeginRender,
     // plDXPipeline.cpp:2972-2973): the shadow maps (IPreprocessShadows' loop, plDXPipeline.cpp:11199-11248), then the
-    // clothing composites (IPreprocessAvatarTextures). They run under the walk with the live device state, as the frame
-    // will: between here and IPreprocessShadows the frame's BeginRender sets only ZENABLE TRUE, which nothing in the
-    // port ever sets FALSE. Every slave and outfit is walked every scene frame, and the device's record lookup
+    // clothing composites (IPreprocessAvatarTextures), then the outfits' drawables as the frame's draws after the
+    // compose see them (IPrewarmOutfits, whose stand-ins stay for IPrewarmRequests). They run under the walk with the
+    // live device state, as the frame will: between here and IPreprocessShadows the frame's BeginRender sets only
+    // ZENABLE TRUE, which nothing in the port ever sets FALSE. Every slave and outfit is walked every scene frame, and the device's record lookup
     // (PrewarmPipelineStateFor) is the only deduplication: a cast pass's key takes state the cast does not set
     // (BLENDOP, kMiscTwoSided, the bound pixel shader) and per-span state (format, matrices, handedness), and a
     // caster's spans are collected again each frame.
@@ -1997,8 +2050,13 @@ void plWGPUPipeline::IPrewarmTargets()
         std::copy(blurScratch, blurScratch + kMaxRenderTargetNext, fBlurScratchRTs);
         std::copy(blurDest, blurDest + kMaxRenderTargetNext, fBlurDestRTs);
     }
-    if (!fClothingOutfits.empty())
+    if (!fClothingOutfits.empty()) {
         IPreprocessAvatarTextures();
+        IPrewarmOutfits();
+    }
+#ifdef PLASMA_TEST_HOOKS
+    const PrewarmTally tally = fPrewarmTally;
+#endif
     IPrewarmEnd(saved);
 #ifdef PLASMA_TEST_HOOKS
     if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
@@ -2006,6 +2064,11 @@ void plWGPUPipeline::IPrewarmTargets()
         const ST::string                    detail = ST::format("{} slaves, {} outfits", fShadows.size(), fClothingOutfits.size());
         view.seat = "targets";
         view.detail = detail.c_str();
+        view.spans = tally.spans;
+        view.requests = tally.requests;
+        view.unfilledSkinned = tally.unfilledSkinned;
+        view.unfilledParticle = tally.unfilledParticle;
+        view.unfilledOther = tally.unfilledOther;
         view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
         view.started = view.inFlightAfter - inFlightBefore;
         view.walkMs = emscripten_get_now() - saved.t0;
@@ -2032,8 +2095,54 @@ void plWGPUPipeline::IPrewarmRequests(const std::vector<plRenderRequest*>& preRe
     // view, never added to the walked set (a GUI dialog's drawables draw cull-front only through their request).
     // The post requests follow the main Render in the frame: a key input their passes do not set themselves comes
     // from a different predecessor here (a named residual, counted by the trace's draw-time creations).
+    // A walked room's waveset (IPrewarmNoteWaveSets) queues its requests only in a frame its bounds are visible
+    // (plWaveSet7::MsgReceive, plWaveSet7.cpp:450-453; IUpdateLayers, ISubmitRenderRequests, :1433-1437, 1468-1478),
+    // but makes them once, with the target, view, clear drawable and priority their first Render uses
+    // (ICreateRenderRequest, :2072-2095); its per-frame updates change layer transforms and shader constants only. Its
+    // requests not queued yet are walked from the frame they exist, inserted as plClient::IAddRenderRequest queues
+    // them (plClient.cpp:2174-2196: a priority below 0 into the pre list, else the post list, ascending, after equal
+    // ones), each once its target has a clean device ref (the walk makes none, plWGPUDevice::IPrewarmBindTarget): the
+    // same request the waveset queues later is then not walked again.
+    std::vector<plRenderRequest*>    pre(preRequests);
+    std::vector<plRenderRequest*>    post(postRequests);
+    std::set<const plRenderRequest*> unqueued;
+    if (!fPrewarmWaveSets.empty()) {
+        std::vector<plRenderRequest*> waveRequests;
+        for (const plUoid& uoid : fPrewarmWaveSets) {
+            if (const plWaveSet7* waveSet = plWaveSet7::ConvertNoRef(IPrewarmLoadedObject(uoid)))
+                waveSet->GetRenderRequests(waveRequests);
+        }
+        for (plRenderRequest* req : waveRequests) {
+            const bool queued = std::find(pre.begin(), pre.end(), req) != pre.end() ||
+                                std::find(post.begin(), post.end(), req) != post.end();
+            if (!req || queued || unqueued.count(req) || fPrewarmRequestsWalked.count({req, req->GetRenderTarget()}))
+                continue;
+            const plRenderTarget* rt = req->GetRenderTarget();
+            if (rt && (!rt->GetDeviceRef() || rt->GetDeviceRef()->IsDirty())) {
+#ifdef PLASMA_TEST_HOOKS
+                plWGPUPipelineObserver::PrewarmRequestView view;
+                view.request = req;
+                view.unqueued = true;
+                view.ownPageMgr = req->GetPageTreeMgr() != nullptr;
+                view.pageMgr = req->GetPageTreeMgr() ? req->GetPageTreeMgr() : pageMgr;
+                view.skipped = "its target has no clean device ref yet; the walk makes none";
+                if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
+                    observer->OnPrewarmRenderRequest(*this, view);
+#endif
+                continue;
+            }
+            std::vector<plRenderRequest*>& list = req->GetPriority() < 0 ? pre : post;
+            auto                           it = list.begin();
+            for (; it != list.end(); ++it) {
+                if (req->GetPriority() < (*it)->GetPriority())
+                    break;
+            }
+            list.insert(it, req);
+            unqueued.insert(req);
+        }
+    }
     std::vector<plRenderRequest*> requests;
-    for (const std::vector<plRenderRequest*>* list : {&preRequests, &postRequests}) {
+    for (const std::vector<plRenderRequest*>* list : {&pre, &post}) {
         for (plRenderRequest* req : *list) {
             if (req && fPrewarmRequestsWalked.emplace(req, req->GetRenderTarget()).second)
                 requests.push_back(req);
@@ -2052,6 +2161,7 @@ void plWGPUPipeline::IPrewarmRequests(const std::vector<plRenderRequest*>& preRe
 #ifdef PLASMA_TEST_HOOKS
         plWGPUPipelineObserver::PrewarmRequestView view;
         view.request = req;
+        view.unqueued = unqueued.count(req) != 0;
         view.ownPageMgr = req->GetPageTreeMgr() != nullptr;
         view.pageMgr = mgr;
         const double   t0 = emscripten_get_now();
@@ -2094,11 +2204,19 @@ void plWGPUPipeline::IPrewarmRequests(const std::vector<plRenderRequest*>& preRe
         view.started = uint32_t(fDevice.PipelineBuildsPending()) - inFlight0;
         view.opacityPasses = fPrewarmTally.opacityPasses;
         view.opacityStarted = fPrewarmTally.opacityStarted;
+        view.unfilledSkinned = fPrewarmTally.unfilledSkinned;
+        view.unfilledParticle = fPrewarmTally.unfilledParticle;
+        view.unfilledOther = fPrewarmTally.unfilledOther;
+        view.outfits = uint32_t(fClothingOutfits.size());
+        view.standIns = uint32_t(fPrewarmStandIns.size());
         view.walkMs = emscripten_get_now() - t0;
         seatTally.spans += fPrewarmTally.spans;
         seatTally.requests += fPrewarmTally.requests;
         seatTally.opacityPasses += fPrewarmTally.opacityPasses;
         seatTally.opacityStarted += fPrewarmTally.opacityStarted;
+        seatTally.unfilledSkinned += fPrewarmTally.unfilledSkinned;
+        seatTally.unfilledParticle += fPrewarmTally.unfilledParticle;
+        seatTally.unfilledOther += fPrewarmTally.unfilledOther;
         report();
 #endif
     }
@@ -2113,6 +2231,9 @@ void plWGPUPipeline::IPrewarmRequests(const std::vector<plRenderRequest*>& preRe
         view.requests = seatTally.requests;
         view.opacityPasses = seatTally.opacityPasses;
         view.opacityStarted = seatTally.opacityStarted;
+        view.unfilledSkinned = seatTally.unfilledSkinned;
+        view.unfilledParticle = seatTally.unfilledParticle;
+        view.unfilledOther = seatTally.unfilledOther;
         view.inFlightAfter = uint32_t(fDevice.PipelineBuildsPending());
         view.started = view.inFlightAfter - inFlightBefore;
         view.walkMs = emscripten_get_now() - saved.t0;
@@ -2131,6 +2252,19 @@ bool plWGPUPipeline::IPrewarmSpanFormat(plDrawableSpans* drawable, const plIcicl
     // its system has particles (plParticleSystem::IHandleRenderMsg: ResetParticleSystem, then
     // AssignEmitterToParticleSystem, plDrawableSpans.cpp:3309-3367, at plRenderMsg): it is walked with one triangle,
     // since the count is no key input (plWGPUDevice::IFixedFunctionKey, IShaderKey).
+    // A vertex ref without a buffer is drawn when it is volatile: the first PrepForRender creates a ref for every
+    // vertex buffer of the drawable (plGBufferGroup::ISendStorageToBuffers, plGBufferGroup.cpp:291-292), and
+    // CheckVertexBufferRef gives a volatile one no buffer (plDXPipeline.cpp:8340-8343; volatile: skinned, particles,
+    // kPropVolatile); the draw's ICheckDynBuffers refreshes it (plDXPipeline.cpp:2685-2687), and
+    // IRefreshDynVertices gives it its buffer (plDXPipeline.cpp:2616-2619) unless its vertex range is empty
+    // (plDXPipeline.cpp:2559-2561), before IRenderBufferSpan's nil-pair test. Until a draw of one of its spans, such a
+    // ref has no buffer: a span not visible since, a drawable prepared by a shadow cast only. The walk takes its
+    // format (the draw's, SetupVertexBufferRef's) and the same empty-range test, except for a span walked under the
+    // particle rule above, whose draw has particles (AssignEmitterToParticleSystem extends the range,
+    // plDrawableSpans.cpp:3362-3372). A static ref is filled where it is created (CheckStaticVertexBuffer): without a
+    // buffer, its range is empty and the draw does not draw it. An index ref without a buffer is not drawn either: the
+    // port fills it only for a non-empty range (plWGPUDevice::FillIndexBufferRef; D3D9's ICheckIndexBuffer creates it
+    // for any count, plDXPipeline.cpp:8422-8431).
     if (span.fGroupIdx >= drawable->GetNumBufferGroups())
         return false;
     plGBufferGroup* group = drawable->GetBufferGroup(span.fGroupIdx);
@@ -2142,15 +2276,27 @@ bool plWGPUPipeline::IPrewarmSpanFormat(plDrawableSpans* drawable, const plIcicl
         numTris = 1;
     else
         return false;
+    uint32_t* unfilled = nullptr;
     if (group->VertexReady(span.fVBufferIdx)) {
         plWGPUVertexBufferRef* vRef = (plWGPUVertexBufferRef*)group->GetVertexBufferRef(span.fVBufferIdx);
-        if (!vRef->GetBuffer())
-            return false;
+        if (!vRef->GetBuffer()) {
+            if (!vRef->Volatile())
+                return false;
+            const bool particleRule = span.fILength < 3;
+            if (!particleRule &&
+                (group->GetVertBufferEnd(span.fVBufferIdx) - group->GetVertBufferStart(span.fVBufferIdx)) * vRef->fVertexSize == 0)
+                return false;
+            unfilled = (span.fTypeMask & plSpan::kParticleSpan) ? &fPrewarmTally.unfilledParticle
+                       : vRef->Skinned()                        ? &fPrewarmTally.unfilledSkinned
+                                                                : &fPrewarmTally.unfilledOther;
+        }
         vertexFormat = vRef->fFormat;
     } else
         vertexFormat = plWGPUDevice::VertexBufferFormat(group->GetVertexFormat());
     if (group->IndexReady(span.fIBufferIdx) && !((plWGPUIndexBufferRef*)group->GetIndexBufferRef(span.fIBufferIdx))->GetBuffer())
         return false;
+    if (unfilled)
+        (*unfilled)++;
     return true;
 }
 
@@ -2165,6 +2311,7 @@ void plWGPUPipeline::IPrewarmDrawable(plDrawableSpans* drawable, const std::vect
     hsMatrix44 lastL2W;
     lastL2W.Reset();
     ISetLocalToWorld(lastL2W, lastL2W);
+    fPrewarmHeldDrawable = IPrewarmHeldRoom(drawable);
     const std::vector<plSpan*>& spanArray = drawable->GetSpanArray();
     const size_t                count = visList ? visList->size() : spanArray.size();
     for (size_t n = 0; n < count; n++) {
@@ -2199,6 +2346,7 @@ void plWGPUPipeline::IPrewarmDrawable(plDrawableSpans* drawable, const std::vect
         fPrewarmTally.requests += prewarm.fRequests;
         fPrewarmTally.started += prewarm.fStarted;
     }
+    fPrewarmHeldDrawable = false;
 }
 
 #ifdef PLASMA_TEST_HOOKS
@@ -3543,7 +3691,17 @@ void plWGPUPipeline::IRenderShadowsOntoSpan(const plWGPURenderPrimFunc& render, 
         // power and enable: no key field. No slave is read and nothing is counted.
         if (plShadowCaster::ShadowCastDisabled() || !IReceivesShadows(span, mat))
             return;
+        // Never for a held room's drawables (PrewarmRoom), in any view. C++ sets their slave bits only under the
+        // dialog's lit request (EnableLightsOnRenderRequest, plPostEffectMod.cpp:113): ICheckLighting by light group
+        // (pl3DPipeline.h:1607-1616) or by harvest (:1807), live from IPreprocessShadows (plDXPipeline.cpp:2972) to
+        // IClearShadowSlaves (:3097). No held span received a shadow on the measured routes, so the walk built only
+        // unused passes; if a bit is set, the draw creates the pipeline (wgpuDeviceCreateRenderPipeline, at the draw).
+        if (fPrewarmHeldDrawable)
+            return;
         ISetupShadowRcvTextureStages(mat);
+        // The slave's shadow map, stage 0 of plDXPipeline::ISetupShadowSlaveTextures, is a 2D render target
+        // (plDXPipeline.cpp:11602-11612): the walk records it (plWGPUDevice::WalkTexture).
+        fDevice.WalkTexture(0, false);
         if (!IsDebugFlagSet(plPipeDbg::kFlagNoShadowApply)) {
             const int kind = fRowCtx.kind;
             fRowCtx.kind = kRowShadowReceive;
