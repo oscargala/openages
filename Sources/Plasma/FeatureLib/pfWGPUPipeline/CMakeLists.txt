@@ -48,6 +48,7 @@ set(pfWGPUPipeline_SOURCES
     plWGPUDevice.cpp
     plWGPUDeviceRefs.cpp
     plWGPUEnumerate.cpp
+    plWGPUFixedFragment.cpp
     plWGPUFragmentShader.cpp
     plWGPUPipeline.cpp
     plWGPUPipelineAvatar.cpp
@@ -66,6 +67,7 @@ set(pfWGPUPipeline_HEADERS
     plWGPUD3DDevice.h
     plWGPUDevice.h
     plWGPUDeviceRef.h
+    plWGPUFixedFragment.h
     plWGPUFragmentShader.h
     plWGPULightRef.h
     plWGPULog.h
@@ -81,6 +83,7 @@ set(pfWGPUPipeline_HEADERS
     plWGPUTextureFormat.h
     plWGPUTexturePack.h
     plWGPUVertexShader.h
+    ShaderSrc/FixedFragmentTable.inc
     ShaderSrc/ShaderPrograms.inc
     ShaderSrc/ShaderTypes.h
     pfWGPUPipelineCreatable.h

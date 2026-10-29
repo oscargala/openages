@@ -41,17 +41,27 @@
 # *==LICENSE==*/
 
 # pfWGPUPipeline is built only for Emscripten. Its units that hold no WebGPU type (the D3D9 device
-# state, the pipeline keys, the D3D9 texture levels and formats) are built here from their sources,
-# so that they are tested natively.
+# state, the pipeline keys, the D3D9 texture levels and formats, the fixed-function fragment programs)
+# are built here from their sources, so that they are tested natively.
 set(pfWGPUPipelineTest_SOURCES
     test_plWGPUD3DDevice.cpp
+    test_plWGPUFixedFragment.cpp
     test_plWGPUPipelineKey.cpp
     test_plWGPUTextureFormat.cpp
     ${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUD3DDevice.cpp
+    ${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUFixedFragment.cpp
     ${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUTextureFormat.cpp
 )
 
+# The fixed-function shader the client embeds, which the fragment programs' test binds; the test includes the image
+# check's record of the programs it compared (fixed_fragment_programs.inc: the traced draw states and SHA-256 digests,
+# OpenSSL's).
 plasma_test(test_pfWGPUPipeline SOURCES ${pfWGPUPipelineTest_SOURCES})
+target_compile_definitions(
+    test_pfWGPUPipeline
+    PRIVATE
+        PLASMA_FIXED_PIPELINE_WGSL="${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/ShaderSrc/FixedPipelineShaders.wgsl"
+)
 target_link_libraries(
     test_pfWGPUPipeline
     PRIVATE
@@ -64,5 +74,6 @@ target_link_libraries(
         pfCamera
         pfConditional
         pfMessage
+        OpenSSL::Crypto
         gtest_main
 )

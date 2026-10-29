@@ -474,8 +474,11 @@ fn stageArg(sel: u32, diffuse: vec4f, current: vec4f, tex: vec4f, specular: vec4
     } else if (which == TA_SPECULAR) {
         a = specular;
     }
+    // COMPLEMENT's 1 - a written as one fma pins its rounding: fma(a, -1, 1) rounds once, as the plain subtraction
+    // does, so the D3D9 equation is unchanged, and a compiler has no product or sum left to regroup with the caller's.
+    // Rewriting it reopens the bit identity of the specialised programs with this shader.
     if ((sel & TA_COMPLEMENT) != 0u) {
-        a = vec4f(1.0) - a;
+        a = fma(a, vec4f(-1.0), vec4f(1.0));
     }
     if ((sel & TA_ALPHAREPLICATE) != 0u) {
         a = vec4f(a.a);
@@ -493,8 +496,12 @@ fn stageOp(op: u32, a1: vec4f, a2: vec4f, diffuse: vec4f, current: vec4f, tex: v
     if (op == TOP_MODULATE2X) { return a1 * a2 * 2.0; }
     if (op == TOP_MODULATE4X) { return a1 * a2 * 4.0; }
     if (op == TOP_ADD) { return a1 + a2; }
-    if (op == TOP_ADDSIGNED) { return a1 + a2 - vec4f(0.5); }
-    if (op == TOP_ADDSIGNED2X) { return (a1 + a2 - vec4f(0.5)) * 2.0; }
+    // ADDSIGNED (a1 + a2 - 0.5) and ADDSIGNED2X ((a1 + a2 - 0.5) * 2) as one fma each pin their roundings:
+    // fma(1, s, -0.5) and fma(s, 2, -1) round as the left-to-right sums do (the doubling is exact), so the D3D9
+    // equations are unchanged, and the compiler has nothing left to regroup. Rewriting them reopens the bit identity
+    // of the specialised programs with this shader.
+    if (op == TOP_ADDSIGNED) { return fma(vec4f(1.0), a1 + a2, vec4f(-0.5)); }
+    if (op == TOP_ADDSIGNED2X) { return fma(a1 + a2, vec4f(2.0), vec4f(-1.0)); }
     if (op == TOP_SUBTRACT) { return a1 - a2; }
     if (op == TOP_ADDSMOOTH) { return a1 + a2 - a1 * a2; }
     if (op == TOP_BLENDDIFFUSEALPHA) { return vec4f(fma(a2.rgb, vec3f(1.0 - diffuse.a), a1.rgb * diffuse.a), fma(a1.a - a2.a, diffuse.a, a2.a)); }
@@ -555,12 +562,17 @@ fn fixedFragment(in: VertexOut) -> @location(0) vec4f {
         rgb = clamp(rgb + specular.rgb, vec3f(0.0), vec3f(1.0));
     }
 
+    // C = f*C + (1-f)*FOGCOLOR, pinned to one fma: (1-f)*FOGCOLOR is rounded with the add, f*C on its own. That is
+    // not strict IEEE evaluation (which rounds both products); it is the contraction Metal's compilers chose for the
+    // plain text, measured equal over 537 traced and 320 synthetic variants in Chromium
+    // (chromium-20261028-151224-pin1) and WebKit (safari-20261028-154938), so the D3D9 equation and today's output
+    // are unchanged. Rewriting it reopens the bit identity of the specialised programs with this shader.
     if (kFog == 1u) {
         let f = fogFactor(u.fog.x, in.fog.x);
-        rgb = f * rgb + (1.0 - f) * u.fogColor.rgb;
+        rgb = fma(vec3f(1.0 - f), u.fogColor.rgb, f * rgb);
     } else if (kFog == 2u) {
         let f = clamp(in.fog.y, 0.0, 1.0);
-        rgb = f * rgb + (1.0 - f) * u.fogColor.rgb;
+        rgb = fma(vec3f(1.0 - f), u.fogColor.rgb, f * rgb);
     }
 
     if (u.fog.z != 0u && !alphaTest(u.fog.z, current.a, u.fog.w)) {

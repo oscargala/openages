@@ -3,7 +3,9 @@ name: Web build
 # web/build/sources.lock, then the web product's tests (web/tests/run.py) in Chromium. web.yml calls it. A second job
 # checks the format of the port's own Python and JavaScript with the formatters web/build/formatters pins.
 #
-# The WGSL that ShaderSrc/gen/d3d9_to_wgsl.py generates is regenerated first and must equal the committed files.
+# The WGSL that ShaderSrc/gen/d3d9_to_wgsl.py generates, and the fixed-function fragment table that
+# ShaderSrc/gen/fixed_fragment_table.py cuts from FixedPipelineShaders.wgsl, are regenerated first and must equal the
+# committed files.
 # Every cache is keyed on the sources.lock records and the scripts it is built from. The dependency builds record
 # one fixed build time (web/build/common.sh use_build_date), so a cache built on another day holds the same bytes.
 on:
@@ -74,10 +76,11 @@ jobs:
           set -euo pipefail
           shaders=Sources/Plasma/FeatureLib/pfWGPUPipeline/ShaderSrc
           python3 -I -B "$shaders/gen/d3d9_to_wgsl.py"
+          python3 -I -B "$shaders/gen/fixed_fragment_table.py"
           if [ -n "$(git status --porcelain -- "$shaders")" ]; then
             git status --short -- "$shaders"
             git diff -- "$shaders"
-            echo "::error::the generated WGSL differs from the committed files: run $shaders/gen/d3d9_to_wgsl.py and commit"
+            echo "::error::the generated shader files differ from the committed ones: run $shaders/gen/d3d9_to_wgsl.py and $shaders/gen/fixed_fragment_table.py and commit"
             exit 1
           fi
 
