@@ -43,28 +43,49 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // Native OpenAL/SDL playback only: activation touches browser transport, never AL state. The client's members of
 // Module.plasma (pre.js): audioBackend names this backend; audioActivationError holds why the browser refused to
 // resume the audio context, or null.
+//
+// The output's AudioContext is SDL's: SDL2's Emscripten audio driver keeps its state in Module['SDL2'], makes the
+// context (Module['SDL2'].audioContext) when the native device opens (plAudioSystem::Init, alcOpenDevice, OpenAL Soft's
+// SDL2 backend) and, when the device closes, closes it and sets the member to undefined; a reopened device makes a new
+// one (the private test harness's native output fixture measures both). Each context SDL makes joins
+// the page's audio activation (plEmscriptenAudioActivation.js) as it is set, so this output resumes on the same trusted
+// gestures, in the same states and for the same lifetime as the SDK's OpenAL: listened for from the first live context
+// until the last one closes. A native device pause (alcDevicePauseSOFT) stops SDL's device, not the browser's context,
+// so a gesture cannot undo it and the output registers no pause rule. The member is watched on Module['SDL2'] whichever
+// way SDL comes by that object: made here before the driver runs, or set by the driver.
 addToLibrary({
-    $plasmaNativeAudio__deps: ['$UTF8ToString', '$addOnExit'],
+    $plasmaNativeAudio__deps: ['$UTF8ToString', '$plasmaAudioActivation'],
     $plasmaNativeAudio__postset: 'plasmaNativeAudio.install();',
     $plasmaNativeAudio: {
         install: function() {
             if (ENVIRONMENT_IS_PTHREAD || typeof document === 'undefined') return;
             Module['plasma']['audioBackend'] = 'OpenAL Soft / SDL2';
-            var canvas = document.getElementById('canvas');
-            if (!canvas) return;
-            var activate = function(event) {
-                if (!event.isTrusted) return;
-                var context = Module['SDL2'] && Module['SDL2']['audioContext'];
-                if (context && context.state === 'suspended') {
-                    context.resume().catch(function(error) {
-                        Module['plasma']['audioActivationError'] = String(error);
-                    });
+            var output = {
+                failed: function(error) {
+                    Module['plasma']['audioActivationError'] = String(error);
                 }
             };
-            var events = ['pointerdown', 'keydown', 'touchend'];
-            events.forEach(function(name) { canvas.addEventListener(name, activate, {passive:true}); });
-            addOnExit(function() {
-                events.forEach(function(name) { canvas.removeEventListener(name, activate); });
+            var watch = function(sdl) {
+                if (!sdl || typeof sdl !== 'object') return sdl;
+                var context = sdl['audioContext'];
+                Object.defineProperty(sdl, 'audioContext', {
+                    configurable: true,
+                    enumerable: true,
+                    get: function() { return context; },
+                    set: function(value) {
+                        context = value;
+                        if (value) plasmaAudioActivation.add(value, output);
+                    }
+                });
+                if (context) plasmaAudioActivation.add(context, output);
+                return sdl;
+            };
+            var sdl = watch(Module['SDL2']);
+            Object.defineProperty(Module, 'SDL2', {
+                configurable: true,
+                enumerable: true,
+                get: function() { return sdl; },
+                set: function(value) { sdl = watch(value); }
             });
         }
     }

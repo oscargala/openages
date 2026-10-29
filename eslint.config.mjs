@@ -61,6 +61,7 @@ const LIBRARIES = [
   'Sources/Plasma/Apps/plClient/emscripten/pre.js',
   'Sources/Plasma/Apps/plClient/emscripten/plEmscriptenAssetCache.js',
   'Sources/Plasma/Apps/plClient/emscripten/plEmscriptenAssetCatalog.js',
+  'Sources/Plasma/Apps/plClient/emscripten/plEmscriptenAudioActivation.js',
   'Sources/Plasma/Apps/plClient/emscripten/plEmscriptenDisplay.js',
   'Sources/Plasma/Apps/plClient/emscripten/plEmscriptenFrameLoop.js',
   'Sources/Plasma/Apps/plClient/emscripten/plEmscriptenFullscreen.js',

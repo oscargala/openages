@@ -50,50 +50,18 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // Emscripten 6.0.12: retain gesture recovery for live contexts and release
 // sources/WebAudio resources when a noncurrent AL context is destroyed.
 addToLibrary({
-  $plasmaAudioActivation__deps: ['$AL'],
-  $plasmaAudioActivation: {
-    contexts: new Set(),
-    canvas: null,
-    events: ['keydown', 'mousedown', 'touchstart'],
-    gesture: event => {
-      if (!event.isTrusted) return;
-      for (var ac of plasmaAudioActivation.contexts) {
-        // alcDevicePauseSOFT deliberately removes the scheduler. A gesture must
-        // not undo a native device pause; only alcDeviceResumeSOFT does that.
-        var paused = Object.values(AL.contexts).some(ctx => ctx.audioCtx === ac && ctx.interval === null);
-        // Native opens and runs the device unconditionally (plAudioSystem::Init, alcOpenDevice and
-        // alcCreateContext); the page's equivalent is resume() on a trusted gesture. A context that may not
-        // start yet is 'suspended' in Chromium and Firefox but 'interrupted' in Safari, which then runs on
-        // that resume().
-        if ((ac.state === 'suspended' || ac.state === 'interrupted') && !paused)
-          ac.resume().catch(error => console.warn('[OpenAL] gesture resume failed:', error.name));
-      }
-    },
-    add: ac => {
-      var activation = plasmaAudioActivation;
-      if (!activation.canvas) {
-        activation.canvas = document.getElementById('canvas');
-        for (var type of activation.events)
-          activation.canvas?.addEventListener(type, activation.gesture);
-      }
-      activation.contexts.add(ac);
-      var changed = () => {
-        if (ac.state !== 'closed') return;
-        ac.removeEventListener('statechange', changed);
-        activation.contexts.delete(ac);
-        if (!activation.contexts.size) {
-          for (var type of activation.events)
-            activation.canvas?.removeEventListener(type, activation.gesture);
-          activation.canvas = null;
-        }
-      };
-      ac.addEventListener('statechange', changed);
-    },
-  },
   // Override the SDK's one-shot helper, rather than adding another listener
-  // alongside one which could resume an explicitly paused native device.
-  $autoResumeAudioContext__deps: ['$plasmaAudioActivation'],
-  $autoResumeAudioContext: (ac) => plasmaAudioActivation.add(ac),
+  // alongside one which could resume an explicitly paused native device. Each
+  // context the SDK creates (alcCreateContext) joins the page's audio activation
+  // (plEmscriptenAudioActivation.js), the rule the native output shares.
+  $autoResumeAudioContext__deps: ['$plasmaAudioActivation', '$AL'],
+  $autoResumeAudioContext: (ac) =>
+    plasmaAudioActivation.add(ac, {
+      // alcDevicePauseSOFT deliberately removes the scheduler. A gesture must
+      // not undo a native device pause; only alcDeviceResumeSOFT does that.
+      paused: () => Object.values(AL.contexts).some((ctx) => ctx.audioCtx === ac && ctx.interval === null),
+      failed: (error) => console.warn('[OpenAL] gesture resume failed:', error.name),
+    }),
 
   alcDestroyContext__deps: ['$AL', 'alSourcei'],
   alcDestroyContext__proxy: 'sync',

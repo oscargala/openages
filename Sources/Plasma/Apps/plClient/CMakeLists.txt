@@ -325,8 +325,8 @@ if(EMSCRIPTEN)
         INCLUDE_DIRECTORIES "${EMSCRIPTEN_ROOT_PATH}/system/lib/wasmfs"
         COMPILE_DEFINITIONS "${_plasma_emscripten_pin}")
     unset(_plasma_emscripten_pin)
-    # The Python target. plClient's own sources call no Python API: the frame loop's re-entry counter is the test
-    # overlay's (testhooks/em/), which links the target itself. The link is kept as it was.
+    # The Python target. plClient's own sources call no Python API: the frame loop's re-entry counter is the private
+    # test harness's, which links the target itself. The link is kept as it was.
     target_link_libraries(plClient PRIVATE ${PLASMA_PYTHON_TARGET})
     if(PLASMA_PYTHON_ABI STREQUAL "2")
         # The py2 flavour: the same client with the script glue compiled for
@@ -366,8 +366,8 @@ if(EMSCRIPTEN)
     # lives in OPFS; the legacy JS FS runs on the browser main thread and cannot block
     # on a fetch. Stacks: 8 MiB for main() (the Linux/macOS main-thread default), 1 MiB
     # for every other thread (the Windows default the client shipped with).
-    # stringToUTF8, lengthBytesUTF8: for EM_ASM code, which cannot name the library functions it calls (the test-hook
-    # overlay's login, testhooks/client/plTestHooksLogin.cpp).
+    # stringToUTF8, lengthBytesUTF8: for EM_ASM code, which cannot name the library functions it calls (the private
+    # test harness's login).
     # getExceptionMessage: pre.js names an uncaught C++ exception by its type and what() with it.
     # ENV: pre.js installs the client's environment from the page's configuration (Module.plasma.config)
     # into it; it is not exported, so the page has no handle on the environment of its own.
@@ -403,7 +403,7 @@ var PlasmaAssetOriginPins = ${CMAKE_MATCH_1};\n")
     unset(_plasma_pins_count)
     # Function names (the wasm name section, --profiling-funcs) and C++ exceptions that carry a JS
     # stack trace (-sEXCEPTION_STACK_TRACES), so that a trap or an uncaught exception prints a stack that names its
-    # functions: in Debug and RelWithDebInfo builds, and in every harness build (testhooks/CMakeLists.txt). The Release
+    # functions: in Debug and RelWithDebInfo builds, and in every harness build (the private test harness's). The Release
     # build, the one that ships, has neither. Its stacks name frames only as wasm-function[<index>], and an uncaught
     # exception reaches the page without a stack (pre.js still names its type and what()). In exchange the module is
     # smaller, and a throw unwinds inside the wasm instead of through a JS call (Emscripten then links the release
@@ -495,8 +495,13 @@ var PlasmaAssetOriginPins = ${CMAKE_MATCH_1};\n")
         "${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUPipeline.js"
         "${PLASMA_SOURCE_ROOT}/PubUtilLib/plMessageBox/hsMessageBox_Emscripten.js"
     )
+    # The page's audio activation, one rule for both audio outputs below (each registers its AudioContexts with it)
+    target_link_options(plClient PRIVATE
+        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAudioActivation.js")
+    set_property(TARGET plClient APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAudioActivation.js")
     # The observers of the input, audio, movies and journeys, and the --wrap link flags of the movie
-    # and native-audio observers, are the test-hook overlay's (testhooks/em/, testhooks/CMakeLists.txt).
+    # and native-audio observers, are the private test harness's.
     if(PLASMA_WASM_NATIVE_AUDIO)
         target_link_options(plClient PRIVATE
             "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenNativeAudio.js")
