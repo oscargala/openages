@@ -49,8 +49,11 @@ wrong-type frames), on a deployment's /connect route, plus the client address be
 cap and its release on every end of a connection and after a crash, the shard-disconnect close, the 502 on a failed
 connect, the 1 MiB message limit, the bound on queued frames and the static headers, and the status relay
 /runtime/status (server.py relay_status and StatusRelay) against a local fake status server.
-AddressKeyTest compares the Worker's address key (src/address.js, run in Node) with gateway.py's; EmitWorkerTest checks
-emit_worker.py.
+AddressKeyTest compares the Worker's address key (src/address.js, run in Node) with gateway.py's; QueueBudgetTest runs
+the Worker's isolate queue budget (src/queue_budget.js) in Node; EmitWorkerTest checks emit_worker.py. Two cases load
+the queue: several flooding relays beside a quiet one (the quiet relay keeps its throughput; in the Worker the relays
+of one isolate share limits.isolateQueueBytes), and a relay whose shard connection fails mid-write (its queued bytes
+come back).
 
 Run with the deps venv:
   python -m unittest test_contract                                 (both backends)
@@ -64,6 +67,7 @@ Every run makes its own throwaway join key (join_token.init_secret, 0600), hands
 
 import asyncio
 import base64
+import collections
 import concurrent.futures
 import contextlib
 import hashlib
@@ -987,6 +991,202 @@ class Contract:
             self.assertLess(grown, 40)
             ws.transport.abort()
 
+    async def test_isolate_queue_budget(self):
+        # Three flooders and one quiet relay at once. The upstream bucket is 64 KiB/s, so the flooders' 1 MiB frames
+        # stay queued. gateway.py holds each flooder to its own 16 frames by not reading its socket. The Worker's relays
+        # in one isolate (wrangler dev runs one) also share limits.isolateQueueBytes, 24 MiB here: a frame that does not
+        # fit closes the relay that holds the most, with the close a relay gets at its own cap. Either way the quiet
+        # relay keeps its throughput and stays open, and in the Worker the shared total never exceeds the budget.
+        m = 1024 * 1024
+        budget = 24 * m
+        url = self.start(proxy=True, bytesPerSecond=65536, isolateQueueBytes=budget, connectsPerMinutePerIp=100)
+
+        def by(n):
+            return {"additional_headers": {"CF-Connecting-IP": f"203.0.113.{n}"}, "close_timeout": 2}
+
+        quiet = await self.open(url, self.token(), **by(10))
+        flooders = [await self.open(url, self.token(), **by(11 + i)) for i in range(3)]
+        frame = bytes([10]) + b"\x03" * (m - 1)
+        sent, got = [], [(time.monotonic(), 0)]  # (time, bytes so far) after each send / each frame received
+
+        async def read_quiet():
+            while True:
+                data = await quiet.recv()
+                got.append((time.monotonic(), got[-1][1] + len(data)))
+
+        reading = asyncio.create_task(read_quiet())
+
+        async def talk(seconds):
+            # 1 KiB every 50 ms (20 KiB/s, under the bucket), then wait until all of it is back; returns the phase's
+            # echo throughput (bytes/s) and its slowest round trips
+            start, first = time.monotonic(), len(sent)
+            while time.monotonic() - start < seconds:
+                try:
+                    await quiet.send(bytes([10]) + b"q" * 1023)
+                except ConnectionClosed as e:
+                    self.fail(f"the quiet relay was closed: {e.rcvd}")
+                sent.append((time.monotonic(), (sent[-1][1] if sent else 0) + 1024))
+                await asyncio.sleep(0.05)
+            deadline = time.monotonic() + 10
+            while got[-1][1] < sent[-1][1] and time.monotonic() < deadline:
+                await asyncio.sleep(0.02)
+            self.assertEqual(got[-1][1], sent[-1][1])
+            rtts = sorted(next(t for t, n in got if n >= total) - at for at, total in sent[first:])
+            return {
+                "frames": len(sent) - first,
+                "bytes_per_s": round((sent[-1][1] - (sent[first - 1][1] if first else 0)) / (got[-1][0] - start)),
+                "rtt_p95_ms": round(rtts[int(0.95 * (len(rtts) - 1))] * 1000, 1),
+                "rtt_max_ms": round(rtts[-1] * 1000, 1),
+            }
+
+        async def close_of(ws):
+            # the close the gateway sent, or "open" when it sent none within 10 s
+            try:
+                while True:
+                    await asyncio.wait_for(ws.recv(), 10)
+            except ConnectionClosed as e:
+                return (e.rcvd.code, e.rcvd.reason) if e.rcvd else None
+            except TimeoutError:
+                return "open"
+
+        phases = {"alone": await talk(2)}
+        # The flooders queue 8 MiB each: 24 MiB, the budget exactly; then they stop.
+        for ws in flooders:
+            for _ in range(8):
+                await ws.send(frame)
+        await asyncio.sleep(1.5)
+        phases["budget full"] = await talk(2)
+        states = [ws.state.name for ws in flooders]
+        closes = {}
+        if self.backend == "worker":
+            # The quiet relay's first frame did not fit: the largest flooder (the oldest of three equals) closed.
+            closes["f1"] = await close_of(flooders[0])
+            states = [ws.state.name for ws in flooders]
+            self.assertEqual(closes["f1"], (1008, "Too much data queued"))
+
+        async def flood(ws):
+            try:
+                for _ in range(18):
+                    await ws.send(frame)
+            except ConnectionClosed:
+                pass
+
+        floods = [asyncio.create_task(flood(ws)) for ws in flooders if ws.state.name == "OPEN"]
+        phases["flooding"] = await talk(3)
+        blocked = [not t.done() for t in floods]
+        if self.backend == "worker":
+            for i in (1, 2):
+                closes[f"f{i + 1}"] = await close_of(flooders[i])
+            await asyncio.gather(*floods)
+        else:
+            open_after = [ws.state.name for ws in flooders]
+            for t in floods:
+                t.cancel()
+            for ws in flooders:
+                ws.transport.abort()
+        self.assertEqual(quiet.state.name, "OPEN")
+        reading.cancel()
+        await quiet.close()
+        await asyncio.sleep(0.5)
+        rows = {r["ip"]: r for r in self.inst.lines() if "sent" in r}
+        self.record(phases=phases, states_after_full=states, blocked=blocked, closes=closes, rows=rows)
+        for name, phase in phases.items():
+            self.assertLess(phase["rtt_p95_ms"], 1000, name)
+            self.assertGreater(phase["bytes_per_s"], 0.9 * phases["alone"]["bytes_per_s"], name)
+        if self.backend == "worker":
+            self.assertEqual(states, ["CLOSED", "OPEN", "OPEN"])
+            self.assertEqual(set(closes.values()), {(1008, "Too much data queued")})
+            ends = {ip: r["end"] for ip, r in rows.items()}
+            self.assertEqual(ends["203.0.113.10"], "browser closed")
+            self.assertEqual(ends["203.0.113.11"], "queue budget")
+            # the other two: whichever holds the most when the budget is full again, or its own cap once alone
+            self.assertLessEqual({ends["203.0.113.12"], ends["203.0.113.13"]}, {"queue budget", "browser closed"})
+            self.assertEqual(max(r["isolateQueuePeak"] for r in rows.values()), budget)  # filled, never exceeded
+            self.assertEqual(rows["203.0.113.10"]["isolateQueued"], 0)  # every share came back
+        else:
+            self.assertEqual(states, ["OPEN", "OPEN", "OPEN"])
+            self.assertEqual(open_after, ["OPEN", "OPEN", "OPEN"])
+            self.assertEqual(blocked, [True, True, True])
+
+    async def test_queue_share_returned_after_upstream_error(self):
+        # A relay whose shard connection fails while it holds queued frames (its writes held by a shard that reads
+        # nothing, then reset) gives its whole share back: a relay opened after it can queue its own 16 MiB and closes
+        # at its own cap, not at the Worker's isolate budget, which is one relay's queue (16 MiB) here. gateway.py has no
+        # shared budget: the second relay is held by backpressure, as at its own cap.
+        m = 1024 * 1024
+        shard = []
+
+        async def stalled(reader, writer):  # accepts and never reads; the test resets it
+            shard.append(writer)
+            await asyncio.sleep(3600)
+
+        server = await asyncio.start_server(stalled, "127.0.0.1", 0)
+        try:
+            url = self.start(
+                port=server.sockets[0].getsockname()[1],
+                proxy=True,
+                isolateQueueBytes=16 * m,
+                connectsPerMinutePerIp=100,
+            )
+
+            def by(n):
+                return {"additional_headers": {"CF-Connecting-IP": f"203.0.113.{n}"}, "close_timeout": 2}
+
+            frame = bytes([10]) + b"\x04" * (m - 1)
+            x = await self.open(url, self.token(), **by(21))
+            for _ in range(10):
+                await x.send(frame)
+            await asyncio.sleep(1.5)  # its writes are now held by the stalled shard
+            shard[0].transport.abort()  # the shard resets the connection mid-write
+            with self.assertRaises(ConnectionClosed) as cm:
+                while True:
+                    await asyncio.wait_for(x.recv(), 10)
+            x_close = (cm.exception.rcvd.code, cm.exception.rcvd.reason) if cm.exception.rcvd else None
+            y = await self.open(url, self.token(), **by(22))
+            sent = 0
+
+            async def flood():
+                nonlocal sent
+                try:
+                    for _ in range(40):
+                        await y.send(frame)
+                        sent += 1
+                except ConnectionClosed:
+                    pass
+
+            task = asyncio.create_task(flood())
+            await asyncio.sleep(5)
+            y_state, blocked = y.state.name, not task.done()
+            y_close = None
+            if self.backend == "worker":
+                with self.assertRaises(ConnectionClosed) as cm:
+                    while True:
+                        await asyncio.wait_for(y.recv(), 10)
+                y_close = (cm.exception.rcvd.code, cm.exception.rcvd.reason)
+                await task
+            else:
+                task.cancel()
+                y.transport.abort()
+            await asyncio.sleep(0.5)
+            rows = {r["ip"]: r for r in self.inst.lines() if "sent" in r}
+            self.record(x_close=x_close, y_close=y_close, y_state=y_state, blocked=blocked, frames_sent=sent, rows=rows)
+            self.assertIn(x_close, [(1011, "Test shard connection unavailable"), (1000, "Shard disconnected")])
+            if self.backend == "worker":
+                self.assertEqual(y_close, (1008, "Too much data queued"))
+                self.assertIn(rows["203.0.113.21"]["end"], ("upstream error", "shard closed"))
+                self.assertEqual(rows["203.0.113.21"]["isolateQueued"], 0)
+                self.assertEqual(rows["203.0.113.22"]["end"], "browser closed")  # its own cap, not the budget
+                self.assertEqual(rows["203.0.113.22"]["isolateQueued"], 0)
+                self.assertLessEqual(rows["203.0.113.22"]["isolateQueuePeak"], 16 * m)
+                self.assertGreaterEqual(sent, 16)
+            else:
+                self.assertEqual((y_state, blocked), ("OPEN", True))
+                self.assertLess(sent, 40)
+        finally:
+            server.close()
+            for w in shard:
+                w.transport.abort()
+
     def test_static_headers(self):
         self.start()
         seen = {}
@@ -1565,6 +1765,237 @@ class AddressKeyTest(unittest.TestCase):
         self.assertEqual(self.node(script, values), [None, None, "203.0.113.7", None, None, "2001:db8:1:2::a"])
 
 
+class QueueBudgetTest(unittest.TestCase):
+    """The isolate's queue budget (src/queue_budget.js, in Node): each relay's frames waiting for the upstream count
+    against its own cap and against the budget all relays of the isolate share. Each case runs a list of operations
+    (open, add, drain, close) and reads the state after each one."""
+
+    MIB = 1024 * 1024
+    CAP = 16 * MIB  # the Worker's MAX_QUEUED
+
+    @contextlib.contextmanager
+    def budget(self, limit, close_on_refusal=False):
+        """A QueueBudget(limit) in a Node process. The yielded function applies one operation [op, relay, bytes] and
+        returns the state after it: the add's refusal (r), the budget's used and peak bytes, each relay's queued bytes,
+        the open queues and the relays evicted. "next" drains the relay's oldest admitted frame not yet drained, as
+        the relay's chain does when that frame's write settles (nothing when none is left). With close_on_refusal a
+        refused frame closes its relay's queue, as the relay does (gateway.js: close 1008, then finish)."""
+        if not NODE:
+            self.fail("node not found: set PLASMA_NODE or put node on PATH")
+        url = (HERE / "src/queue_budget.js").as_uri()
+        script = (
+            f"import {{ QueueBudget }} from {json.dumps(url)}; import readline from 'node:readline';"
+            f"const b = new QueueBudget({int(limit)}); const closeOnRefusal = {json.dumps(close_on_refusal)};"
+            "const qs = new Map(); const frames = new Map(); let evicted = [];"
+            "for await (const line of readline.createInterface({ input: process.stdin })) {"
+            "const [op, id, n] = JSON.parse(line); let r = null;"
+            "if (op === 'open') { const q = b.open(n, () => evicted.push(id)); qs.set(id, q); frames.set(id, []); }"
+            "else if (op === 'add') { r = qs.get(id).add(n); if (r === null) frames.get(id).push(n);"
+            "else if (closeOnRefusal) qs.get(id).close(); }"
+            "else if (op === 'next') { const f = frames.get(id).shift(); if (f !== undefined) qs.get(id).drain(f); }"
+            "else if (op === 'drain') qs.get(id).drain(n);"
+            "else if (op === 'close') qs.get(id).close();"
+            "process.stdout.write(JSON.stringify({ r, used: b.used, peak: b.peak, open: b.queues.size,"
+            "queued: Object.fromEntries([...qs].map(([k, q]) => [k, q.queued])), evicted }) + '\\n'); evicted = []; }"
+        )
+        proc = subprocess.Popen(
+            [NODE, "--input-type=module", "-e", script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=HERE,
+        )
+
+        def apply(op):
+            proc.stdin.write(json.dumps(op) + "\n")
+            proc.stdin.flush()
+            line = proc.stdout.readline()
+            if not line:
+                self.fail("queue_budget.js driver: " + proc.stderr.read()[-2000:])
+            return json.loads(line)
+
+        try:
+            yield apply
+        finally:
+            proc.stdin.close()
+            proc.wait(30)
+            proc.stdout.close()
+            proc.stderr.close()
+
+    def run_ops(self, limit, ops, close_on_refusal=False):
+        with self.budget(limit, close_on_refusal) as apply:
+            return [apply(op) for op in ops]
+
+    def test_enqueue_and_drain(self):
+        m = self.MIB
+        out = self.run_ops(
+            24 * m,
+            [
+                ["open", "a", self.CAP],
+                ["add", "a", 10 * m],
+                ["drain", "a", 4 * m],
+                ["add", "a", 10 * m],  # 16 MiB: the relay's whole cap
+                ["add", "a", 1],  # one byte over its own cap
+                ["drain", "a", 16 * m],
+            ],
+        )
+        self.assertEqual([o["r"] for o in out], [None, None, None, None, "relay", None])
+        self.assertEqual([o["used"] for o in out], [0, 10 * m, 6 * m, 16 * m, 16 * m, 0])
+        self.assertEqual([o["queued"]["a"] for o in out], [0, 10 * m, 6 * m, 16 * m, 16 * m, 0])
+        self.assertEqual(out[-1]["peak"], 16 * m)
+
+    def test_close_returns_its_share(self):
+        m = self.MIB
+        out = self.run_ops(
+            24 * m,
+            [
+                ["open", "a", self.CAP],
+                ["open", "b", self.CAP],
+                ["add", "a", 8 * m],
+                ["add", "b", 5 * m],
+                ["close", "a"],  # the relay ends with 8 MiB queued
+                ["drain", "a", 8 * m],  # its pending write settles afterwards: nothing more comes back
+                ["close", "a"],  # a second close changes nothing
+                ["add", "a", 1],  # a closed queue takes nothing
+                ["add", "b", 11 * m],  # b alone: up to its own cap
+            ],
+        )
+        self.assertEqual([o["used"] for o in out], [0, 0, 8 * m, 13 * m, 5 * m, 5 * m, 5 * m, 5 * m, 16 * m])
+        self.assertEqual([o["open"] for o in out], [1, 2, 2, 2, 1, 1, 1, 1, 1])
+        self.assertEqual(out[7]["r"], "isolate")
+        self.assertIsNone(out[8]["r"])
+        self.assertEqual(out[4]["queued"]["a"], 0)
+
+    def test_no_leak_when_a_write_fails(self):
+        # The relay drains a frame when its write settles, written or failed (gateway.js upstream's finally), and
+        # closes its queue when it finishes (finish). Both orders of a failed write and the relay's end leave nothing.
+        m = self.MIB
+        out = self.run_ops(
+            16 * m,
+            [
+                ["open", "a", self.CAP],
+                ["add", "a", 1 * m],  # the frame being written
+                ["add", "a", 3 * m],  # frames behind it
+                ["drain", "a", 1 * m],  # the write fails: the frame is no longer held
+                ["close", "a"],  # the upstream error ends the relay
+                ["drain", "a", 3 * m],  # the frames behind it are dropped as the chain unwinds
+                ["open", "b", self.CAP],
+                ["add", "b", 2 * m],
+                ["close", "b"],  # the relay ends first (writer.abort), with the write still pending
+                ["drain", "b", 2 * m],  # then the aborted write settles
+                ["open", "c", self.CAP],
+                ["add", "c", 16 * m],  # the whole budget is free again
+            ],
+        )
+        self.assertEqual([o["used"] for o in out], [0, m, 4 * m, 3 * m, 0, 0, 0, 2 * m, 0, 0, 0, 16 * m])
+        self.assertIsNone(out[-1]["r"])
+        self.assertTrue(all(o["used"] >= 0 and all(v >= 0 for v in o["queued"].values()) for o in out))
+
+    def test_full_budget_closes_the_largest_relay(self):
+        # Three flooders hold the budget exactly and stop sending. A quiet relay's frame then closes the largest of
+        # them (the oldest of equals), not the quiet relay. A flooder whose own frame does not fit closes itself when
+        # it holds the most, and one alone in the budget meets its own cap first.
+        m, k = self.MIB, 1024
+        ops = [["open", r, self.CAP] for r in ("f1", "f2", "f3", "quiet")]
+        ops += [["add", f, m] for _ in range(8) for f in ("f1", "f2", "f3")]  # 24 MiB: the budget exactly
+        full = len(ops) - 1
+        ops += [["add", "quiet", k], ["add", "quiet", k], ["next", "quiet", 0], ["next", "quiet", 0]]
+        quiet = full + 1
+        ops += [["add", f, m] for _ in range(4) for f in ("f2", "f3")]  # 24 MiB again: f2 12, f3 12
+        ops += [["add", "f2", m]]  # f2 holds 13 with it, the most: refused and closed
+        refused = len(ops) - 1
+        ops += [["add", "f3", m] for _ in range(5)]  # f3 alone: 16 MiB, then its own cap
+        out = self.run_ops(24 * m, ops, close_on_refusal=True)
+        self.assertEqual((out[full]["used"], out[full]["peak"]), (24 * m, 24 * m))
+        self.assertEqual((out[quiet]["r"], out[quiet]["evicted"], out[quiet]["used"]), (None, ["f1"], 16 * m + k))
+        self.assertEqual(out[quiet]["queued"]["f1"], 0)
+        self.assertEqual((out[quiet + 1]["r"], out[quiet + 1]["evicted"]), (None, []))
+        self.assertEqual(out[refused - 1]["used"], 24 * m)
+        self.assertEqual((out[refused]["r"], out[refused]["evicted"], out[refused]["used"]), ("isolate", [], 12 * m))
+        self.assertEqual([o["r"] for o in out[refused + 1 :]], [None, None, None, None, "relay"])
+        self.assertEqual(out[-1]["used"], 0)  # f3 closed at its own cap
+        self.assertTrue(all(o["used"] <= 24 * m and o["peak"] <= 24 * m for o in out))
+
+    def test_shared_total_never_exceeds_the_budget(self):
+        # Random traffic in one isolate: flooders send 1 MiB frames that are written slowly, and reconnect at once when
+        # refused (a new relay); quiet relays send at most 1 KiB, each frame written before the next; relays also end
+        # at random. Then: the budget is never exceeded, its count is the sum of the queues, a refused relay's whole
+        # share comes back, a refusal or an eviction always falls on the relay that holds the most, and no quiet relay
+        # is ever refused or evicted.
+        import random
+
+        m, cap, limit = self.MIB, self.CAP, 24 * self.MIB
+        rng = random.Random(20261028)
+        kind, live, seq, stats = {}, [], 0, collections.Counter()
+        peaks = []
+        with self.budget(limit, close_on_refusal=True) as apply:
+
+            def open_relay(k):
+                nonlocal seq
+                rid = f"r{seq}"
+                seq += 1
+                kind[rid] = k
+                live.append(rid)
+                return apply(["open", rid, cap])
+
+            prev = None
+            for i in range(40):
+                prev = open_relay("quiet" if i % 3 == 0 else "flood")
+            for _ in range(6000):
+                rid = rng.choice(live)
+                if kind[rid] == "quiet":
+                    batch = [["add", rid, rng.randint(1, 1024)], ["next", rid, 0]]
+                elif rng.random() < 0.2:
+                    batch = [["next", rid, 0]]  # one of its frames is written
+                elif rng.random() < 0.01:
+                    batch = [["close", rid]]  # it ends (browser close, upstream error)
+                else:
+                    batch = [["add", rid, m]]
+                for op in batch:
+                    o = apply(op)
+                    self.assertLessEqual(o["used"], limit)
+                    self.assertLessEqual(o["peak"], limit)
+                    self.assertEqual(o["used"], sum(o["queued"].values()))
+                    self.assertTrue(all(v >= 0 for v in o["queued"].values()))
+                    peaks.append(o["peak"])
+                    if op[0] == "add":
+                        n, before = op[2], prev["queued"][rid]
+                        others = [v for r, v in prev["queued"].items() if r != rid and r in live]
+                        if o["r"] == "relay":
+                            self.assertGreater(before + n, cap)
+                        elif o["r"] == "isolate":
+                            self.assertGreater(prev["used"] + n, limit)
+                            self.assertGreaterEqual(before + n, max(others, default=0))
+                        else:
+                            self.assertEqual(o["queued"][rid], before + n)
+                        for e in o["evicted"]:
+                            self.assertNotEqual(kind[e], "quiet")
+                            self.assertGreater(prev["queued"][e], before + n)
+                            self.assertEqual(prev["queued"][e], max(others))
+                            self.assertEqual(o["queued"][e], 0)
+                            live.remove(e)
+                            stats["evicted"] += 1
+                            o = open_relay("flood")  # the evicted flooder reconnects
+                        if o.get("r") is not None:
+                            self.assertNotEqual(kind[rid], "quiet", (rid, n))
+                            self.assertEqual(o["queued"][rid], 0)  # its whole share came back
+                            live.remove(rid)
+                            stats[o["r"]] += 1
+                            o = open_relay("flood")  # the refused flooder reconnects
+                    elif op[0] == "close":
+                        live.remove(rid)
+                        stats["closed"] += 1
+                        o = open_relay(kind[rid])
+                    prev = o
+                    if rid not in live:
+                        break
+        self.assertEqual(max(peaks), limit)  # the flooders did fill the budget
+        self.assertGreater(stats["evicted"], 0)  # quiet frames made room
+        self.assertGreater(stats["isolate"], 0)  # flooders were refused by the budget
+        self.stats = dict(stats, operations=len(peaks), peak=max(peaks))
+
+
 class EmitWorkerTest(unittest.TestCase):
     """emit_worker.py: the deployment settings the Worker cannot honour are refused or left out."""
 
@@ -1620,9 +2051,20 @@ class EmitWorkerTest(unittest.TestCase):
             page = json.loads((root / "kit/runtime/config.json").read_text())
             self.assertEqual(
                 sorted(cfg["vars"]["LIMITS"]),
-                sorted(["connectionsPerIp", "connectsPerMinutePerIp", "bytesPerSecond", "idleSeconds", "connections"]),
+                sorted(
+                    [
+                        "connectionsPerIp",
+                        "connectsPerMinutePerIp",
+                        "bytesPerSecond",
+                        "idleSeconds",
+                        "connections",
+                        "isolateQueueBytes",
+                    ]
+                ),
             )
             self.assertEqual(cfg["vars"]["LIMITS"]["connections"], 7)
+            self.assertEqual(cfg["vars"]["LIMITS"]["isolateQueueBytes"], deployment_file.ISOLATE_QUEUE_DEFAULT)
+            self.assertEqual(json.loads(r.stdout)["limits_not_enforced"], ["memoryBytes"])
             self.assertEqual(cfg["vars"]["CONTENT_SECURITY_POLICY"], deployment_file.content_security_policy(page))
             self.assertEqual(
                 sorted(b["class_name"] for b in cfg["durable_objects"]["bindings"]),

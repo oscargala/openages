@@ -64,8 +64,10 @@ file outside the repository for `wrangler dev`). The Worker always requires join
 
 The client address comes from Cloudflare (CF-Connecting-IP, which Cloudflare sets itself), so gateway.trustedProxies,
 the proxy ranges a self-hosted gateway.py trusts, has no meaning here and is refused. Of gateway.limits the Worker
-enforces connectionsPerIp, connectsPerMinutePerIp, bytesPerSecond, idleSeconds and connections. memoryBytes bounds
-gateway.py's own buffers; a Worker's buffers belong to Cloudflare's runtime, so it is not passed on.
+enforces connectionsPerIp, connectsPerMinutePerIp, bytesPerSecond, idleSeconds and connections, and its own
+isolateQueueBytes: the browser frames the relays of one isolate hold together (src/queue_budget.js). memoryBytes
+bounds gateway.py's own buffers, by admission; the Worker bounds its queued frames by isolateQueueBytes instead, so
+memoryBytes is not passed on.
 """
 
 import argparse
@@ -81,7 +83,14 @@ HERE = Path(__file__).resolve().parent
 
 PAGES_ONLY = {"_headers", "_redirects"}
 # The gateway.limits keys the Worker enforces (gateway.js parseConfig), and the ones it does not.
-ENFORCED_LIMITS = ("connectionsPerIp", "connectsPerMinutePerIp", "bytesPerSecond", "idleSeconds", "connections")
+ENFORCED_LIMITS = (
+    "connectionsPerIp",
+    "connectsPerMinutePerIp",
+    "bytesPerSecond",
+    "idleSeconds",
+    "connections",
+    "isolateQueueBytes",
+)
 NOT_ENFORCED_LIMITS = ("memoryBytes",)
 # The page document's status relay path (deployment.py public_document status_relay; server.py and the Worker answer it)
 STATUS_RELAY = "/runtime/status"

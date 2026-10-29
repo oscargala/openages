@@ -52,6 +52,7 @@ import { connect } from 'cloudflare:sockets';
 import { IPV4, clientAddress, ipKey, ipv4Number } from './address.js';
 import * as joinToken from './join_token.js';
 import { LEASE_RENEW_MS } from './objects.js';
+import { QueueBudget } from './queue_budget.js';
 
 // The Plasma connection types a client may open (pnNpCommon.h EConnType: kConnTypeCliToAuth 10, kConnTypeCliToGame
 // 11, kConnTypeCliToFile 16, kConnTypeCliToGateKeeper 22). A connection's first byte is its type; any other first
@@ -63,8 +64,18 @@ const MAX_FRAME_OUT = 65536; // gateway.py READ_CHUNK: the largest frame sent to
 // gateway.py stops reading the browser's socket while MAX_QUEUE (16) received frames wait for the shard. A Worker
 // cannot pause a WebSocket's incoming side, so the same bound, 16 frames of at most 1 MiB, is a byte cap on the frames
 // waiting for the upstream token bucket. A browser that sends more closes with 1008.
-const MAX_QUEUED = 16 * MAX_MESSAGE;
-const LIMIT_KEYS = ['connectionsPerIp', 'connectsPerMinutePerIp', 'bytesPerSecond', 'idleSeconds', 'connections'];
+export const MAX_QUEUED = 16 * MAX_MESSAGE;
+// The frames all relays of this isolate hold, together: at most limits.isolateQueueBytes (queue_budget.js). Module
+// state is the isolate's: every request the isolate serves shares it.
+const budget = new QueueBudget();
+const LIMIT_KEYS = [
+  'connectionsPerIp',
+  'connectsPerMinutePerIp',
+  'bytesPerSecond',
+  'idleSeconds',
+  'connections',
+  'isolateQueueBytes',
+];
 
 export function parseConfig(env) {
   // The deployment's gateway settings, which emit_worker.py writes into the Worker's vars from the deployment file,
@@ -94,6 +105,8 @@ export function parseConfig(env) {
       const v = Number(limits[k]);
       const positive = k === 'bytesPerSecond' || k === 'idleSeconds';
       if (!Number.isInteger(v) || v < 0 || (positive && v < 1)) throw new Error(k);
+      // The budget holds at least one relay's whole queue, so a relay alone in its isolate meets only its own cap.
+      if (k === 'isolateQueueBytes' && v < MAX_QUEUED) throw new Error(k);
       cfg.limits[k] = v;
     }
     if (
@@ -309,6 +322,7 @@ export async function handleConnect(request, env, ctx) {
     // Binary frames as ArrayBuffers; the standard default is Blob.
     server.binaryType = 'arraybuffer';
     server.accept();
+    budget.limit = cfg.limits.isolateQueueBytes;
     ctx.waitUntil(relay(server, sock, { target, limits: cfg.limits, ip, slots }));
     const headers = {};
     if (joinToken.offeredProtocols(protocols).includes(joinToken.PROTOCOL)) {
@@ -325,7 +339,8 @@ export async function handleConnect(request, env, ctx) {
 function relay(ws, sock, { target, limits, ip, slots }) {
   // gateway.py make_relay: binary frames only, the first byte a Plasma connection type, bytes copied verbatim both ways
   // through the per-direction token buckets, the idle timeout, and one JSON log line per connection (byte counts;
-  // never payloads, accounts, query strings, tokens or credentials). Resolves once the slots are released.
+  // never payloads, accounts, query strings, tokens or credentials). The frames waiting for the upstream count against
+  // the relay's cap and the isolate's budget (queue_budget.js). Resolves once the slots are released.
   const writer = sock.writable.getWriter();
   const reader = sock.readable.getReader();
   const counts = { sent: 0, received: 0 };
@@ -335,15 +350,32 @@ function relay(ws, sock, { target, limits, ip, slots }) {
   let first = true,
     finished = false,
     idled = false,
-    last = Date.now(),
-    queued = 0;
+    last = Date.now();
   let chain = Promise.resolve(),
     idleTimer = null,
     renewTimer = null,
-    resolveDone;
+    resolveDone,
+    stop,
+    evicted;
   const done = new Promise((r) => {
     resolveDone = r;
   });
+  // Resolved when the relay finishes: a frame waiting for the upstream bucket is then dropped at once.
+  const stopped = new Promise((r) => {
+    stop = r;
+  });
+  // The budget evicts this relay from another relay's frame handler, in that request's context, where this relay's
+  // WebSocket cannot be used. The runtime runs this promise's continuation in the context that created it, this
+  // relay's.
+  new Promise((r) => {
+    evicted = r;
+  }).then(() => {
+    if (!finished) {
+      closeWs(1008, 'Too much data queued');
+      finish('queue budget');
+    }
+  });
+  const queue = budget.open(MAX_QUEUED, () => evicted());
 
   const closeWs = (code, reason) => {
     try {
@@ -358,6 +390,8 @@ function relay(ws, sock, { target, limits, ip, slots }) {
     const end = idled ? 'idle timeout' : how;
     clearTimeout(idleTimer);
     clearInterval(renewTimer);
+    queue.close();
+    stop();
     reader.cancel().catch(() => {});
     writer.abort().catch(() => {});
     sock.close().catch(() => {});
@@ -369,6 +403,9 @@ function relay(ws, sock, { target, limits, ip, slots }) {
       received: counts.received,
       seconds: Math.round(Date.now() - started) / 1000,
       end,
+      // the Worker's own: the queued bytes this isolate's other relays still hold, and the most it held at once
+      isolateQueued: budget.used,
+      isolateQueuePeak: budget.peak,
     });
     releaseSlots(slots).finally(resolveDone);
   };
@@ -404,27 +441,30 @@ function relay(ws, sock, { target, limits, ip, slots }) {
   idleTimer = setTimeout(idle, limits.idleSeconds * 1000);
 
   const upstream = async (data, size) => {
-    if (finished) return;
-    if (typeof data === 'string') {
-      closeWs(1003, 'Binary Plasma protocol required');
-      finish('error');
-      return;
-    }
-    const bytes = new Uint8Array(data);
-    if (first) {
-      if (!bytes.length || !CONNECTION_TYPES.has(bytes[0])) {
-        closeWs(1008, 'Connection type does not match route');
+    try {
+      if (finished) return;
+      if (typeof data === 'string') {
+        closeWs(1003, 'Binary Plasma protocol required');
         finish('error');
         return;
       }
-      first = false;
+      const bytes = new Uint8Array(data);
+      if (first) {
+        if (!bytes.length || !CONNECTION_TYPES.has(bytes[0])) {
+          closeWs(1008, 'Connection type does not match route');
+          finish('error');
+          return;
+        }
+        first = false;
+      }
+      last = Date.now();
+      await Promise.race([up.take(size), stopped]);
+      if (finished) return;
+      await writer.write(bytes);
+      counts.sent += size;
+    } finally {
+      queue.drain(size); // written, dropped or failed: no longer held (nothing once the queue is closed)
     }
-    last = Date.now();
-    await up.take(size);
-    if (finished) return;
-    await writer.write(bytes);
-    counts.sent += size;
-    queued -= size;
   };
 
   ws.addEventListener('message', (event) => {
@@ -437,10 +477,11 @@ function relay(ws, sock, { target, limits, ip, slots }) {
       finish('browser closed');
       return;
     }
-    queued += size;
-    if (queued > MAX_QUEUED) {
+    const refused = queue.add(size);
+    if (refused !== null) {
+      // Over the relay's own cap, or the isolate's budget is full and this relay holds the most: the same close.
       closeWs(1008, 'Too much data queued');
-      finish('browser closed');
+      finish(refused === 'relay' ? 'browser closed' : 'queue budget');
       return;
     }
     chain = chain

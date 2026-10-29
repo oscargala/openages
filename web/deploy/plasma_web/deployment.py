@@ -118,6 +118,15 @@ JOIN_KEYS = {"secretFile", "secretFileEnv", "ttlSeconds"}
 # in a repository names no path of one machine.
 ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
 DEFAULT_JOIN_TTL = 60
+# One connection's queue of browser frames waiting for the shard: gateway.py MAX_QUEUE frames of MAX_SIZE, the Worker's
+# MAX_QUEUED. The Worker's isolate budget holds at least one, so a connection alone in its isolate meets only its own
+# cap.
+RELAY_QUEUE_BYTES = 16 * 1024 * 1024
+# A Worker isolate may use 128 MB (128,000,000 B). Measured in a local workerd: the idle isolate holds 1,109,926 B and
+# each open relay 18,557 B (JavaScript heap, ArrayBuffer backing stores, embedder heap), so the default 64 connections
+# leave 125.7 MB. Half of that is for queued frames, the other half for frames already written or dropped but not yet
+# collected and for buffers the budget does not count: 62.9 MB, rounded down to whole connection queues, 48 MiB.
+ISOLATE_QUEUE_DEFAULT = 48 * 1024 * 1024
 LIMIT_DEFAULTS = {
     # A client holds at most 4 sockets (auth, game, file; gatekeeper and the launcher's file socket briefly) and an Age
     # link opens the new game socket before the old one has closed; 8 leaves room for two clients behind one NAT.
@@ -137,6 +146,10 @@ LIMIT_DEFAULTS = {
     # The connection buffers one gateway process may hold: each connection reserves gateway.py CONNECTION_BUFFER_BYTES
     # (18,219,008 B, its WebSocket and TCP buffers at their limits), so 1 GiB admits 58 connections at once.
     "memoryBytes": 1024 * 1024 * 1024,
+    # The Worker only (gateway.py bounds its buffers by memoryBytes): the browser frames that all connections relayed
+    # by one Worker isolate may hold for their upstreams together (the Worker's queue_budget.js). A full budget closes
+    # the connection that holds the most (1008, as a connection over its own 16 MiB). At least RELAY_QUEUE_BYTES.
+    "isolateQueueBytes": ISOLATE_QUEUE_DEFAULT,
 }
 CAPABILITY_KEYS = {"harness", "gameCodeCapture"}
 # The two text faces of the client's debug and loading text: "Courier New" (plDebugText's SetFont, plDebugText.h:76;
@@ -191,7 +204,7 @@ def free_font_files():
 
 # graphics.initialIni = the deployment's first-run graphics.ini, which the page installs into the profile's
 # Init/graphics.ini only when the profile has none (the condition of the client's own default writer,
-# plClient::IDetectAudioVideoSettings, plClient.cpp:2182-2183); an existing file is never touched. The values are the
+# plClient::IDetectAudioVideoSettings, plClient.cpp:2325-2326); an existing file is never touched. The values are the
 # console settings that writer writes (plClient::IWriteDefaultGraphicsSettings) except the size, which
 # the page takes from the canvas backing as the writer takes it from the default mode, plus the options menu's
 # Graphics.Shadow.VisibleDistance (xIniDisplay.py). Each is (kind, low, high, required); the same table is in
@@ -222,7 +235,7 @@ V01_GAME_CODES = ("server", "server-py2")
 # The game-code modes; "server-py2" = the shard's game code (as "server") run by the py2 build
 GAME_CODES = ("server", "server-py2", "local")
 # The deployment rules a test-hook overlay adds (register): the test harness's client game-code modes (a release runs
-# only the shard's own game code), which testhooks/web/deployment_harness.py registers when a harness tool imports it. The product registers none, so this module refuses those modes as unknown. An extension
+# only the shard's own game code), which the private test harness registers when a harness tool imports it. The product registers none, so this module refuses those modes as unknown. An extension
 # has game_codes (the data.gameCode modes it adds) and data_keys (the data keys it adds), and Deployment calls its
 # load(dep, data, base) once the data section is read, check(dep) once the capabilities are, document(dep, doc) for
 # the page document (public_document) and summary(dep) for the data section's summary.
@@ -425,7 +438,7 @@ class Deployment:
                 if not path.is_file():
                     _fail(f"fonts.root: the file for {served} ({path.name}) is missing")
         elif self.fonts_host:
-            # the test harness server names the host's copies (testhooks/web/server_harness.py, loopback only)
+            # the private test harness's server names the host's copies (loopback only)
             self.fonts_source, self.font_files = "host", None
         else:
             self.fonts_source, self.font_files = "free", free_font_files()
@@ -516,6 +529,8 @@ class Deployment:
                 or (k in ("bytesPerSecond", "idleSeconds") and v < 1)
             ):
                 _fail(f"gateway.limits.{k} must be a non-negative integer (bytesPerSecond, idleSeconds >= 1)")
+            if k == "isolateQueueBytes" and v < RELAY_QUEUE_BYTES:
+                _fail(f"gateway.limits.isolateQueueBytes must be at least {RELAY_QUEUE_BYTES} (one connection's queue)")
             self.limits[k] = v
         caps = d.get("capabilities", {})
         _object(caps, CAPABILITY_KEYS, "capabilities")
@@ -531,7 +546,7 @@ class Deployment:
             )
         # A diagnostic, default off: the client writes the shard's game code into the page's own OPFS
         # (Diagnostics/gamecode/<name>/). The capture is part of the test-hook overlay (a harness build,
-        # testhooks/client/plTestHooksGameCode.cpp, armed by the test harness page), so it needs a loopback harness
+        # the private test harness's, armed by its page), so it needs a loopback harness
         # deployment: never a player or public one.
         self.game_code_capture = caps.get("gameCodeCapture", False)
         if not isinstance(self.game_code_capture, bool):

@@ -443,6 +443,18 @@ class DeploymentFileTests(unittest.TestCase):
                 ).path
             )
             self.assertEqual((d.join_ttl, d.limits["connectionsPerIp"], d.limits["idleSeconds"]), (30, 0, 120))
+            self.assertEqual(d.limits["isolateQueueBytes"], deployment.ISOLATE_QUEUE_DEFAULT)
+            one = deployment.load(
+                Fixture(
+                    tmp,
+                    ini_text(),
+                    gateway={
+                        "join": {"secretFile": str(key)},
+                        "limits": {"isolateQueueBytes": deployment.RELAY_QUEUE_BYTES},
+                    },
+                ).path
+            )
+            self.assertEqual(one.limits["isolateQueueBytes"], 16 * 1024 * 1024)  # one relay's queue: the least
             r = subprocess.run(
                 [sys.executable, *DEPLOYMENT_CLI, "--init-join-secret", str(d.path)], capture_output=True, text=True
             )
@@ -458,6 +470,7 @@ class DeploymentFileTests(unittest.TestCase):
                 {"limits": {"connectionsPerIp": -1}},
                 {"limits": {"perIp": 3}},
                 {"limits": {"idleSeconds": True}},
+                {"limits": {"isolateQueueBytes": deployment.RELAY_QUEUE_BYTES - 1}},  # less than one relay's queue
             ):
                 with self.subTest(bad=bad):
                     with self.assertRaises(deployment.DeploymentError):
