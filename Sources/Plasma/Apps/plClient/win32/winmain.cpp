@@ -43,7 +43,6 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "HeadSpin.h"
 #include "plCmdParser.h"
 #include "hsDebug.h"
-#include "hsEndian.h"
 #include "plPipeline.h"
 #include "plProduct.h"
 #include "hsStream.h"
@@ -54,7 +53,6 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <shellapi.h>   // ShellExecuteA
 #include <shlobj.h>
 #include <algorithm>
-#include <regex>
 #include <unordered_set>
 
 #include <curl/curl.h>
@@ -64,7 +62,6 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plClientLogin.h"
 #include "res/resource.h"
 
-#include "pnEncryption/plChallengeHash.h"
 #include "pnNetBase/pnNbSrvs.h"
 
 #include "plFile/plEncryptedStream.h"
