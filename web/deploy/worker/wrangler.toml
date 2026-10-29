@@ -19,6 +19,14 @@ run_worker_first = true
 html_handling = "none"
 not_found_handling = "none"
 
+# CPU time per invocation, in ms: Cloudflare's maximum, which needs Workers Paid. A relay is one invocation for the whole
+# life of its connection, so its CPU adds up over every byte it relays. Measured on Cloudflare: a fresh install's
+# downloads take about 3-5 s of CPU, and a whole content set (about 1.54 GB) 29-38 s, past Paid's 30 s default; a game
+# connection that sends 40 messages a second would reach the default after about 1.5 hours, and this limit after about
+# 15. Workers Free's 10 ms ends a download after a few hundred kilobytes.
+[limits]
+cpu_ms = 300000
+
 [[durable_objects.bindings]]
 name = "JOIN_NONCES"
 class_name = "JoinNonces"

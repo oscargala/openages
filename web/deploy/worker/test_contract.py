@@ -47,10 +47,12 @@ The cases are web/tests/test_admission.py's (join tokens, per-address limits, by
 /runtime/join endpoint) and test_gateway.py's (routes refused before any TCP connection, verbatim binary relay, text and
 wrong-type frames), on a deployment's /connect route, plus the client address behind a proxy, the global connection
 cap and its release on every end of a connection and after a crash, the shard-disconnect close, the 502 on a failed
-connect, the 1 MiB message limit, the bound on queued frames and the static headers, and the status relay
-/runtime/status (server.py relay_status and StatusRelay) against a local fake status server.
+connect, the 1 MiB message limit, frames of 64 KiB to 1 MiB reaching the shard intact, the bound on queued frames and
+the static headers, and the status relay /runtime/status (server.py relay_status and StatusRelay) against a local fake
+status server.
 AddressKeyTest compares the Worker's address key (src/address.js, run in Node) with gateway.py's; QueueBudgetTest runs
-the Worker's isolate queue budget (src/queue_budget.js) in Node; EmitWorkerTest checks emit_worker.py. Two cases load
+the Worker's isolate queue budget (src/queue_budget.js) in Node, and WritePiecesTest its upstream write's 64 KiB pieces
+(src/pieces.js); EmitWorkerTest checks emit_worker.py. Two cases load
 the queue: several flooding relays beside a quiet one (the quiet relay keeps its throughput; in the Worker the relays
 of one isolate share limits.isolateQueueBytes), and a relay whose shard connection fails mid-write (its queued bytes
 come back).
@@ -144,6 +146,8 @@ def deployment_doc(server_ini, secret_file, origin, host, limits, name=NAME, pro
         "serverIni": str(server_ini),
         "data": {"files": "patcher", "gameCode": "server"},
         "gateway": gateway,
+        # a player deployment names the repository that publishes its source (server.py, emit_static.py)
+        "source": {"repository": "https://code.example.test/openages"},
     }
 
 
@@ -825,6 +829,36 @@ class Contract:
             self.assertGreater(waited, 60)
             self.assertLess(waited, 130)
 
+    async def test_isolate_id(self):
+        # The Worker's own field: every log row, a relay's and a refusal's, names the isolate that wrote it by a random
+        # id it picks for itself, so rows can be grouped by isolate (the queue budget is per isolate). wrangler dev runs
+        # one isolate, so one instance writes one id; a restarted Worker is a new isolate with a new id. gateway.py is
+        # one process and writes no such field.
+        url = self.start(connectsPerMinutePerIp=1000)
+        async with self.open(url, self.token()) as ws:
+            await ws.send(b"\x0aping")
+            self.assertEqual(await ws.recv(), b"\x0aping")
+        self.assertEqual((await self.refused(url))[0], 401)
+        await asyncio.sleep(0.5)
+        before = self.inst.lines()
+        after = []
+        if self.backend == "worker":
+            await asyncio.to_thread(self.inst.crash)
+            self.assertEqual((await self.refused(url))[0], 401)
+            await asyncio.sleep(0.5)
+            after = self.inst.lines()[len(before) :]
+        self.record(before=before, after=after)
+        self.assertEqual(sorted("sent" in r for r in before), [False, True])  # one refusal, one relay
+        if self.backend == "gateway":
+            self.assertFalse(any("isolate" in r for r in before))
+            return
+        ids = {r["isolate"] for r in before}
+        self.assertEqual(len(ids), 1)
+        (first,) = ids
+        self.assertRegex(first, r"^[0-9a-f]{16}$")
+        self.assertEqual([("refused" in r, r["isolate"] != first) for r in after], [(True, True)])
+        self.assertRegex(after[0]["isolate"], r"^[0-9a-f]{16}$")
+
     # --- test_gateway.py, on a deployment's /connect route --------------------------------------------------------
     async def test_reject_before_tcp(self):
         url = self.start()
@@ -954,6 +988,39 @@ class Contract:
             self.assertEqual(cm.exception.rcvd.code, 1009)
         self.assertEqual(len(self.sent), 1024 * 1024)
 
+    async def test_frame_sizes(self):
+        # Browser frames of 64 KiB, 64 KiB + 1, 128 KiB and 1 MiB (the largest a browser may send), two of each back to
+        # back on one connection per size, reach the shard intact and in order, and its echo returns them. The Worker
+        # writes each frame to the shard in pieces of at most 64 KiB (gateway.js MAX_WRITE: on Cloudflare one larger
+        # write ends the connection); gateway.py hands each frame to its socket whole. A local workerd takes either, so
+        # this case checks the byte stream on both backends, and WritePiecesTest the pieces.
+        url = self.start()
+        k = 1024
+        # random bytes, less the fake upstream's two command bytes (0xDD closes, 0xEE asks for 256 KiB)
+        table = bytes.maketrans(b"\xdd\xee", b"\xdc\xed")
+        sizes = [64 * k, 64 * k + 1, 128 * k, 1024 * k]
+        seen = []
+        for size in sizes:
+            self.sent.clear()
+            frames = [bytes([10]) + os.urandom(size - 1).translate(table), os.urandom(size).translate(table)]
+            want = b"".join(frames)
+            async with self.open(url, self.token()) as ws:
+                for frame in frames:
+                    await ws.send(frame)
+                got = bytearray()
+                while len(got) < len(want):
+                    got += await asyncio.wait_for(ws.recv(), 10)
+            digest = lambda b: (len(b), hashlib.sha256(b).hexdigest())
+            seen.append({"size": size, "want": digest(want), "upstream": digest(self.sent), "echo": digest(got)})
+        await asyncio.sleep(0.5)
+        rows = [[r["sent"], r["received"], r["end"]] for r in self.inst.lines() if "sent" in r]
+        self.record(sizes=seen, rows=rows)
+        for s in seen:
+            self.assertEqual(s["upstream"], s["want"], s["size"])  # the shard's bytes: all, in order
+            self.assertEqual(s["echo"], s["want"], s["size"])
+        self.assertEqual(sorted(r[:2] for r in rows), sorted([2 * n, 2 * n] for n in sizes))
+        self.assertEqual([r[2] for r in rows], ["browser closed"] * len(sizes))
+
     async def test_queue_bound(self):
         # A browser that sends faster than the upstream token bucket drains (64 KiB/s here) is held to 16 frames of
         # 1 MiB. gateway.py stops reading its socket while 16 frames wait, so the sender blocks and the gateway's memory
@@ -1064,9 +1131,15 @@ class Contract:
             states = [ws.state.name for ws in flooders]
             self.assertEqual(closes["f1"], (1008, "Too much data queued"))
 
+        # gateway.py holds a flooder by not reading, but only after its 16-message queue, the frame being parsed, the
+        # frame being written upstream and the loopback socket buffers (4 MiB each way here) have filled: about 26 MiB,
+        # as much as the 8 + 18 frames the Worker test sends. It is offered 64 frames, as in test_queue_bound, so the
+        # flood must block.
+        frames = 18 if self.backend == "worker" else 64
+
         async def flood(ws):
             try:
-                for _ in range(18):
+                for _ in range(frames):
                     await ws.send(frame)
             except ConnectionClosed:
                 pass
@@ -1996,6 +2069,75 @@ class QueueBudgetTest(unittest.TestCase):
         self.stats = dict(stats, operations=len(peaks), peak=max(peaks))
 
 
+class WritePiecesTest(unittest.TestCase):
+    """The upstream write's pieces (src/pieces.js writePieces, in Node, with gateway.js's 64 KiB): a frame goes to the
+    shard as consecutive views of at most 64 KiB, in order, each write awaited before the next; a stop or a failed
+    write ends the frame there."""
+
+    MAX = 65536  # gateway.js MAX_WRITE
+
+    def node(self, cases):
+        """Runs each case [size, stopAt, failAt] through writePieces with a fake write that waits a few ms per piece
+        (a seeded 0-3 ms, so a write not awaited would overlap the next); returns per case the pieces' lengths, whether
+        they rebuild the frame in order, whether each is a view of the frame's memory, the most writes in flight at
+        once, and the result (true, false, or the rejection's message)."""
+        if not NODE:
+            self.fail("node not found: set PLASMA_NODE or put node on PATH")
+        url = (HERE / "src/pieces.js").as_uri()
+        script = (
+            f"import {{ writePieces }} from {json.dumps(url)};"
+            f"const MAX = {self.MAX}; const out = []; let seed = 20261029;"
+            "const next = () => (seed = (seed * 1664525 + 1013904223) >>> 0);"
+            "const input = await new Promise((r) => { let d = ''; process.stdin.on('data', (c) => (d += c));"
+            "process.stdin.on('end', () => r(d)); });"
+            "for (const [size, stopAt, failAt] of JSON.parse(input)) {"
+            # pseudo-random bytes: no period, so a piece written out of order or twice cannot rebuild the frame
+            "const bytes = new Uint8Array(size); for (let i = 0; i < size; i++) bytes[i] = next() >>> 24;"
+            "const pieces = []; let inFlight = 0, most = 0, views = true, result;"
+            "const write = async (piece) => { const i = pieces.length; if (i === stopAt) return false;"
+            "inFlight++; most = Math.max(most, inFlight); pieces.push(Uint8Array.from(piece));"
+            "views = views && piece.buffer === bytes.buffer;"
+            "await new Promise((r) => setTimeout(r, next() % 4)); inFlight--;"
+            "if (i === failAt) throw new Error('write failed at ' + i); };"
+            "try { result = await writePieces(bytes, MAX, write); } catch (e) { result = e.message; }"
+            "let o = 0, inOrder = true; for (const p of pieces) { for (let j = 0; j < p.length; j++)"
+            "if (p[j] !== bytes[o + j]) inOrder = false; o += p.length; }"
+            "out.push({ lengths: pieces.map((p) => p.length), inOrder, views, most, result }); }"
+            "process.stdout.write(JSON.stringify(out));"
+        )
+        r = subprocess.run(
+            [NODE, "--input-type=module", "-e", script],
+            input=json.dumps(cases),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=HERE,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        return json.loads(r.stdout)
+
+    def test_pieces(self):
+        k = 1024
+        sizes = [0, 1, 64 * k - 1, 64 * k, 64 * k + 1, 128 * k, 128 * k + 1, 1024 * k]
+        out = self.node([[n, -1, -1] for n in sizes])
+        for n, o in zip(sizes, out):
+            want = [min(self.MAX, n - i) for i in range(0, n, self.MAX)]
+            self.assertEqual(o["lengths"], want, n)  # 0 B: no write; 1 MiB: 16 of 64 KiB
+            self.assertTrue(o["inOrder"], n)
+            self.assertTrue(o["views"], n)  # no copy: the frame stays held until its last piece is written
+            self.assertEqual(o["most"], min(1, n), n)  # one write in flight at a time
+            self.assertIs(o["result"], True, n)
+
+    def test_stop_and_failure(self):
+        k = 1024
+        stop, fail = self.node([[320 * k, 2, -1], [320 * k + 5, -1, 1]])
+        self.assertEqual(stop["lengths"], [self.MAX, self.MAX])  # stopped before the third: the rest not written
+        self.assertIs(stop["result"], False)
+        self.assertEqual(fail["lengths"], [self.MAX, self.MAX])  # the second write failed: none after it
+        self.assertEqual(fail["result"], "write failed at 1")
+        self.assertEqual((stop["most"], fail["most"]), (1, 1))
+
+
 class EmitWorkerTest(unittest.TestCase):
     """emit_worker.py: the deployment settings the Worker cannot honour are refused or left out."""
 
@@ -2072,6 +2214,7 @@ class EmitWorkerTest(unittest.TestCase):
             )
             self.assertNotIn("JOIN_KEY", json.dumps(cfg))
             self.assertFalse((root / "out/assets/_headers").exists())
+            self.assertEqual(cfg["limits"], {"cpu_ms": 300000})  # wrangler.toml's: Workers Paid's maximum
             self.assertEqual(cfg["vars"]["STATUS_URL"], "")  # the ini names no Server.Status
             self.assertNotIn("status", page["shard"])
 

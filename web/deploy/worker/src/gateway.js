@@ -52,6 +52,7 @@ import { connect } from 'cloudflare:sockets';
 import { IPV4, clientAddress, ipKey, ipv4Number } from './address.js';
 import * as joinToken from './join_token.js';
 import { LEASE_RENEW_MS } from './objects.js';
+import { writePieces } from './pieces.js';
 import { QueueBudget } from './queue_budget.js';
 
 // The Plasma connection types a client may open (pnNpCommon.h EConnType: kConnTypeCliToAuth 10, kConnTypeCliToGame
@@ -61,6 +62,12 @@ const CONNECTION_TYPES = new Set([10, 11, 16, 22]);
 const CONNECT_TIMEOUT_MS = 4000; // gateway.py CONNECT_TIMEOUT
 const MAX_MESSAGE = 1024 * 1024; // gateway.py MAX_SIZE: the largest browser frame
 const MAX_FRAME_OUT = 65536; // gateway.py READ_CHUNK: the largest frame sent to the browser
+// The largest single write to the shard's socket. On Cloudflare one writer.write() of more than 64 KiB ends the
+// connection with none of its bytes delivered: through a deployed Worker to a TCP echo, 65,536 B is relayed, while
+// 65,537 B and 128 KiB end 1000 "Shard disconnected" and 256 KiB to 1 MiB end 1011. A local workerd takes 1 MiB in one
+// write. So each browser frame, up to MAX_MESSAGE, is written in pieces of at most this, in order, each awaited
+// before the next (pieces.js writePieces).
+const MAX_WRITE = 65536;
 // gateway.py stops reading the browser's socket while MAX_QUEUE (16) received frames wait for the shard. A Worker
 // cannot pause a WebSocket's incoming side, so the same bound, 16 frames of at most 1 MiB, is a byte cap on the frames
 // waiting for the upstream token bucket. A browser that sends more closes with 1008.
@@ -181,8 +188,21 @@ function now() {
   return Date.now() / 1000;
 }
 
+// The isolate's id: 16 random hex digits, the same in every log row this isolate writes, so that rows can be grouped
+// by the isolate that held them (the queue budget is per isolate, and Cloudflare may spread one client's connections
+// over several). It is module state like the budget, made by the first row: workerd refuses random values in global
+// scope ("Disallowed operation called within global scope"), so it cannot be made at module load itself.
+let isolateId = null;
+
+function isolate() {
+  if (isolateId === null) {
+    isolateId = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return isolateId;
+}
+
 function log(row) {
-  console.log(JSON.stringify(row));
+  console.log(JSON.stringify({ ...row, isolate: isolate() }));
 }
 
 function refuse(request, url, ip, status, reason) {
@@ -459,9 +479,12 @@ function relay(ws, sock, { target, limits, ip, slots }) {
       }
       last = Date.now();
       await Promise.race([up.take(size), stopped]);
-      if (finished) return;
-      await writer.write(bytes);
-      counts.sent += size;
+      // The frame stays queued, whole, until its last piece is written: the pieces are views of its memory.
+      await writePieces(bytes, MAX_WRITE, async (piece) => {
+        if (finished) return false;
+        await writer.write(piece);
+        counts.sent += piece.byteLength;
+      });
     } finally {
       queue.drain(size); // written, dropped or failed: no longer held (nothing once the queue is closed)
     }
