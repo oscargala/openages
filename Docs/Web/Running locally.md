@@ -66,7 +66,8 @@ Make a folder outside the checkout, `<local>` below, and copy the shard's
   "url": "ws://127.0.0.1:8766",
   "origins": ["http://127.0.0.1:8613"],
   "join": {"secretFile": "join.key"}
- }
+ },
+ "source": {"repository": "https://github.com/oscargala/openages"}
 }
 ```
 
@@ -83,6 +84,10 @@ Make a folder outside the checkout, `<local>` below, and copy the shard's
   addresses: the gateway's default port, 8766, and the origin server's, 8613.
 - `gateway.join` names the key with which the origin server signs the
   gateway's admission tokens. It must be outside the checkout.
+- `source.repository` names where the source of the client you serve is
+  published: this repository, or your own fork if you changed the code. The
+  origin server, and the check below, refuse a deployment without it
+  (`Deploying.md`, "Source code and licence files").
 
 Create the key, then print what the tools will use, the shard's hosts, the
 fonts and the limits among it:

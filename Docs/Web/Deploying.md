@@ -93,7 +93,7 @@ refused.
 | `capabilities` | test settings; a player deployment names none |
 | `graphics` | the first-run `graphics.ini` |
 | `textures` | the HD texture packs |
-| `source` | where the source of this client is published |
+| `source` | where the source of this client is published; `repository` is required |
 
 ### `data`
 
@@ -185,7 +185,9 @@ See HD texture packs.
 
 `repository` (an `https://` URL), `tag` (a Git tag) and `thirdPartySources`
 (an `https://` URL of the source bundle of the third-party components) go into
-`source.json`. See Source code and licence files.
+`source.json`. `repository` is required: the origin server, the static kit and
+the check (`plasma-web-deployment <file>`) refuse a deployment without it. See
+Source code and licence files.
 
 ### The shard's `server.ini`
 
@@ -457,6 +459,14 @@ account. Attach the Worker to the page's hostname, which must be the one in
 `gateway.publicHosts`. The shipped `wrangler.toml` turns the Worker's
 `workers.dev` address off.
 
+The Worker needs Workers Paid: the shipped `wrangler.toml` sets
+`[limits] cpu_ms = 300000`, Cloudflare's maximum CPU time per invocation, which
+Workers Free does not offer. Each connection the Worker relays is one
+invocation for its whole life, so its CPU time adds up over every byte it
+relays. Measured on Cloudflare, a fresh install's downloads take about 3-5 s of
+CPU, and the whole content set (about 1.54 GB) 29-38 s, past Paid's 30 s
+default; Free's 10 ms ends a download after a few hundred kilobytes.
+
 ## TLS and reverse proxies
 
 A page that is not on a loopback host must be served over HTTPS, and its gateway
@@ -586,7 +596,10 @@ What each component records:
   status, reason, path (the upstream host and port it asked for), `Origin` and
   client address. Payloads, accounts, tokens and credentials are never written.
 - **The Worker** writes the same two kinds of lines to its console, which goes
-  wherever the Cloudflare account's logging for the Worker sends it.
+  wherever the Cloudflare account's logging for the Worker sends it. Each line
+  also names the Worker instance (isolate) that wrote it, by a random id the
+  instance picks for itself (`isolate`), and a connection's line adds the
+  instance's queued bytes (`isolateQueued`, `isolateQueuePeak`).
 - **Standard output** of both servers: the start-up lines above, the origin
   server's count of connections refused at its cap, and the path of an answer
   that ended because its file changed while it was sent.
@@ -659,9 +672,12 @@ pins, and the client files' digests. Only a release build records the commit it
 was built from; for such a build the tools refuse to serve or write a kit unless
 the checkout is at that commit with nothing uncommitted, so that the page files
 are that commit's too, and `source.tag` must name that commit; without a
-release build, no tag is accepted. A deployment that names no repository gets a
-`source.json` that says so: offer the source another way, as the licence
-requires. A deployment of a modified client names its own repository.
+release build, no tag is accepted. The origin server, the static kit and the
+check refuse a deployment that names no repository, since whoever serves the
+page conveys the client and must offer its source (GPL version 3, section 6);
+only the test harness's loopback deployments may leave it out, and their
+`source.json` says so. A deployment of a modified client names its own
+repository.
 
 The third-party sources are pinned in `web/build/sources.lock`.
 `web/build/notices/source_bundle.py` assembles the pinned sources into one
