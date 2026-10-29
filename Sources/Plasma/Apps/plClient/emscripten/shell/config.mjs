@@ -76,7 +76,7 @@ function object(value, keys) {
     fail();
 }
 // A page served from this host itself (development). Only such a page may take its deployment document from another
-// origin or carry the harness and diagnostic capabilities. The test harness page (testhooks/web/harness.mjs) runs only
+// origin or carry the harness and diagnostic capabilities. The private test harness page runs only
 // on such a page.
 export function loopbackPage(pageUrl) {
   return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(pageUrl).hostname);
@@ -215,7 +215,7 @@ export function parseDocument(text) {
   return { value, fraction: (path) => fractions.has(JSON.stringify(path)) };
 }
 // extension: null (the player page, the tools), or a test-hook overlay's deployment rules, which only the test harness
-// page passes (testhooks/web/harness.mjs, its seam member deployment: boot.mjs): {gameCodes, roots, validate}. gameCodes
+// page passes (the private test harness's seam member deployment: boot.mjs): {gameCodes, roots, validate}. gameCodes
 // are the game-code modes it adds and roots the names it adds to roots; validate(raw, rules), with rules {caps, base,
 // pageUrl, endpoint, fail, loopbackPage}, runs once the capabilities are read, may refuse (rules.fail), and returns
 // the configuration's extension member: plain data, or null; its roots, an object of URLs, are pinned as asset origins.
@@ -257,7 +257,7 @@ export function validateConfiguration(raw, base, pageUrl = base, fraction = () =
   // of the ini's Server.Status URL (the login dialog's status text); both optional.
   object(raw.shard, ['host', 'port', 'serverIni', 'sha256', 'name', 'status']);
   const s = raw.shard;
-  // Per-deployment capabilities. harness lets the private test harness page (testhooks/web/harness.html, never
+  // Per-deployment capabilities. harness lets the private test harness page (never
   // part of a kit) run this deployment with its test parameters, on a loopback page only: never a public deployment.
   // The player page (index.html) does not read it.
   const caps = raw.capabilities === undefined ? {} : raw.capabilities;
@@ -267,7 +267,7 @@ export function validateConfiguration(raw, base, pageUrl = base, fraction = () =
   const extended = extension ? extension.validate(raw, { caps, base, pageUrl, endpoint, fail, loopbackPage }) : null;
   // Diagnostic game-code capture into this origin's OPFS, only while the shard sends game code. A test harness
   // diagnostic (deployment.py), so only with the harness capability, on a loopback page. The test harness page arms it
-  // in a harness build (testhooks/web/harness.mjs); the player page passes nothing for it.
+  // in a harness build (the private test harness); the player page passes nothing for it.
   if (caps.gameCodeCapture !== undefined && typeof caps.gameCodeCapture !== 'boolean') fail();
   if (caps.gameCodeCapture && (caps.harness !== true || !loopbackPage(pageUrl))) fail();
   if (
@@ -495,8 +495,8 @@ export async function loadRuntimeConfig(value, pageUrl = globalThis.location.hre
 }
 // The page's own deployment: the document /runtime/config.json on the page's own origin, never a URL named by the
 // query. A page without one does not start (CONFIG-NONE, the 404 answer), and every other failure fails closed. absent
-// is the test harness page's case alone (testhooks/web/harness.mjs): on a loopback page a 404 then means "no deployment"
-// (null), the test harness server's own data tree and its WebSocket proxy (server_harness.py without --deployment).
+// is the private test harness page's case alone: on a loopback page a 404 then means "no deployment"
+// (null), the test harness server's own data tree and its WebSocket proxy (that server without --deployment).
 // extension: the test harness page's deployment rules (validateConfiguration), null on the player page.
 export async function loadPageDeployment(pageUrl = globalThis.location.href, absent = false, extension = null) {
   return load('/runtime/config.json', pageUrl, absent && loopbackPage(pageUrl), extension);

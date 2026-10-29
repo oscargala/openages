@@ -100,7 +100,7 @@ now unlinked, inode, whose bytes are the ones the headers described, and its bod
 (representations.Body.unchanged).
 
 Handler and the functions under it are also the base of the private test harness server
-(testhooks/web/server_harness.py, which no release carries). That server subclasses Handler and adds the harness's
+(which no release carries). That server subclasses Handler and adds the harness's
 routes, options and measurement fields; this one serves none of them.
 """
 
@@ -981,7 +981,7 @@ def configure(cfg, ap, handler=Handler):
             # refuses without capabilities.harness); this server serves none of its trees
             ap.error(
                 f"data.gameCode {dep.game_code} is a test-harness mode outside the v0.1 scope: this server does "
-                "not serve it (the test harness server testhooks/web/server_harness.py does)"
+                "not serve it (the private test harness's server does)"
             )
         cfg.dep = dep
         # A patcher deployment may have no data tree (no client package): serve an empty one.

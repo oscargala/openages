@@ -62,7 +62,7 @@ addToLibrary({
   // The page's storage request when the player starts a login (the dialog's Login, or the harness env login):
   // navigator.storage.persist() (pre.js Module.plasma.storage.login). Never on page load: browsers judge persistence
   // requests by the user's engagement with the site. A harness build also logs the answer
-  // (testhooks/em/plTestHooksStorage.js).
+  // (the private test harness's pre-js).
   plasma_storage_login__deps: ['$UTF8ToString'],
   plasma_storage_login__proxy: 'async',   // callers pass string literals (never freed)
   plasma_storage_login: (how) => {

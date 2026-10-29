@@ -40,8 +40,8 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-// The resource patcher's local game-code seam: where a harness build's own game code (testhooks/client/
-// plTestHooksGameCode.cpp: the test harness's sealed directory, or the one a test deployment mounts) enters
+// The resource patcher's local game-code seam: where a harness build's own game code (the private
+// test harness's: its sealed directory, or the one a test deployment mounts) enters
 // plResPatcher::CreatePatcher under -LocalPython, through OnGameCodeDiscovered as a shard's game code does. The
 // product build (PLASMA_TEST_HOOKS OFF) has none of it: this header declares nothing there, and its one call site in
 // plResPatcher.cpp is under #ifdef PLASMA_TEST_HOOKS, so the product's CreatePatcher is upstream's. In a harness build

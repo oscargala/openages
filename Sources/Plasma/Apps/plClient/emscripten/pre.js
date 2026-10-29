@@ -132,7 +132,7 @@ if (typeof document !== 'undefined') {
   // submit, which is the user's own gesture, or the harness env login through plEmscriptenStorage.js), never on page
   // load: navigator.storage.persist(), once per page. Returns the request's answer as a promise (the
   // browser's grant, or 'error <name>' when it throws), null when the browser has no persist(), and undefined after
-  // the first login. The client ignores it; a harness build's pre-js logs it (testhooks/em/plTestHooksStorage.js), with
+  // the first login. The client ignores it; a harness build's pre-js logs it (the private test harness's), with
   // the kind of login its callers pass ('dialog' or 'env'), which only that line reads.
   let storageRequested = false;
   Module.plasma.storage = {
@@ -149,7 +149,7 @@ if (typeof document !== 'undefined') {
   // The environment is installed among the run's last preRun callbacks, the moment before the runtime starts (the C++
   // environment is read once, when the module's constructors run, right after preRun): exactly the configuration's,
   // whatever ENV held before. (A harness build's pre-js adds its own callback after this one,
-  // testhooks/em/plTestHooksEnvironment.js.)
+  // the private test harness's.)
   Module.preRun = [].concat(Module.preRun || [], () => {
     const env = environment(Module.plasma.config);
     for (const name of Object.keys(ENV)) delete ENV[name];

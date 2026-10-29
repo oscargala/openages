@@ -99,10 +99,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 //                     client's test variables (env, which only a harness build's pre-js reads), the runner's account
 //                     (credentials, which only a harness build's login takes), the client's file export (files),
 //                     what a harness build's observers publish, and the runtime's own objects for the test runners'
-//                     instruments (runtime) (testhooks/web/harness.mjs lists them)
+//                     instruments (runtime) (the private test harness lists them)
 //
 // The test harness seam: boot(harness). The player page passes nothing. The private test harness page
-// (testhooks/web/harness.html with harness.mjs, never part of a kit) passes an object, and its members are the only way
+// (its page and module, never part of a kit) passes an object, and its members are the only way
 // test options reach this module, which reads no test parameter itself. Every function member is optional, runs once,
 // and may be async; ctx is {plasma, report(code, detail), causeError(code, detail), config (the config.mjs module),
 // deployment}:
@@ -742,7 +742,7 @@ export function boot(harness = null) {
     const s = document.createElement('script');
     // The deployment names the build (config.mjs: build 'py2' exactly with gameCode 'server-py2'):
     // plClient-py2.js, whose loader fetches build/plClient-py2.wasm; otherwise plClient.js. A harness page on the
-    // test harness server's own data tree has no deployment and keeps plClient.js (server_harness.py --client-name
+    // test harness server's own data tree has no deployment and keeps plClient.js (that server's --client-name
     // serves another build under that name).
     const client = deployment ? deployment.config.client : 'plClient';
     if (deployment) console.log('[page] deployment build ' + deployment.config.build + ': build/' + client + '.js');

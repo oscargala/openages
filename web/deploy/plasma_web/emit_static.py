@@ -87,7 +87,7 @@ origin, CORS, under the same COEP rule), or from a tree served next to the page 
 unless the deployment names fonts.url.
 
 A kit carries no game code of its own. The client runs the shard's (data.gameCode server, or server-py2 for MOULa); the
-client-side modes (client, client-python) are test harness modes (testhooks/web), outside a release, and refused, as are
+client-side modes (client, client-python) are modes of the private test harness, outside a release, and refused, as are
 harness and gameCodeCapture deployments. The high-resolution texture packs are not copied either (textures.hdPack).
 """
 
@@ -155,7 +155,7 @@ PAGE_FILES = {
     "input/fullscreen.mjs": INPUT_MODULES / "fullscreen.mjs",
 }
 TREES = ["dat", "sfx", "python", "SDL", "avi", "resource.dat"]
-# The test-hook overlay (TEST_HOOKS_DIR, testhooks/: the test harness page testhooks/web/harness.html among it) never
+# The test-hook overlay (TEST_HOOKS_DIR, testhooks/: the private test harness, its page among it) never
 # reaches a kit.
 
 
@@ -167,7 +167,7 @@ def refuse_test_hook_files(files):
 
 
 # A client built with PLASMA_TEST_HOOKS=ON carries the test-hook instruments: a harness build, never a public page.
-# Either sign refuses it: the mark testhooks/plTestHooksBuild.cpp links into the client, or a true PLASMA_TEST_HOOKS
+# Either sign refuses it: the mark the private test harness links into the client, or a true PLASMA_TEST_HOOKS
 # entry in the CMakeCache.txt of the build tree the directory belongs to.
 TEST_HOOKS_MARK = b"PLASMA_TEST_HOOKS harness build"
 CMAKE_TRUE = re.compile(r"(ON|YES|TRUE|Y|[1-9][0-9]*)", re.I)

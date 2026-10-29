@@ -40,7 +40,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-// The Python init test seam: where a harness build's Python instruments (testhooks/python/) meet
+// The Python init test seam: where the private test harness's Python instruments meet
 // PythonInterface::initPython. The product build (PLASMA_TEST_HOOKS OFF) has none of it: this header declares nothing
 // there, and its call sites in cyPythonInterface.cpp are under #ifdef PLASMA_TEST_HOOKS. In a harness build the
 // pointer is null until plTestHooks::Install sets it, and every default does nothing.

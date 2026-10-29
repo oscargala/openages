@@ -1066,7 +1066,7 @@ check("the actual page loads build/plClient-py2.js for server-py2 and build/plCl
 
 def initial_graphics_ini():
     # The actual page installs the deployment's graphics.initialIni as Init/graphics.ini only when
-    # the profile has none (plClient::IDetectAudioVideoSettings, plClient.cpp:2182-2183), in the writer's format at the
+    # the profile has none (plClient::IDetectAudioVideoSettings, plClient.cpp:2325-2326), in the writer's format at the
     # canvas backing (a player page: the window's 1280x720 at dpr 1), before the client binary is requested; a profile
     # that has one keeps it byte for byte.
     # A bad value fails the bootstrap closed.
@@ -3356,7 +3356,7 @@ def player_kit(tmp):
 
 def kit_without_test_hooks():
     # A static kit carries the player page only: no harness.html or harness.mjs, no file of the test-hook overlay
-    # (testhooks/, which this tree does not carry; the harness's own tests scan a kit for its files' content too).
+    # (the private test harness, which this tree does not carry; its own tests scan a kit for its files' content too).
     # emit_static.py refuses a page list that names one, by name or by a source under the overlay (the guard's own
     # negative control: the same call with such a file added).
     from plasma_web import TEST_HOOKS_DIR, emit_static

@@ -72,7 +72,7 @@ const char* ServerIni()
 }
 } // namespace plEmscriptenRuntime
 #ifdef PLASMA_TEST_HOOKS
-// The harness build installs the test seams' implementations (testhooks/) from a static initializer of this plClient
+// The harness build installs the test seams' implementations (the private test harness's) from a static initializer of this plClient
 // source, as plEmscriptenFrameHooks.h allows: once, on the browser's main thread, before main() and the client thread.
 namespace
 {

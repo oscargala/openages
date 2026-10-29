@@ -40,7 +40,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 // The SDL time-codec test seam: where a harness build's ATC epoch pin and its ATC trace lines
-// (testhooks/sdl/) meet the animation SDL. The product build (PLASMA_TEST_HOOKS OFF) has none of
+// (the private test harness's) meet the animation SDL. The product build (PLASMA_TEST_HOOKS OFF) has none of
 // it: this header declares nothing there, and every call site is under #ifdef PLASMA_TEST_HOOKS, so the product
 // converts an animation's TIME variables as upstream does (plSimpleStateVariable::Get and Set of a double). In a
 // harness build the pointer is null unless the client seam installs the codec, which it does only when the test harness

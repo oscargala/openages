@@ -40,7 +40,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-// The client test seam: where a harness build's instruments (testhooks/) meet the browser client's frame loop, its
+// The client test seam: where the private test harness's instruments meet the browser client's frame loop, its
 // login, its exits and the three points of plClient's frame the test harness's pins need. The product build
 // (PLASMA_TEST_HOOKS OFF) has none of it: this header declares nothing there, and every call site is under
 // #ifdef PLASMA_TEST_HOOKS. In a harness build the pointer is null until plTestHooks::Install sets it, and every
@@ -90,7 +90,7 @@ public:
     virtual void Status(const ST::string& line) {}
 
     // In main.cpp MountFileSystems, after the game data and before the fonts and the user folder: the harness build's
-    // own trees (its client game code, testhooks/client/plTestHooksGameCode.cpp). mountTree mounts one fetch tree as
+    // own trees (the private test harness's client game code). mountTree mounts one fetch tree as
     // main.cpp mounts the game data's (MountFetchTree) and sets files to its file count. false ends the start-up as a
     // failed file system does.
     virtual bool MountFiles(bool (*mountTree)(const char* mountPoint, const char* url, size_t& files)) { return true; }
@@ -157,7 +157,7 @@ namespace plTestHooks
 {
 // Installs the overlay's implementations of every test seam: this one, plWGPUPipelineObserver,
 // hsMessageBoxTestResponder, plEmscriptenFrameLoopObserver, plResPatcherObserver and plPythonInitHooks. Defined in
-// testhooks/ (library plTestHooks); plEmscriptenRuntime.cpp calls it once.
+// the private test harness (library plTestHooks); plEmscriptenRuntime.cpp calls it once.
 void Install();
 } // namespace plTestHooks
 

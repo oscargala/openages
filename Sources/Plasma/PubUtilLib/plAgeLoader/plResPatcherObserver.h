@@ -40,8 +40,8 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-// The resource-patcher test seam: what a harness build's game-code capture (testhooks/client/
-// plTestHooksGameCode.cpp) sees of plResPatcher's game-code patch. The product build
+// The resource-patcher test seam: what a harness build's game-code capture (the private
+// test harness's) sees of plResPatcher's game-code patch. The product build
 // (PLASMA_TEST_HOOKS OFF) has none of it: this header declares nothing there, and every call site in plResPatcher.cpp
 // is under #ifdef PLASMA_TEST_HOOKS. In a harness build the pointer is null until plTestHooks::Install sets it, and
 // every default does nothing. The observer only reads: it never changes what the patcher asks for or inserts (a
