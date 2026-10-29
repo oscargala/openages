@@ -324,6 +324,10 @@ if(EMSCRIPTEN)
     set_source_files_properties(emscripten/plEmscriptenCwd.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${EMSCRIPTEN_ROOT_PATH}/system/lib/wasmfs"
         COMPILE_DEFINITIONS "${_plasma_emscripten_pin}")
+    # plEmscriptenStdio.cpp mirrors musl's FILE layout (system/lib/libc/musl/src/internal/stdio_impl.h), no API either,
+    # and checks the compiler against the same pin.
+    set_source_files_properties(emscripten/plEmscriptenStdio.cpp PROPERTIES
+        COMPILE_DEFINITIONS "${_plasma_emscripten_pin}")
     unset(_plasma_emscripten_pin)
     # The Python target. plClient's own sources call no Python API: the frame loop's re-entry counter is the private
     # test harness's, which links the target itself. The link is kept as it was.
@@ -453,9 +457,13 @@ var PlasmaAssetOriginPins = ${CMAKE_MATCH_1};\n")
         -Wl,--wrap=__syscall_pipe2
         -Wl,--wrap=__wasi_fd_close
         -Wl,--wrap=__wasi_fd_write
-        # A 64 KiB stdio buffer for read-only game-data FILEs (plEmscriptenStdio.cpp)
+        # A 64 KiB stdio buffer for read-only game-data FILEs, and their seeks within it (plEmscriptenStdio.cpp)
         -Wl,--wrap=fopen
         -Wl,--wrap=fclose
+        -Wl,--wrap=fseeko
+        -Wl,--wrap=fseek
+        -Wl,--wrap=ungetc
+        -Wl,--wrap=ungetwc
         # WebGPU from the client thread: Dawn's webgpu.h for Emscripten, and the page's
         # #canvas transferred to main()'s pthread as an OffscreenCanvas (libpthread.js:
         # Module.canvas becomes that OffscreenCanvas in the pthread)
@@ -495,6 +503,11 @@ var PlasmaAssetOriginPins = ${CMAKE_MATCH_1};\n")
         "${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUPipeline.js"
         "${PLASMA_SOURCE_ROOT}/PubUtilLib/plMessageBox/hsMessageBox_Emscripten.js"
     )
+    if(PLASMA_TEST_HOOKS)
+        # The harness build's count of the WasmFS backend reads under the game-data FILEs (plEmscriptenStdio.cpp).
+        # The product does not link this wrap.
+        target_link_options(plClient PRIVATE -Wl,--wrap=__wasi_fd_read)
+    endif()
     # The page's audio activation, one rule for both audio outputs below (each registers its AudioContexts with it)
     target_link_options(plClient PRIVATE
         "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAudioActivation.js")

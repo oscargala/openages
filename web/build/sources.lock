@@ -37,8 +37,12 @@
 #   virtual.h) and wraps getcwd and chdir (this release's getcwd answers "/" in a directory on a mount);
 # - emscripten/plEmscriptenFetchBackend.js, which replaces src/lib/libwasmfs_fetch.js by defining the
 #   same library symbols, and the OpenAL overrides emscripten/plEmscriptenOpenAL*.js (src/lib/libopenal.js);
-# - the other functions plClient links with -Wl,--wrap (__syscall_poll, fopen, fclose):
-#   plEmscriptenPoll.cpp and plEmscriptenStdio.cpp work around this release's WasmFS behaviour;
+# - the other functions plClient links with -Wl,--wrap (__syscall_poll, fopen, fclose, fseeko, fseek,
+#   ungetc, ungetwc): plEmscriptenPoll.cpp and plEmscriptenStdio.cpp work around this release's WasmFS
+#   and musl behaviour. plEmscriptenStdio.cpp's in-buffer seek mirrors musl's FILE (system/lib/libc/musl:
+#   src/internal/stdio_impl.h:27-53) and relies on src/stdio/fseek.c, __stdio_read.c, __toread.c,
+#   ungetc.c, ungetwc.c, setvbuf.c, ftell.c, ext2.c and __lockfile.c, and on WasmFS readAtOffset and
+#   __wasi_fd_seek (system/lib/wasmfs/syscalls.cpp);
 # - main.cpp's Finish, which calls musl's internal __funcs_on_exit, and main()'s explicit runtime
 #   keepalive around this release's JSPI;
 # - pnAsyncCore's resolver flags (pnAcDns.cpp: this release's getaddrinfo refuses AI_ADDRCONFIG) and
