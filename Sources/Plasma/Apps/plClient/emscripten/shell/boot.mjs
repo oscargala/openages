@@ -186,6 +186,42 @@ export const STATUS = Object.freeze({
 });
 // The browser requirements the preflight checks (plasma.bootFailure names a missing one by its key).
 export const BROWSER_REQUIREMENTS = Object.freeze(['isolation', 'suspending', 'promising', 'webgpu', 'offscreen']);
+// The browser a user-agent string names, with its major version, as the minimum table of the compatibility box
+// (index.html #compatibility) names browsers: 'Chrome / Chromium', 'Firefox' or 'Safari'; null for any other or one
+// it cannot read. Microsoft Edge (Edg/), Opera (OPR/) and the Chromium browsers that report Chrome's own string (Brave)
+// carry a Chrome token and count as Chromium at that version; Edge and Opera keep their own name, shown beside it.
+// Headless Chromium (HeadlessChrome/) is Chromium. The browsers of iOS and iPadOS other than Safari (CriOS/, FxiOS/,
+// EdgiOS/, OPiOS/) run Safari's engine without a Version/ token, so they are not read.
+export function browserOfUserAgent(ua) {
+  const s = String(ua || '');
+  const v = (re) => {
+    const m = re.exec(s);
+    return m ? Number(m[1]) : null;
+  };
+  if (/\b(CriOS|FxiOS|EdgiOS|OPiOS)\//.test(s)) return null;
+  const firefox = v(/\bFirefox\/(\d+)\./);
+  if (firefox !== null && !/\b(Chrome|Chromium|Seamonkey)\//.test(s))
+    return { table: 'Firefox', name: 'Firefox', version: firefox };
+  const chromium = v(/\b(?:Chrome|Chromium|HeadlessChrome)\/(\d+)\./);
+  if (chromium !== null) {
+    const shown = /\bEdg\/\d/.test(s) ? 'Microsoft Edge' : /\bOPR\/\d/.test(s) ? 'Opera' : null;
+    const own = /\b(Chromium|HeadlessChrome)\//.test(s) ? 'Chromium' : 'Chrome';
+    return { table: 'Chrome / Chromium', name: shown || own, version: chromium, chromium: !!shown };
+  }
+  const safari = v(/\bVersion\/(\d+)(?:\.\d+)*(?: Mobile\/\S+)? Safari\//);
+  if (safari !== null && /\bAppleWebKit\//.test(s)) return { table: 'Safari', name: 'Safari', version: safari };
+  return null;
+}
+// The compatibility box's line naming the browser found against the table's minimum for it (minimums: the table's
+// rows, browser name to its minimum major version), e.g. "Safari 26 found; this game needs Safari 27 or newer."; ''
+// when the user agent names no browser of the table or the table has no minimum for it.
+export function browserFoundLine(ua, minimums) {
+  const b = browserOfUserAgent(ua);
+  const min = b && minimums ? minimums[b.table] : undefined;
+  if (!b || !Number.isInteger(min)) return '';
+  const found = b.chromium ? b.name + ' (Chromium ' + b.version + ')' : b.name + ' ' + b.version;
+  return found + ' found; this game needs ' + b.table + ' ' + min + ' or newer.';
+}
 // The error carried by a failure the page itself detects.
 function causeError(code, detail) {
   const e = new Error(detail);
@@ -648,6 +684,17 @@ export function boot(harness = null) {
       item.textContent = capabilityLabels[key] || 'WebGPU adapter or graphics device';
       list.appendChild(item);
     }
+    // The browser found, against the minimum table's row for it (the table's own numbers): none when the user agent
+    // names no browser of the table.
+    const minimums = {};
+    for (const row of document.querySelectorAll('#compatibility tbody tr'))
+      if (row.cells.length >= 2) minimums[row.cells[0].textContent.trim()] = parseInt(row.cells[1].textContent, 10);
+    const found = browserFoundLine(navigator.userAgent, minimums);
+    if (found) {
+      const line = document.getElementById('compatibility-found');
+      line.textContent = found;
+      line.hidden = false;
+    }
     document.getElementById('compatibility').hidden = false;
   };
   // The canvas has presented the client's first frame (plWGPUEnumerate.cpp NoteCanvasTexture, a second canvas texture
@@ -676,6 +723,57 @@ export function boot(harness = null) {
       e.preventDefault();
       box.click();
     });
+  }
+  // The strip's fit (index.html data-fit): the strip is one line of fixed height, and while the high-res texture
+  // setting is on it carries the art's credit (Cyan Worlds, CC BY-NC-SA 4.0), which the licence requires whole, as it
+  // requires the source notice (GPLv3) whole. fitPageControls gives way in index.html's order, one step at a time from
+  // none, until the controls, the credit and the source notice are whole and nothing overflows the strip: 1 the
+  // setting's label (while the credit is shown, whole or not at all), 2 the render scale's caption, 3 the spacing, 4 the
+  // type size. It measures the page as laid out (the fonts differ by platform), whenever the strip's width or one of
+  // its parts changes (a part shown or hidden, the source notice's text) and when the page's layout changes
+  // (plasma-player, plasma-ended: the ended page's strip wraps instead, index.html).
+  {
+    const strip = document.getElementById('page-controls'),
+      label = document.querySelector('#texpack label'),
+      credit = document.getElementById('texpack-credit');
+    const FIT_STEPS = ['', '1', '1 2', '1 2 3', '1 2 3 4'];
+    const shown = (e) => e.getClientRects().length > 0;
+    // e lies within every box that clips it, up to the strip, and, unless it is inline, its content within its own box
+    const whole = (e) => {
+      const b = e.getBoundingClientRect();
+      for (let a = e.parentElement; a; a = a === strip ? null : a.parentElement) {
+        if (getComputedStyle(a).overflowX === 'visible') continue;
+        const c = a.getBoundingClientRect();
+        if (b.left < c.left - 0.5 || b.right > c.right + 0.5) return false;
+      }
+      return getComputedStyle(e).display === 'inline' || e.scrollWidth <= e.clientWidth;
+    };
+    function fits(step) {
+      if (strip.scrollWidth > strip.clientWidth) return false;
+      const parts = [...strip.querySelectorAll('button, input, #source-notice'), credit];
+      if (step === 0 && shown(credit)) parts.push(label);
+      return parts.every((e) => !shown(e) || whole(e));
+    }
+    function fitPageControls() {
+      if (!html.classList.contains('plasma-player') || html.classList.contains('plasma-ended')) {
+        delete strip.dataset.fit;
+        return;
+      }
+      for (let step = 0; step < FIT_STEPS.length; step++) {
+        if (step) strip.dataset.fit = FIT_STEPS[step];
+        else delete strip.dataset.fit;
+        if (fits(step)) return;
+      }
+    }
+    new ResizeObserver(fitPageControls).observe(strip);
+    new MutationObserver(fitPageControls).observe(strip, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['hidden'],
+    });
+    new MutationObserver(fitPageControls).observe(html, { attributes: true, attributeFilter: ['class'] });
   }
   Object.seal(plasma);
   const capabilities = {

@@ -83,7 +83,23 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
   html.plasma-player #page-controls { flex: none; display: flex; align-items: center; gap: 12px; height: 32px;
     box-sizing: border-box; padding: 0 8px; border-top: 1px solid #2a2a2a; background: #000; color: #bbb;
     font: 12px system-ui, sans-serif; white-space: nowrap; overflow: hidden; color-scheme: dark; }
-  html.plasma-player.plasma-ended #page-controls { display: block; height: auto; border: 0; padding: 0 16px; }
+  /* once the run has ended the strip is a block below the status line, and a line too long for the window wraps between
+     its parts: the credit and the source notice stay whole there too */
+  html.plasma-player.plasma-ended #page-controls { display: block; height: auto; border: 0; padding: 0 16px;
+    white-space: normal; }
+  /* What gives way on a narrow window (boot.mjs fitPageControls, data-fit), in this order, until every control, the
+     credit and the source notice are whole: 1 the texture setting's label (while the credit is shown it is shown whole or
+     not at all; its title and the checkbox's accessible name keep all of it), 2 the render scale's caption, 3 the
+     spacing, 4 the type size (11 px). Never a control, the credit or the source notice. */
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="1"] #texpack-label { position: absolute; width: 1px;
+    height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="1"] .texpack-sep { display: none; }
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="1"] #texpack-credit { padding-left: 0.25em; }
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="2"] #render-scale > span { display: none; }
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="3"] { gap: 6px; padding: 0 4px; }
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="3"] button { padding: 3px 5px; }
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="4"],
+  html.plasma-player:not(.plasma-ended) #page-controls[data-fit~="4"] #texpack { font-size: 11px; }
   html.plasma-player #page-controls button { font: inherit; color: #ddd; background: #111; border: 1px solid #555;
     border-radius: 4px; padding: 3px 8px; cursor: pointer; }
   html.plasma-player #page-controls button:hover:not(:disabled) { color: #fff; border-color: #999; }
@@ -91,11 +107,17 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
   #fullscreen-button, #render-scale { display: none; }
   html.plasma-player #fullscreen-button { display: block; flex: none; }
   html.plasma-player.plasma-ended #fullscreen-button { display: none; }
-  /* the optional high-res texture pack setting and, while it is on, its attribution */
+  /* the optional high-res texture pack setting and, while it is on, its attribution (the credit): in the strip the
+     label is cut first (an ellipsis), the credit never */
   #texpack { margin: 4px 0; font: 12px system-ui, sans-serif; }
   #texpack a { color: inherit; }
-  html.plasma-player #texpack { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; }
-  html.plasma-player.plasma-ended #texpack { margin: 8px 0 0; }
+  html.plasma-player #texpack { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin: 0;
+    overflow: hidden; }
+  html.plasma-player #texpack label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  html.plasma-player #texpack-credit { flex: none; white-space: pre; }
+  html.plasma-player.plasma-ended #texpack { display: block; margin: 8px 0 0; }
+  html.plasma-player.plasma-ended #texpack label { display: inline; }
+  html.plasma-player.plasma-ended #texpack-credit { white-space: nowrap; }
   /* the render-scale (supersampling) choice, one button per scale (boot.mjs: aria-checked marks
      the scale in effect), beside the fullscreen button */
   html.plasma-player #render-scale { display: flex; flex: none; align-items: center; gap: 4px; margin-left: auto; }
@@ -129,8 +151,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 <body>
 <div id="stage"><canvas id="canvas" width="800" height="600"></canvas></div>
 <div id="page-controls" role="group" aria-label="Page settings">
-<div id="texpack" hidden title="High-resolution textures (original art, from the next Age you enter)"><label><input id="texpack-on" type="checkbox"> High-resolution textures (original art, from the next Age you enter)</label>
-<span id="texpack-credit" hidden> &middot; High-resolution textures: Cyan Worlds, <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a></span></div>
+<div id="texpack" hidden title="High-resolution textures (original art, from the next Age you enter)"><label><input id="texpack-on" type="checkbox"><span id="texpack-label"> High-resolution textures (original art, from the next Age you enter)</span></label><span id="texpack-credit" hidden><span class="texpack-sep"> &middot; </span>High-resolution textures: Cyan Worlds, <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a></span></div>
 <div id="render-scale" role="radiogroup" aria-label="Render scale" title="Render scale: supersampling renders above the screen resolution and scales down (sharper, slower)"><span aria-hidden="true">Render scale</span><button type="button" role="radio" data-scale="1" aria-checked="true">Standard</button><button type="button" role="radio" data-scale="2" aria-checked="false">Supersample 2x</button></div>
 <button id="fullscreen-button" type="button" title="Full screen (Esc leaves)">Full screen</button>
 <div id="source-notice" hidden><a id="source-link" target="_blank" rel="noopener noreferrer">Source code (GPLv3)</a><span id="source-none" hidden>Source code (GPLv3): not named by this site</span> &middot; <a id="notices-link" href="THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Notices</a></div>
@@ -140,6 +161,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 <h2 id="compatibility-title">This browser cannot start the game</h2>
 <p id="compatibility-reason"></p>
 <ul id="compatibility-missing"></ul>
+<p id="compatibility-found" hidden></p>
 <p>Minimum browser versions:</p>
 <table><thead><tr><th>Browser</th><th>Version</th></tr></thead><tbody>
 <tr><td>Chrome / Chromium</td><td>137 or newer</td></tr>
@@ -147,7 +169,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 <tr><td>Safari</td><td>27 or newer</td></tr>
 </tbody></table>
 <p>A secure connection, shared memory access, and a compatible graphics device are also required.
-Firefox and Safari game compatibility has not yet been tested.</p>
+Chrome is tested in every check. Firefox and Safari were each tested by hand in October 2026.</p>
 </section>
 <!-- The page logic is boot.mjs: the deployment, the display and the client start; it meets the client in one
      object, plasma. -->
