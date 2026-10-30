@@ -2695,6 +2695,97 @@ check(
     "the page controls act on ordinary clicks and the keyboard stays with the canvas; full screen shows the game alone",
     pagectl_focus,
 )
+# The strip as laid out (index.html #page-controls, boot.mjs fitPageControls): each part whole within every box that
+# clips it, up to the strip, and its content within its own box; the strip's height and overflow; the fit steps taken.
+STRIP_LOOK = (
+    "()=>{const s=document.getElementById('page-controls');"
+    "const whole=e=>{const b=e.getBoundingClientRect();for(let a=e.parentElement;a;a=a===s?null:a.parentElement){"
+    "if(getComputedStyle(a).overflowX==='visible')continue;const c=a.getBoundingClientRect();if(b.left<c.left-0.5||b.right>c.right+0.5)return false;}"
+    "return getComputedStyle(e).display==='inline'||e.scrollWidth<=e.clientWidth;};"
+    "const shown=e=>e.getClientRects().length>0;"
+    "const parts={credit:'#texpack-credit',notice:'#source-notice',box:'#texpack-on',standard:'#render-scale button[data-scale=\"1\"]',"
+    "supersample:'#render-scale button[data-scale=\"2\"]',fullscreen:'#fullscreen-button'};const r={};"
+    "for(const [k,q] of Object.entries(parts)){const e=document.querySelector(q);r[k]=!e||!shown(e)?null:whole(e);}"
+    "const l=document.querySelector('#texpack label');"
+    "return {parts:r,label:l.scrollWidth<=l.clientWidth,height:s.getBoundingClientRect().height,overflow:s.scrollWidth-s.clientWidth,"
+    "fit:s.dataset.fit||'',credit:document.getElementById('texpack-credit').textContent.trim(),ended:document.documentElement.classList.contains('plasma-ended')};}"
+)
+STRIP_WIDTHS = (800, 1024, 1152, 1280, 1440, 1920)
+TEXPACK_NAME = "High-resolution textures (original art, from the next Age you enter)"
+
+
+def strip_credit_whole():
+    # The licence's credit for the high-res textures (Cyan Worlds, CC BY-NC-SA 4.0, with its link) is whole in the
+    # strip while the setting is on, at every width from the narrowest the page supports (800 CSS px, the game's
+    # smallest windowed mode) to 1920, and so are the source notice and every control; the strip stays one line of
+    # 32 px. What gives way is the setting's label (its title and the checkbox's name keep all of it), then the render
+    # scale's caption, then the spacing. With the setting off the strip is as before (no fit step). Once the run has
+    # ended (an exit), the credit and the notice are whole too.
+    running = fixture("strip-credit", "Module.onRuntimeInitialized();\nModule.plasma.firstFrame();\n")
+    seen = {}
+    try:
+        cfg.build_dir = str(running)
+        publish(PAGECTL_DOC)
+        for w in STRIP_WIDTHS:
+            ctx = browser.new_context(viewport={"width": w, "height": 720})
+            pg = ctx.new_page()
+            try:
+                booted(pg, base, "", server.log_file)
+                deadline = time.time() + 5  # source.json is fetched without waiting for it (boot.mjs sourceNotice)
+                while time.time() < deadline and pg.evaluate("()=>document.getElementById('source-notice').hidden"):
+                    pg.wait_for_timeout(100)
+                looks = {}
+                for state in ("on", "off"):
+                    pg.click("#texpack-on")
+                    pg.wait_for_timeout(300)
+                    v = pg.evaluate(STRIP_LOOK)
+                    v["name"] = pg.get_by_role("checkbox", name=TEXPACK_NAME, exact=True).count()
+                    v["title"] = pg.get_attribute("#texpack", "title")
+                    looks[state] = v
+                    if w == 1152 or w == STRIP_WIDTHS[0]:
+                        pg.locator("#page-controls").screenshot(path=str(out / f"strip-{state}-{w}.png"))
+                if w == STRIP_WIDTHS[0]:
+                    pg.click("#texpack-on")
+                    pg.wait_for_timeout(300)
+                    pg.evaluate("()=>fixtureModule.onExit(0)")
+                    pg.wait_for_timeout(500)
+                    looks["ended"] = pg.evaluate(STRIP_LOOK)
+                    pg.screenshot(path=str(out / f"strip-ended-{w}.png"))
+                seen[w] = looks
+            finally:
+                ctx.close()
+    finally:
+        cfg.build_dir = str(fixture_build)
+        publish(document)
+    credit = "· High-resolution textures: Cyan Worlds, CC BY-NC-SA 4.0"
+    fails = {}
+    for w, looks in seen.items():
+        on, off = looks["on"], looks["off"]
+        bad = []
+        if on["parts"] != dict.fromkeys(on["parts"], True) or on["height"] != 32 or on["overflow"] > 0:
+            bad.append(("on", on))
+        if on["credit"] != credit or on["name"] != 1 or on["title"] != TEXPACK_NAME:
+            bad.append(
+                ("on: the credit's text, the checkbox's name or the title", on["credit"], on["name"], on["title"])
+            )
+        if {**off["parts"], "credit": True} != dict.fromkeys(off["parts"], True) or off["parts"]["credit"] is not None:
+            bad.append(("off", off))
+        if off["height"] != 32 or off["overflow"] > 0 or off["fit"] != "" or off["name"] != 1:
+            bad.append(("off: the strip as before", off))
+        if "ended" in looks:
+            e = looks["ended"]
+            if not e["ended"] or e["parts"]["credit"] is not True or e["parts"]["notice"] is not True or e["fit"] != "":
+                bad.append(("ended", e))
+        if bad:
+            fails[w] = bad
+    ok(not fails, fails)
+    return {w: {k: {"fit": v["fit"], "label whole": v["label"]} for k, v in looks.items()} for w, looks in seen.items()}
+
+
+check(
+    "the high-res textures' credit and the source notice are whole in the strip at 800 to 1920 px, and once the run ends",
+    strip_credit_whole,
+)
 # what a page that ended shows of the source notice (notice_on_boot_failure)
 NOTICE_LOOK = (
     "()=>{const vis=e=>{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);"
@@ -2783,6 +2874,142 @@ def notice_on_boot_failure():
 check(
     "a page that ends before the game runs still shows the source and notices links, visible and reachable (device, preflight, document, server.ini)",
     notice_on_boot_failure,
+)
+# The compatibility box's minimum table (index.html #compatibility), as the page reads it: browser to minimum version
+COMPAT_TABLE = re.compile(r"<tr><td>([^<]+)</td><td>(\d+) or newer")
+# Real user-agent strings of the browsers the box names, and the line it shows for each ('' for none)
+USER_AGENTS = {
+    "Safari 26 (macOS)": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        "Safari 26 found; this game needs Safari 27 or newer.",
+    ),
+    "Safari 27 (macOS)": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15",
+        "Safari 27 found; this game needs Safari 27 or newer.",
+    ),
+    "Safari 26 (iPhone)": (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+        "Safari 26 found; this game needs Safari 27 or newer.",
+    ),
+    "Chrome 136 (macOS)": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Chrome 136 found; this game needs Chrome / Chromium 137 or newer.",
+    ),
+    "Chrome 150 (Windows)": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Chrome 150 found; this game needs Chrome / Chromium 137 or newer.",
+    ),
+    "headless Chromium 156": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36",
+        "Chromium 156 found; this game needs Chrome / Chromium 137 or newer.",
+    ),
+    "Firefox 152 (macOS)": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0",
+        "Firefox 152 found; this game needs Firefox 153 or newer.",
+    ),
+    "Firefox 157 (Linux)": (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+        "Firefox 157 found; this game needs Firefox 153 or newer.",
+    ),
+    "Microsoft Edge 141": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+        "Microsoft Edge (Chromium 141) found; this game needs Chrome / Chromium 137 or newer.",
+    ),
+    "Opera 121": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 OPR/121.0.0.0",
+        "Opera (Chromium 136) found; this game needs Chrome / Chromium 137 or newer.",
+    ),
+    "Chrome on iPhone (Safari's engine)": (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.7390.41 Mobile/15E148 Safari/604.1",
+        "",
+    ),
+    "unparseable": ("Mozilla/5.0 (compatible; ExampleBot/1.0)", ""),
+    "empty": ("", ""),
+}
+
+
+def compat_minimums():
+    rows = dict((name.strip(), int(v)) for name, v in COMPAT_TABLE.findall(PAGE.read_text()))
+    equal(rows, {"Chrome / Chromium": 137, "Firefox": 153, "Safari": 27})
+    return rows
+
+
+def browser_found_line():
+    # The line the compatibility box adds names the browser and version its user agent reports against the minimum of
+    # the box's own table: Safari, Chrome / Chromium (Edge and Opera named, counted as Chromium) and Firefox; none for
+    # a browser it cannot read (Chrome on iPhone runs Safari's engine and reports no Safari version).
+    if not BOOT.is_file():
+        raise AssertionError(f"no boot.mjs beside the page under test ({PAGE})")
+    rows = compat_minimums()
+    got = node_run(
+        "const m = await import(" + json.dumps(BOOT.as_uri()) + ");const [uas, rows] = JSON.parse(process.argv[1]);"
+        "console.log(JSON.stringify(Object.fromEntries(Object.entries(uas).map(([k, ua]) => [k, m.browserFoundLine(ua, rows)]))));",
+        [{k: ua for k, (ua, _) in USER_AGENTS.items()}, rows],
+    )
+    equal(got, {k: line for k, (_, line) in USER_AGENTS.items()})
+    return got
+
+
+check(
+    "the compatibility box names the browser found and its version against the table's minimum (real user agents)",
+    browser_found_line,
+    browser=False,
+)
+COMPAT_LOOK = (
+    "()=>{const c=document.getElementById('compatibility'),f=document.getElementById('compatibility-found'),ps=[...c.querySelectorAll('p')];"
+    "return {shown:!c.hidden,found:f.hidden?null:f.textContent,beforeTable:!!(f.compareDocumentPosition(c.querySelector('table'))&Node.DOCUMENT_POSITION_FOLLOWING),"
+    "missing:[...document.querySelectorAll('#compatibility-missing li')].map(e=>e.textContent),last:ps[ps.length-1].textContent.replace(/\\s+/g,' '),"
+    "cause:plasma.state.cause,ua:navigator.userAgent};}"
+)
+COMPAT_LAST = (
+    "A secure connection, shared memory access, and a compatible graphics device are also required. "
+    "Chrome is tested in every check. Firefox and Safari were each tested by hand in October 2026."
+)
+
+
+def compat_jspi_off():
+    # A Chromium without WebAssembly promise integration (JSPI): Chromium 156 has no switch that turns it off (the
+    # report lists the ones tried), so an init script removes WebAssembly.Suspending and WebAssembly.promising, as the
+    # preflight reads them. The page's own preflight refuses (BROWSER-MISSING) and the box lists the two, names this
+    # Chromium and its version against the table, before the table, and ends with the tested-browsers line. The same
+    # with a Safari 26 user agent.
+    rows = compat_minimums()
+    seen = {}
+    try:
+        publish(document)
+        for label, ua in (("chromium", None), ("safari26", USER_AGENTS["Safari 26 (macOS)"][0])):
+            ctx = browser.new_context(viewport={"width": 1152, "height": 720}, **({"user_agent": ua} if ua else {}))
+            pg = ctx.new_page()
+            try:
+                pg.add_init_script("delete WebAssembly.Suspending; delete WebAssembly.promising;")
+                booted(pg, base, "", server.log_file)
+                pg.wait_for_timeout(300)
+                v = pg.evaluate(COMPAT_LOOK)
+                pg.screenshot(path=str(out / f"compat-jspi-off-{label}.png"))
+                seen[label] = v
+            finally:
+                ctx.close()
+    finally:
+        publish(document)
+    jspi = ["WebAssembly promise integration (Suspending)", "WebAssembly promise integration (promising)"]
+    chromium = node_run(
+        "const m = await import(" + json.dumps(BOOT.as_uri()) + ");const [ua, rows] = JSON.parse(process.argv[1]);"
+        "console.log(JSON.stringify(m.browserFoundLine(ua, rows)));",
+        [seen["chromium"]["ua"], rows],
+    )
+    ok(re.fullmatch(r"Chromium \d+ found; this game needs Chrome / Chromium 137 or newer\.", chromium), chromium)
+    for label, line in (("chromium", chromium), ("safari26", USER_AGENTS["Safari 26 (macOS)"][1])):
+        v = seen[label]
+        equal(
+            (label, v["shown"], v["cause"], v["missing"], v["found"], v["beforeTable"], v["last"]),
+            (label, True, "BROWSER-MISSING", jspi, line, True, COMPAT_LAST),
+        )
+    return {k: {"found": v["found"], "missing": v["missing"]} for k, v in seen.items()}
+
+
+check(
+    "a browser without JSPI sees the compatibility box name it and its version against the minimum (Chromium, Safari 26 user agent)",
+    compat_jspi_off,
 )
 check.stage = "policy"
 
