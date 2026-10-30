@@ -67,9 +67,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // writing, and for the immutable-asset check below.
 //
 // No half-written download. A FILE opened for writing in the patcher-mode install directory whose writes failed
-// (ferror, or fclose's flush: OPFS returns EIO when the origin's quota is exhausted) is removed at fclose, and
-// pfPatcher.cpp fails that download (WrittenShort). Natively the partial file stays, and the next run's hash check
-// downloads it again (pfPatcher.cpp IHashFile), as it does a missing one; in the browser a full quota is the usual
+// (ferror, or fclose's flush: OPFS returns EIO when the origin's quota is exhausted) is removed at fclose and noted
+// for its path (plEmscriptenStorage::NoteWriteFailure), and pfPatcher.cpp fails that download for storage
+// (pfPatcherWorker::IFileThingDownloadCB). Natively the partial file stays, and the next patch of its manifest hashes it
+// and downloads it again (pfPatcher.cpp IHashFile), as it does a missing one; in the browser a full quota is the usual
 // cause, and the partial file would only hold quota the next download needs.
 //
 // A harness build (PLASMA_TEST_HOOKS) also counts each game-data FILE's I/O: its seeks, those served in the buffer,

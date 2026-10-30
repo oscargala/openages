@@ -881,8 +881,12 @@ static int ClientMain(int argc, const char** argv)
     }
 
     // Every patcher of this client, the launcher step's and plResPatcher's, writes into the origin's storage. Before it
-    // fetches a manifest's files it checks them against what that storage may still take.
+    // fetches a manifest's files it checks them against what that storage may still take; a download whose file is
+    // not at its manifest size failed for storage only when a write of that file failed (plEmscriptenStdio.cpp).
     pfPatcher::SetStorageBudget(plEmscriptenStorage::Available);
+    pfPatcher::SetWriteFailures([](const plFileName& file) {
+        return plEmscriptenStorage::WriteFailures(file.AsString().c_str());
+    });
 
     PF_CONSOLE_INIT_ALL()
 

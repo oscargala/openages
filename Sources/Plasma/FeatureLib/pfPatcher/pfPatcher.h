@@ -158,6 +158,24 @@ public:
      *  \remarks Set it before any patcher starts. It will be called from the network thread.
      */
     static void SetStorageBudget(StorageBudgetFunc cb);
+
+    /** Represents a function that returns how many writes to a file of the install directory have failed so far. */
+    typedef std::function<uint32_t(const plFileName&)> WriteFailuresFunc;
+
+    /** Set the browser's count of failed writes of every patcher. A download whose file is not at the manifest
+     *  size failed for storage when its own file's count rose while it ran; otherwise it is downloaded again.
+     *  \remarks Set it before any patcher starts. It will be called from the network thread.
+     */
+    static void SetWriteFailures(WriteFailuresFunc cb);
+
+#ifdef PLASMA_TEST_HOOKS
+    /** Harness builds only: test faults in the file downloads of every patcher. The download of sizeFile is checked
+     *  against its manifest size plus sizeDelta; the first download of dropFile loses the last payload it is
+     *  handed. An empty file name sets no fault.
+     *  \remarks Set it before any patcher starts.
+     */
+    static void SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile);
+#endif
 #endif
 
     void RequestGameCode(bool python = true, bool sdl = true);

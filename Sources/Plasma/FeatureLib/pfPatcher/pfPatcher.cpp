@@ -61,9 +61,28 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plStatusLog/plStatusLog.h"
 
 #ifdef __EMSCRIPTEN__
+#include <sys/stat.h>
+
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
+
 // The browser storage budget the application sets (pfPatcher::SetStorageBudget), shared by every patcher. Without one,
 // no manifest is checked against the storage before its files are fetched.
 static pfPatcher::StorageBudgetFunc s_storageBudget;
+// The browser's count of failed writes per install-directory file (pfPatcher::SetWriteFailures), shared by every
+// patcher. Without one, no download's size mismatch is a storage failure.
+static pfPatcher::WriteFailuresFunc s_writeFailures;
+// How many times a download that is not at its manifest size after Close, with no write of its file failed, is
+// fetched again before its patch fails (pfPatcherWorker::IFileThingDownloadCB).
+static constexpr uint32_t           kDownloadRetries = 2;
+#ifdef PLASMA_TEST_HOOKS
+// The harness's test faults (pfPatcher::SetTestDownloadFaults), set before any patcher starts.
+static plFileName        s_testSizeFile;
+static int32_t           s_testSizeDelta = 0;
+static plFileName        s_testDropFile;
+static std::atomic<bool> s_testDropArmed{false};
+#endif
 #endif
 
 template<typename... _Args>
@@ -260,19 +279,45 @@ public:
     {
 #ifdef __EMSCRIPTEN__
         fExpectedSize = file.fFileSize;
+#ifdef PLASMA_TEST_HOOKS
+        if (s_testSizeFile.IsValid() && fFilename == s_testSizeFile)
+            fExpectedSize += s_testSizeDelta;
+#endif
 #endif
         // ugh. eap removed the compressed flag in his fail manifests
         if (file.fServerPath.GetFileExt().compare_i("gz") == 0) {
             fFlags |= kFlagZipped;
             parent->fTotalBytes += file.fZipSize;
+#ifdef __EMSCRIPTEN__
+            fDeliverSize = file.fZipSize;
+#endif
         } else {
             parent->fTotalBytes += file.fFileSize;
+#ifdef __EMSCRIPTEN__
+            fDeliverSize = file.fFileSize;
+#endif
         }
     }
+
+#ifdef __EMSCRIPTEN__
+    // The next attempt of a download whose file is not at the manifest size (pfPatcherWorker::IFileThingDownloadCB): a
+    // new stream, because plZlibStream resets its inflate state only in Rewind (plZlibStream.cpp:168-174). It keeps
+    // the file, its flags (kFlagZipped already among them) and its sizes. It adds nothing to the patch's total bytes,
+    // which still hold the first attempt's.
+    pfPatcherStream(pfPatcherWorker* parent, const pfPatcherStream& failed)
+        : plZlibStream(), fParent(parent), fFilename(failed.fFilename), fFlags(failed.fFlags), fBytesWritten(), fDLStartTime(), fExpectedSize(failed.fExpectedSize), fDeliverSize(failed.fDeliverSize), fAttempt(failed.fAttempt + 1)
+    {
+    }
+#endif
 
     void Begin()
     {
         fDLStartTime = hsTimer::GetSeconds<float>();
+#ifdef __EMSCRIPTEN__
+        // what this download starts from, for the size line of a mismatch
+        fSizeAtBegin = plFileInfo(fFilename).FileSize();
+        fWriteFailuresAtBegin = s_writeFailures ? s_writeFailures(fFilename) : 0;
+#endif
         if (!fOutput)
             Open(fFilename, "wb");
     }
@@ -298,6 +343,13 @@ public:
         // tick whatever progress bar we have
         IUpdateProgress(count);
 
+#if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
+        // the harness's dropped tail: the first attempt's last payload never reaches the file
+        if (fAttempt == 0 && s_testDropFile.IsValid() && fFilename == s_testDropFile && fBytesWritten >= fDeliverSize &&
+            s_testDropArmed.exchange(false))
+            return count;
+#endif
+
         // write the appropriate blargs
         if (hsCheckBits(fFlags, kFlagZipped))
             return plZlibStream::Write(count, buf);
@@ -322,13 +374,51 @@ public:
     void Unlink() const { plFileSystem::Unlink(fFilename); }
 
 #ifdef __EMSCRIPTEN__
-    // A file download whose file is not on disk at the manifest size after Close (a storage write failed:
-    // plEmscriptenStdio.cpp removes such a file at fclose). Native ignores the write result
-    // (RcvdFileDownloadChunkTrans::Post in plNglFile.cpp) and relies on the next run's IHashFile; the browser's quota
-    // is small and routinely reached, so the download fails here instead, through the failed-download branch native
-    // already has.
-    int64_t fExpectedSize = -1;
-    bool    WrittenShort() const { return fExpectedSize >= 0 && plFileInfo(fFilename).FileSize() != fExpectedSize; }
+    // A file download whose file is not on disk at the manifest size after Close. Native ignores the write result
+    // (RcvdFileDownloadChunkTrans::Post in plNglFile.cpp), keeps the file, and the next patch of its manifest (the
+    // next link to the Age: plAgeLoader::UpdateAge, plResPatcher::Update) hashes it in IHashFile and downloads it
+    // again. In the browser a failed patch ends the game, so pfPatcherWorker::IFileThingDownloadCB fails the
+    // download for storage when a write of its file failed (plEmscriptenStdio.cpp removes such a file at fclose),
+    // and otherwise fetches it again, as that next patch would.
+    int64_t  fExpectedSize = -1;
+    uint32_t fDeliverSize = 0;          // the bytes the file server sends: the zip size, or the file size
+    uint32_t fAttempt = 0;              // 0 for the first download, then 1 per retry
+    int64_t  fSizeAtBegin = -1;         // the file's size before Begin's fopen, -1 when absent
+    uint32_t fWriteFailuresAtBegin = 0; // the failed writes of this file before Begin (s_writeFailures)
+
+    // The file's size on disk now, or -1 with the stat errno
+    int64_t SizeOnDisk(int& error) const
+    {
+        struct stat info;
+        if (stat(fFilename.AsString().c_str(), &info) != 0) {
+            error = errno;
+            return -1;
+        }
+        error = 0;
+        return info.st_size;
+    }
+    bool     Mismatched(int64_t onDisk) const { return fExpectedSize >= 0 && onDisk != fExpectedSize; }
+    // a write of this file failed during this attempt (the stdio wrapper removed it)
+    bool     WriteFailed() const { return s_writeFailures && s_writeFailures(fFilename) != fWriteFailuresAtBegin; }
+    uint32_t Attempt() const { return fAttempt; }
+    uint64_t BytesWritten() const { return fBytesWritten; }
+
+    // The line of a mismatch: what was expected, delivered and found
+    ST::string SizeLine(int64_t onDisk, int error, const ST::string& outcome) const
+    {
+        const ST::string disk = onDisk >= 0 ? ST::format("{} B", onDisk) : ST::format("absent (errno {})", error);
+        const ST::string before = fSizeAtBegin >= 0 ? ST::format("{} B", fSizeAtBegin) : ST_LITERAL("absent");
+        const ST::string inflate =
+            hsCheckBits(fFlags, kFlagZipped)
+                ? ST::format("error {}, stream end {}", fErrorOccurred ? "yes" : "no", fDecompressedOk ? "yes" : "no")
+                : ST_LITERAL("n/a");
+        const uint32_t failures = s_writeFailures ? s_writeFailures(fFilename) : 0;
+        return ST::format(
+            "Size mismatch: '{}' attempt {}: on disk {}, manifest {} B; before the download {}; "
+            "delivered {} of {} B; inflate {}; write failures of the file {} -> {}: {}",
+            fFilename, fAttempt + 1, disk, fExpectedSize, before, fBytesWritten, fDeliverSize, inflate,
+            fWriteFailuresAtBegin, failures, outcome);
+    }
 #endif
 };
 
@@ -455,9 +545,51 @@ void pfPatcherWorker::IFileThingDownloadCB(ENetError result, const plFileName& f
     // the message that ends the patch if this download failed
     ST::string failure = filename.AsString();
 #ifdef __EMSCRIPTEN__
-    if (IS_NET_SUCCESS(result) && stream->WrittenShort()) {
-        result = kNetErrInternalError;
-        failure = ST::format("Not enough browser storage to write {}", stream->GetFileName());
+    // A download the file server completed whose file is not at the manifest size (pfPatcherStream above). A failed
+    // download keeps native's branch below. Each mismatch writes one line to the patcher log and the console.
+    int           error = 0;
+    const int64_t onDisk = IS_NET_SUCCESS(result) ? stream->SizeOnDisk(error) : -1;
+    if (IS_NET_SUCCESS(result) && stream->Mismatched(onDisk)) {
+        const auto logMismatch = [&](const ST::string& outcome) {
+            const ST::string line = stream->SizeLine(onDisk, error, outcome);
+            PatcherLogRed("\t{}", line);
+            std::printf("patcher: %s\n", line.c_str());
+            std::fflush(stdout);
+        };
+        if (stream->WriteFailed()) {
+            logMismatch(ST_LITERAL("a write failed"));
+            result = kNetErrInternalError;
+            failure = ST::format("Not enough browser storage to write {}", stream->GetFileName());
+        } else if (stream->Attempt() < kDownloadRetries && fStarted) {
+            // Fetched again at once, as the next patch of this manifest would natively (IHashFile finds no file and
+            // enqueues it), in a new stream at the front of the requests, so one request stays in flight. The
+            // patch's progress takes back this attempt's bytes. The begin callback fires again for the retry (the
+            // launcher step counts it among its downloaded files). Not when the patch has ended (fStarted false).
+            logMismatch(ST::format("downloading it again ({} of {})", stream->Attempt() + 1, kDownloadRetries));
+            stream->Unlink();
+            pfPatcherStream* retry = new pfPatcherStream(this, *stream);
+            fCurrBytes -= stream->BytesWritten();
+            {
+                hsLockGuard(fRequestMut);
+                fRequests.emplace_front(filename.AsString(), Request::kFile, retry);
+                IssueRequest();
+            }
+            delete stream;
+            return;
+        } else {
+            logMismatch(ST_LITERAL("the download failed"));
+            result = kNetErrInternalError;
+            if (onDisk >= 0)
+                failure = ST::format(
+                    "Download of {} did not complete ({} bytes on disk, {} expected). Reload the page "
+                    "to try again.",
+                    stream->GetFileName(), onDisk, stream->fExpectedSize);
+            else
+                failure = ST::format(
+                    "Download of {} did not complete (the file is missing after download). Reload "
+                    "the page to try again.",
+                    stream->GetFileName());
+        }
     }
 #endif
     if (IS_NET_SUCCESS(result)) {
@@ -816,6 +948,21 @@ void pfPatcher::SetStorageBudget(StorageBudgetFunc cb)
 {
     s_storageBudget = std::move(cb);
 }
+
+void pfPatcher::SetWriteFailures(WriteFailuresFunc cb)
+{
+    s_writeFailures = std::move(cb);
+}
+
+#ifdef PLASMA_TEST_HOOKS
+void pfPatcher::SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile)
+{
+    s_testSizeFile = sizeFile.Normalize();
+    s_testSizeDelta = sizeDelta;
+    s_testDropFile = dropFile.Normalize();
+    s_testDropArmed = dropFile.IsValid();
+}
+#endif
 #endif
 
 // ===================================================
