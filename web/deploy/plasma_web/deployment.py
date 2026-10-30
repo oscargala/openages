@@ -204,7 +204,7 @@ def free_font_files():
 
 # graphics.initialIni = the deployment's first-run graphics.ini, which the page installs into the profile's
 # Init/graphics.ini only when the profile has none (the condition of the client's own default writer,
-# plClient::IDetectAudioVideoSettings, plClient.cpp:2325-2326); an existing file is never touched. The values are the
+# plClient::IDetectAudioVideoSettings, plClient.cpp:2354-2355); an existing file is never touched. The values are the
 # console settings that writer writes (plClient::IWriteDefaultGraphicsSettings) except the size, which
 # the page takes from the canvas backing as the writer takes it from the default mode, plus the options menu's
 # Graphics.Shadow.VisibleDistance (xIniDisplay.py). Each is (kind, low, high, required); the same table is in

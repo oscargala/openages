@@ -318,6 +318,18 @@ public:
     /// The trace of plClient's wait (IWaitPipelineBuilds): the builds pending before and after, the progress frames
     /// drawn, the wait, and the client's state.
     void     NotePrewarmWait(uint32_t before, uint32_t after, uint32_t frames, double ms, const char* detail);
+    /// plClient::IDraw, at an Age's arrival frame: the first scene frame whose IUpdate sent plAgeLoadedMsg (the
+    /// joiner's kNotifyAgeLoaded, plNetCliAgeJoiner.cpp:337-342) and plInitialAgeStateLoadedMsg
+    /// (plNetClientMgr.cpp:780-784). Their handlers can change what walked drawables draw with
+    /// (plGrassShaderMod::ISetupShaders refs its shaders onto a layer then, plGrassShaderMod.cpp:175-179, 221-273), so
+    /// the next frame start re-walks every walked drawable (cause "arrival", IPrewarmFrameStart); the walk starts only
+    /// the keys not built yet.
+    void     PrewarmArrival() { fPrewarmArrival = true; }
+    /// plClient::IWaitPipelineBuilds, around its progress frames, which D3D9 does not have (there the next primary
+    /// BeginRender after a frame not drawn is the next scene frame's, plClient::IDraw): while held, BeginRender's
+    /// clothing compose (IPreprocessAvatarTextures) neither frees the previous frame's outfits nor composes the
+    /// submitted ones, so the scene frame after the wait finds both lists as the last scene frame left them.
+    void     PrewarmHoldOutfits(bool hold) { fPrewarmOutfitsHeld = hold; }
 
     /// The frame loop's bracket around a GPU readback wait (CompletePendingCaptures, CaptureScreen's front-buffer
     /// read): begin(how) before the wait, end() after it. begin returns false where the loop cannot suspend, and then
@@ -555,6 +567,8 @@ private:
     uint8_t                      fPrewarmFogType;
     bool                         fPrewarmFogDegenerate;
     bool                         fPrewarmConditionsSet;
+    bool                         fPrewarmArrival = false;     // re-walk at the next frame start (PrewarmArrival)
+    bool                         fPrewarmOutfitsHeld = false; // plClient's wait holds the outfits (PrewarmHoldOutfits)
 
     // The loaded rooms plClient holds (PrewarmRoom's clientTree), the walked rooms' wavesets (IPrewarmNoteWaveSets), and
     // whether the drawable IPrewarmDrawable walks is in a held room (IRenderShadowsOntoSpan's walk).

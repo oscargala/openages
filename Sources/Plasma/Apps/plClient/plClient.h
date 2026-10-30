@@ -147,9 +147,12 @@ protected:
     // flight) drawing progress frames, as the load drew them (IWaitPipelineBuilds). fPipelineLoadWait: a progress frame
     // was drawn and no scene frame has been drawn since; fPipelineLoadDrops: the scene frames not drawn since then
     // (plWGPUPipeline::PrewarmBeforeScene's mayDefer).
+    // fPipelineWasLoading: the last scene IDraw found the Age's initial state loading; the first that finds it loaded
+    // is the arrival frame, which waits too, with no progress operation (progressOperation false).
     bool     fPipelineLoadWait = false;
     uint32_t fPipelineLoadDrops = 0;
-    void     IWaitPipelineBuilds(class plWGPUPipeline* pipe);
+    bool     fPipelineWasLoading = false;
+    void     IWaitPipelineBuilds(class plWGPUPipeline* pipe, bool progressOperation);
 #endif
     
     plVirtualCam1*          fNewCamera;

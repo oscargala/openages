@@ -71,6 +71,12 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
     // The prewarm's walk (plWGPUPipeline::IPrewarmTargets) runs it too, to start each quad's pipeline: it frees,
     // assigns and clears nothing (the outfits, their targets and dirty items stay for the frame's compose), counts and
     // reports nothing, and makes or binds no texture (IDrawClothingQuad).
+    // plClient's wait for the pipeline builds (IWaitPipelineBuilds) draws progress frames D3D9 does not have: there the
+    // next primary BeginRender after a frame not drawn is the next scene frame's (plClient::IDraw). While it holds the
+    // outfits (PrewarmHoldOutfits), a progress frame's BeginRender leaves both lists as the last scene frame left them:
+    // no free, no compose, no swap.
+    if (fPrewarmOutfitsHeld && !fPrewarmWalk)
+        return;
     if (!fPrewarmWalk)
         IClearClothingOutfits(&fPrevClothingOutfits); // Frees anyone used last frame that we don't need this frame
 
@@ -244,7 +250,7 @@ void plWGPUPipeline::IPrewarmOutfits()
     // shadow casts and the composites, which see the state from before the compose (BeginRender: IPreprocessShadows,
     // then IPreprocessAvatarTextures, plDXPipeline.cpp:2972-2973), under the main target. The stand-ins stay for
     // IPrewarmRequests: the frame's render requests draw after BeginRender too (plClient::IDraw: BeginRender,
-    // plClient.cpp:1929, then IProcessPreRenderRequests, :1942, and IProcessPostRenderRequests, :1952), so their draws
+    // plClient.cpp:1942, then IProcessPreRenderRequests, :1955, and IProcessPostRenderRequests, :1965), so their draws
     // of the outfit's spans read the target. IPrewarmClearStandIns takes them out again.
     if (fAvRTPool.empty())
         return;

@@ -1075,7 +1075,7 @@ check("the actual page loads build/plClient-py2.js for server-py2 and build/plCl
 
 def initial_graphics_ini():
     # The actual page installs the deployment's graphics.initialIni as Init/graphics.ini only when
-    # the profile has none (plClient::IDetectAudioVideoSettings, plClient.cpp:2325-2326), in the writer's format at the
+    # the profile has none (plClient::IDetectAudioVideoSettings, plClient.cpp:2354-2355), in the writer's format at the
     # canvas backing (a player page: the window's 1280x720 at dpr 1), before the client binary is requested; a profile
     # that has one keeps it byte for byte.
     # A bad value fails the bootstrap closed.

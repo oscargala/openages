@@ -1468,8 +1468,9 @@ bool plWGPUPipeline::PrewarmBeforeScene(const std::vector<plRenderRequest*>& pre
     if (mayDefer && fDevice.PipelineBuildsPending()) {
         // Not drawn, as a frame whose device is not ready: plDXPipeline::BeginRender returns true after IResetDevice
         // has cleared the shadow slaves (plDXPipeline.cpp:1909-1918, 2921-2926), and plClient::IDraw flushes the
-        // render requests (plClient.cpp:1929-1932). The outfits stay submitted, as there; the next primary
-        // BeginRender composites them (plDXPipeline.cpp:2972-2973).
+        // render requests (plClient.cpp:1942-1945). The outfits stay submitted, as there; the next scene frame's
+        // BeginRender composites them (plDXPipeline.cpp:2972-2973): plClient's wait between the two holds both outfit
+        // lists through its progress frames (PrewarmHoldOutfits).
         const uint32_t pending = uint32_t(fDevice.PipelineBuildsPending());
         fDevice.PumpPipelineBuilds();
         IClearShadowSlaves();
@@ -1606,7 +1607,10 @@ void plWGPUPipeline::IPrewarmFrameStart()
         cause = "target";
     else if (fPrewarmFogType != fogType || fPrewarmFogDegenerate != fogDegenerate)
         cause = "fog";
+    else if (fPrewarmArrival)
+        cause = "arrival"; // the arrival frame's messages may have changed the walked drawables' state (PrewarmArrival)
     if (cause) {
+        fPrewarmArrival = false; // any re-walk covers it
         std::vector<plDrawableSpans*> drawables;
         for (const plUoid& uoid : fPrewarmWalked) {
             if (plDrawableSpans* drawable = plDrawableSpans::ConvertNoRef(IPrewarmLoadedObject(uoid)))
@@ -2081,8 +2085,8 @@ void plWGPUPipeline::IPrewarmRequests(const std::vector<plRenderRequest*>& preRe
                                       const std::vector<plRenderRequest*>& postRequests, plPageTreeMgr* pageMgr)
 {
     // This frame's render requests, as plClient::IDraw draws them: the pre list (IProcessPreRenderRequests,
-    // plClient.cpp:1942), then the post list (IProcessPostRenderRequests, :1952), each in its order, each through
-    // plRenderRequest::Render with plClient's page tree (IProcessRenderRequests, plClient.cpp:2154-2161), without its
+    // plClient.cpp:1955), then the post list (IProcessPostRenderRequests, :1965), each in its order, each through
+    // plRenderRequest::Render with plClient's page tree (IProcessRenderRequests, plClient.cpp:2183-2190), without its
     // ack (plRenderRequest::Render, plRenderRequest.cpp:118-136; a dynamic environment map counts its outstanding faces
     // on the ack, plDynamicEnvMap::MsgReceive, plDynamicEnvMap.cpp:285-289): the request's visibility forcing,
     // PushRenderRequest (its target, view, render state, fog and override material), its clear
@@ -2100,7 +2104,7 @@ void plWGPUPipeline::IPrewarmRequests(const std::vector<plRenderRequest*>& preRe
     // but makes them once, with the target, view, clear drawable and priority their first Render uses
     // (ICreateRenderRequest, :2072-2095); its per-frame updates change layer transforms and shader constants only. Its
     // requests not queued yet are walked from the frame they exist, inserted as plClient::IAddRenderRequest queues
-    // them (plClient.cpp:2174-2196: a priority below 0 into the pre list, else the post list, ascending, after equal
+    // them (plClient.cpp:2203-2225: a priority below 0 into the pre list, else the post list, ascending, after equal
     // ones), each once its target has a clean device ref (the walk makes none, plWGPUDevice::IPrewarmBindTarget): the
     // same request the waveset queues later is then not walked again.
     std::vector<plRenderRequest*>    pre(preRequests);
@@ -2319,6 +2323,23 @@ void plWGPUPipeline::IPrewarmDrawable(plDrawableSpans* drawable, const std::vect
         plSpan*      span = i < spanArray.size() ? spanArray[i] : nullptr;
         if (!span || !(span->fTypeMask & plSpan::kIcicleSpan))
             continue;
+        // A span whose material index is outside its drawable's material list has no material for a draw to bind,
+        // as a null one (RenderSpans draws nothing without a material, plDXPipeline.cpp:2757). C++ reads a span's
+        // material only at draw time, for the harvested visible list (plDXPipeline::RenderSpans,
+        // plDXPipeline.cpp:2731), through plDrawableSpans::GetMaterial, which does not check the index
+        // (plDrawableSpans.h:317); the walk reads every span of a room at its load. MOULa's YeeshaPageGUI has such
+        // spans: GUI_YeeshaPageGUI_10000008_0BlendSpans4 reads one material key and 30 icicles indexed 0..29
+        // (plDrawableSpans::Read, plDrawableSpans.cpp:851-867), and no draw interface names spans 1..29
+        // (plDrawInterface::Read, plDrawInterface.cpp:143-152). With an override material pushed,
+        // plDXPipeline::RenderSpans reads no index (plDXPipeline.cpp:2731, 2740-2741). The size_t compare also covers
+        // -1, GetMaterial's null.
+        if (!GetOverrideMaterial() && size_t(span->fMaterialIdx) >= drawable->GetNumMaterials()) {
+            plStatusLog::AddLineSF("pipeline.log", 0xff00ffff,
+                                   "pipeline prewarm ({}): {} span {}: material index {} outside its {} materials, skipped",
+                                   fPrewarmSeat ? fPrewarmSeat : "-", drawable->GetKey()->GetUoid().StringIze(), i,
+                                   span->fMaterialIdx, drawable->GetNumMaterials());
+            continue;
+        }
         hsGMaterial* material = GetOverrideMaterial() ? GetOverrideMaterial() : drawable->GetMaterial(span->fMaterialIdx);
         if (!material)
             continue;

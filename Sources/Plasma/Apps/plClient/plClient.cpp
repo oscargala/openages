@@ -1858,9 +1858,22 @@ bool plClient::IDraw()
 #ifdef PLASMA_PIPELINE_WGPU
     // The first scene frame after a load: the pipeline builds the load's walks left pending are
     // waited for here, drawing progress frames (IWaitPipelineBuilds), before plRenderMsg.
-    if (fPipelineLoadWait) {
-        if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline))
-            IWaitPipelineBuilds(wgpuPipe);
+    // An Age's arrival frame is treated as a load frame too. Its IUpdate sent plAgeLoadedMsg (plNCAgeJoiner's
+    // kNotifyAgeLoaded, plNetCliAgeJoiner.cpp:337-342) and plInitialAgeStateLoadedMsg (plNetClientMgr.cpp:780-784),
+    // whose joiner handler cleared kLoadingInitialAgeState (plNetCliAgeJoiner.cpp:450-459); their handlers can change
+    // what the scene draws with (plGrassShaderMod::ISetupShaders, plGrassShaderMod.cpp:175-179, 221-273). The frame
+    // start re-walks the walked drawables (plWGPUPipeline::PrewarmArrival) and the wait covers what that starts, under
+    // the transition's opaque plate: that wait registers no progress operation, so its frames draw the plate and no
+    // glyph, C++'s picture at that moment (plTransitionMgr holds the link-out plate until the fade-in).
+    if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline)) {
+        plNetClientApp* netApp = plNetClientApp::GetInstance();
+        const bool      loading = netApp && netApp->IsLoadingInitialAgeState();
+        const bool      arrival = fPipelineWasLoading && !loading;
+        fPipelineWasLoading = loading;
+        if (arrival)
+            wgpuPipe->PrewarmArrival();
+        if (fPipelineLoadWait || arrival)
+            IWaitPipelineBuilds(wgpuPipe, fPipelineLoadWait);
     }
 #endif
 
@@ -1992,7 +2005,7 @@ bool plClient::IDraw()
 }
 
 #ifdef PLASMA_PIPELINE_WGPU
-void plClient::IWaitPipelineBuilds(plWGPUPipeline* pipe)
+void plClient::IWaitPipelineBuilds(plWGPUPipeline* pipe, bool progressOperation)
 {
     // The browser compiles render pipelines, which D3D9 does not have (its render state is
     // set per draw): the builds an Age's load started (plWGPUPipeline::PrewarmRoom and the frame start's walks) may
@@ -2004,6 +2017,9 @@ void plClient::IWaitPipelineBuilds(plWGPUPipeline* pipe)
     // 201-244), as for the Age joiner's own operation in a release build
     // (plNCAgeJoiner::ExecNextOp, plNetCliAgeJoiner.cpp:233-237).
     // Nothing else runs meanwhile, as in Metal's wait: no update (the game does not advance), no message pump.
+    // progressOperation false: an Age's arrival frame (plClient::IDraw). Its wait registers no operation, so
+    // plDTProgressMgr::Draw draws nothing (plDTProgressMgr.cpp:140-141) and the progress frames show the black clear and
+    // the screen elements, the transition's opaque plate among them.
     const size_t before = pipe->PrewarmPending();
     if (!before)
         return;
@@ -2012,9 +2028,17 @@ void plClient::IWaitPipelineBuilds(plWGPUPipeline* pipe)
     // included (plProgressMgr::IRegisterOperation, plProgressMgr.cpp:138; ~plOperationProgress, :273-278): here inside
     // IDraw it would draw a frame inside this one, so it is set aside around both (SetCallbackProc, :216-220).
     plProgressMgr*            progressMgr = plProgressMgr::GetInstance();
-    plProgressMgrCallbackProc callback = progressMgr->SetCallbackProc(nullptr);
-    plOperationProgress*      hold = progressMgr->RegisterOperation(0.f, nullptr, plProgressMgr::kNone);
-    progressMgr->SetCallbackProc(callback);
+    plProgressMgrCallbackProc callback = nullptr;
+    plOperationProgress*      hold = nullptr;
+    if (progressOperation) {
+        callback = progressMgr->SetCallbackProc(nullptr);
+        hold = progressMgr->RegisterOperation(0.f, nullptr, plProgressMgr::kNone);
+        progressMgr->SetCallbackProc(callback);
+    }
+
+    // The progress frames' BeginRender leaves the clothing outfits as the last scene frame left them, for the scene
+    // frame after the wait (plWGPUPipeline::PrewarmHoldOutfits); released on every way out of the loop.
+    pipe->PrewarmHoldOutfits(true);
 
     const double                 t0 = hsTimer::GetMilliSeconds();
     const uint32_t               generation = pipe->PrewarmGeneration();
@@ -2040,15 +2064,20 @@ void plClient::IWaitPipelineBuilds(plWGPUPipeline* pipe)
         }
     }
 
-    progressMgr->SetCallbackProc(nullptr);
-    delete hold;
-    progressMgr->SetCallbackProc(callback);
+    pipe->PrewarmHoldOutfits(false);
+
+    if (hold) {
+        progressMgr->SetCallbackProc(nullptr);
+        delete hold;
+        progressMgr->SetCallbackProc(callback);
+    }
 
     ST::string detail;
 #ifdef PLASMA_TEST_HOOKS
     plNetClientApp* netApp = plNetClientApp::GetInstance();
-    detail = ST::format("loading state {} playing {} end {}", netApp && netApp->IsLoadingInitialAgeState() ? 1 : 0,
-                        netApp && netApp->GetFlagsBit(plNetClientApp::kPlayingGame) ? 1 : 0, end);
+    detail = ST::format("loading state {} playing {} end {}{}", netApp && netApp->IsLoadingInitialAgeState() ? 1 : 0,
+                        netApp && netApp->GetFlagsBit(plNetClientApp::kPlayingGame) ? 1 : 0, end,
+                        progressOperation ? "" : "; arrival, no operation");
 #endif
     pipe->NotePrewarmWait(uint32_t(before), uint32_t(pending), frames, hsTimer::GetMilliSeconds() - t0,
                           detail.c_str());
