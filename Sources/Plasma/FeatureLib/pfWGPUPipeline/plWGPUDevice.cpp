@@ -86,6 +86,9 @@ constexpr uint64_t kUniformBindingSize = 4096; // every uniform block of ShaderT
 constexpr uint64_t kUniformArenaSize = 256 * 1024;
 constexpr uint64_t kVertexArenaSize = 256 * 1024;
 
+// The most pipeline creations one shader module object serves (plWGPUDevice::ShaderModule).
+constexpr uint32_t kShaderModulePipelines = 64;
+
 // queue.writeBuffer takes sizes and offsets in multiples of four bytes.
 constexpr uint64_t Align4(uint64_t v) { return (v + 3) & ~uint64_t(3); }
 } // namespace
@@ -1813,7 +1816,7 @@ WGPURenderPipeline plWGPUDevice::PipelineState(plWGPUPipelineState* pipelineStat
 
     const double t0 = emscripten_get_now();
 #ifdef PLASMA_TEST_HOOKS
-    const bool newModule = fShaderModules.find(pipelineState->GetShaderSource()) == fShaderModules.end();
+    const bool newModule = ShaderModuleCreates(pipelineState->GetShaderSource());
 #endif
     PipelineDescriptor d;
     IPipelineDescriptor(record, pipelineState, d);
@@ -2159,11 +2162,32 @@ void plWGPUDevice::ICollectFixedScopeChecks()
     }
 }
 
-WGPUShaderModule plWGPUDevice::ShaderModule(const char* source, const char* label)
+bool plWGPUDevice::ShaderModuleCreates(const char* source) const
 {
     auto it = fShaderModules.find(source);
-    if (it != fShaderModules.end())
-        return it->second;
+    return it == fShaderModules.end() || it->second.pipelines >= kShaderModulePipelines;
+}
+
+WGPUShaderModule plWGPUDevice::ShaderModule(const char* source, const char* label)
+{
+    // Called once for each pipeline about to be created from the module (IPipelineDescriptor, the gamma pipeline).
+    // plMetalDevice takes every pipeline's functions from one library (plMetalDevice.cpp:1100-1101); a WebGPU module
+    // stands in for it, but one module object serves at most kShaderModulePipelines creations, and the next creation
+    // gets a new module from the same text.
+    // Why: Safari 27.0.1 (WebKit on Metal) adds another bounds clamp, `__wgslMin(i, (8u - 1u))`, around each dynamic
+    // array index of a module every time it compiles a stage from that module object: two per pipeline created, one
+    // per failed attempt. The 128th creation on one object nests 255 of them and fails ("bracket nesting level
+    // exceeded maximum of 256" from the Metal compiler); so does every later one, and a draw that creates one
+    // synchronously invalidates its pass. The uber fixed-function module reached it at Ercana and GreatZero. A new
+    // module object from the same text starts again from none. WGSL and WebGPU set no such limit, and other adapters
+    // compile a module from the same text to the same program (G-PIX). The bound holds while base + 2 * k * cap <= 256,
+    // where k is the deepest nesting of dynamic indexes in one expression (1 in every source today).
+    // Measured in Safari 27.0.1's own console on 2026-10-29: the message and the counts above.
+    if (!ShaderModuleCreates(source)) {
+        ShaderModuleEntry& entry = fShaderModules[source];
+        entry.pipelines++;
+        return entry.module;
+    }
 
     WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
     wgsl.code = Str(source);
@@ -2179,8 +2203,16 @@ WGPUShaderModule plWGPUDevice::ShaderModule(const char* source, const char* labe
     WGPUShaderModuleDescriptor desc = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
     desc.nextInChain = &wgsl.chain;
     desc.label = Str(label);
-    WGPUShaderModule module = wgpuDeviceCreateShaderModule(fWGPUDevice, &desc);
-    fShaderModules[source] = module;
+    WGPUShaderModule   module = wgpuDeviceCreateShaderModule(fWGPUDevice, &desc);
+    ShaderModuleEntry& entry = fShaderModules[source];
+    if (entry.module) {
+        // Pipelines already created, and builds already issued, do not need the old module object.
+        wgpuShaderModuleRelease(entry.module);
+        entry.renewals++;
+        plWGPULog("SHADER MODULE '{}' renewed after {} pipelines (renewal {})", label, entry.pipelines, entry.renewals);
+    }
+    entry.module = module;
+    entry.pipelines = 1;
     return module;
 }
 
@@ -3830,8 +3862,8 @@ void plWGPUDevice::ReleaseAllDeviceObjects()
 #ifdef PLASMA_TEST_HOOKS
     fPrewarmUnused.clear();
 #endif
-    for (auto& [source, module] : fShaderModules)
-        wgpuShaderModuleRelease(module);
+    for (auto& [source, entry] : fShaderModules)
+        wgpuShaderModuleRelease(entry.module);
     fShaderModules.clear();
     for (auto& map : fFixedPipelines)
         map.clear();

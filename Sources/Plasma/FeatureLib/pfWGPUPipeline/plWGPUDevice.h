@@ -376,8 +376,17 @@ private:
     };
 
     std::unordered_map<plWGPUPipelineRecord, WGPURenderPipeline, plWGPUPipelineRecordHashFunction> fNewPipelineStateMap;
-    std::unordered_map<const char*, WGPUShaderModule>                                              fShaderModules; // by WGSL source
 
+    // A WGSL source's current module, and the pipeline creations it has served (ShaderModule).
+    struct ShaderModuleEntry
+    {
+        WGPUShaderModule module = nullptr;
+        uint32_t         pipelines = 0;
+        uint32_t         renewals = 0;
+    };
+    std::unordered_map<const char*, ShaderModuleEntry> fShaderModules; // by WGSL source
+
+    bool               ShaderModuleCreates(const char* source) const;
     WGPUShaderModule   ShaderModule(const char* source, const char* label);
     WGPUPipelineLayout PipelineLayout(plWGPUBindLayout layout);
 
