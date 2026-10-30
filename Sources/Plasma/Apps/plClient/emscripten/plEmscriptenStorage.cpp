@@ -47,16 +47,21 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <emscripten/proxying.h>
 #include <emscripten/threading.h>
 
-#include <atomic>
 #include <cstdio>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 extern "C" void plasma_storage_estimate_start(em_proxying_ctx* ctx, double* out);
 extern "C" void plasma_storage_login(const char* how);
 
 namespace
 {
-std::atomic<unsigned> sWriteFailures{0};
-}
+// The failed writes per install-directory path. A download asks for its own file's count, never a total: other
+// install-directory files are written while a download runs (the patcher thread's sound-cache files, for one).
+std::mutex                                sWriteFailuresLock;
+std::unordered_map<std::string, unsigned> sWriteFailures;
+} // namespace
 
 bool plEmscriptenStorage::Estimate(double& usage, double& quota)
 {
@@ -79,14 +84,19 @@ void plEmscriptenStorage::LoginStarted(const char* how)
 
 void plEmscriptenStorage::NoteWriteFailure(const char* path, int error)
 {
-    ++sWriteFailures;
+    {
+        std::lock_guard<std::mutex> guard(sWriteFailuresLock);
+        ++sWriteFailures[path];
+    }
     std::printf("storage: write to %s failed (errno %d): the partial file was removed\n", path, error);
     std::fflush(stdout);
 }
 
-unsigned plEmscriptenStorage::WriteFailures()
+unsigned plEmscriptenStorage::WriteFailures(const char* path)
 {
-    return sWriteFailures.load();
+    std::lock_guard<std::mutex> guard(sWriteFailuresLock);
+    auto                        it = sWriteFailures.find(path);
+    return it == sWriteFailures.end() ? 0 : it->second;
 }
 
 // No log line of its own: the patcher logs what it does with the answer (pfPatcher.cpp

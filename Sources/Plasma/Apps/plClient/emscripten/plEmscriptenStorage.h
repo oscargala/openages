@@ -57,7 +57,9 @@ int64_t  Available();
 void     LoginStarted(const char* how);
 /** A write in the install directory failed and the file was removed (plEmscriptenStdio.cpp). */
 void     NoteWriteFailure(const char* path, int error);
-unsigned WriteFailures();
+/** How many writes to path (as it was passed to fopen) have failed so far: the patchers' record of a download's
+ *  storage failure (pfPatcher::SetWriteFailures). */
+unsigned WriteFailures(const char* path);
 } // namespace plEmscriptenStorage
 
 #endif // plEmscriptenStorage_inc
