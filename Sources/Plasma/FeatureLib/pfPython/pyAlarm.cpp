@@ -88,8 +88,20 @@ void pyAlarmMgr::Alarm::Fire()
 //static
 pyAlarmMgr * pyAlarmMgr::GetInstance()
 {
+#if PLASMA_PYTHON_ABI < 3
+    // The py2 flavour (Emscripten only) keeps CWE's lifetime. CWE's ~pyAlarmMgr has its Clear() commented out and its
+    // list holds raw pointers, so the alarms still pending at exit are never released, and no Python call runs after
+    // Py_Finalize (PythonInterface::finiPython, from plClient::Shutdown). A static instance here would destroy them
+    // among the static destructors, after Py_Finalize: each ~Alarm's Py_XDECREF can free the last reference to an
+    // instance of a classic class (xSimpleImagerClueHandler, PtSetAlarm(t, self, 1)), and CPython 2.3's
+    // instance_dealloc calls PyErr_Fetch, whose PyThreadState_Get ends the program with "Fatal Python error:
+    // PyThreadState_Get: no current thread".
+    static pyAlarmMgr* inst = new pyAlarmMgr;
+    return inst;
+#else
     static pyAlarmMgr inst;
     return &inst;
+#endif
 }
 
 void pyAlarmMgr::Update( double secs )
