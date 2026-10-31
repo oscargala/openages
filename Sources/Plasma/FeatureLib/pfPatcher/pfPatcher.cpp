@@ -62,6 +62,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #ifdef __EMSCRIPTEN__
 #include <sys/stat.h>
+#include <zlib.h>
 
 #include <atomic>
 #include <cerrno>
@@ -73,15 +74,25 @@ static pfPatcher::StorageBudgetFunc s_storageBudget;
 // The browser's count of failed writes per install-directory file (pfPatcher::SetWriteFailures), shared by every
 // patcher. Without one, no download's size mismatch is a storage failure.
 static pfPatcher::WriteFailuresFunc s_writeFailures;
-// How many times a download that is not at its manifest size after Close, with no write of its file failed, is
-// fetched again before its patch fails (pfPatcherWorker::IFileThingDownloadCB).
+// How many times a download that is not at its manifest size after Close, with no write of its file failed and not
+// arrived complete, is fetched again before its patch fails (pfPatcherWorker::IFileThingDownloadCB). A download that
+// arrived complete (every delivered byte, or every byte of a verified gzip stream, on disk) is kept, as native.
 static constexpr uint32_t           kDownloadRetries = 2;
+// One chunk of a download as the file server delivered it, a Write of pfPatcherStream
+struct pfPatcherDownloadChunk
+{
+    uint32_t index;
+    uint64_t offset; // its first byte's offset in the delivered (compressed) stream
+    uint32_t size;
+};
 #ifdef PLASMA_TEST_HOOKS
 // The harness's test faults (pfPatcher::SetTestDownloadFaults), set before any patcher starts.
 static plFileName        s_testSizeFile;
 static int32_t           s_testSizeDelta = 0;
 static plFileName        s_testDropFile;
 static std::atomic<bool> s_testDropArmed{false};
+static bool              s_testDropEvery = false;
+static bool              s_testDropCorrupt = false; // invert a byte of that payload, not drop it
 #endif
 #endif
 
@@ -333,6 +344,18 @@ public:
 
     void Close()
     {
+#ifdef __EMSCRIPTEN__
+        // what the inflater produced and consumed, for the size check after Close: plZlibStream::Close deletes the
+        // z_stream (plZlibStream.cpp:77-82). uLong is 32 bits on wasm32, so the counts are kept widened.
+        if (hsCheckBits(fFlags, kFlagZipped) && fZStream) {
+            const z_streamp zstream = static_cast<z_streamp>(fZStream);
+            fInflatedOut = int64_t(uint64_t(zstream->total_out));
+            fInflatedIn = int64_t(uint64_t(zstream->total_in));
+        } else {
+            fInflatedOut = -1;
+            fInflatedIn = -1;
+        }
+#endif
         if (hsCheckBits(fFlags, kFlagZipped))
             plZlibStream::Close();
         fOutput.reset();
@@ -343,16 +366,34 @@ public:
         // tick whatever progress bar we have
         IUpdateProgress(count);
 
+#ifdef __EMSCRIPTEN__
+        // Each Write is one chunk of the file server's (RcvdFileDownloadChunkTrans::Post,
+        // plNglFile.cpp), at this compressed offset
+        const pfPatcherDownloadChunk chunk{fChunks++, fBytesWritten - count, count};
+        fLastChunk = chunk;
+#endif
+
 #if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
-        // the harness's dropped tail: the first attempt's last payload never reaches the file
-        if (fAttempt == 0 && s_testDropFile.IsValid() && fFilename == s_testDropFile && fBytesWritten >= fDeliverSize &&
-            s_testDropArmed.exchange(false))
-            return count;
+        // the harness's dropped tail: the first attempt's last payload never reaches the file, or every attempt's
+        // or, with s_testDropCorrupt, reaches it with its middle byte inverted
+        std::vector<uint8_t> corrupted;
+        if (s_testDropFile.IsValid() && fFilename == s_testDropFile && fBytesWritten >= fDeliverSize &&
+            (s_testDropEvery || (fAttempt == 0 && s_testDropArmed.exchange(false)))) {
+            if (!s_testDropCorrupt || !count)
+                return count;
+            corrupted.assign((const uint8_t*)buf, (const uint8_t*)buf + count);
+            corrupted[count / 2] ^= 0xFF;
+            buf = corrupted.data();
+        }
 #endif
 
         // write the appropriate blargs
         if (hsCheckBits(fFlags, kFlagZipped))
+#ifdef __EMSCRIPTEN__
+            return IWriteZipped(chunk, count, buf);
+#else
             return plZlibStream::Write(count, buf);
+#endif
         else
             return fOutput->Write(count, buf);
     }
@@ -374,17 +415,39 @@ public:
     void Unlink() const { plFileSystem::Unlink(fFilename); }
 
 #ifdef __EMSCRIPTEN__
-    // A file download whose file is not on disk at the manifest size after Close. Native ignores the write result
-    // (RcvdFileDownloadChunkTrans::Post in plNglFile.cpp), keeps the file, and the next patch of its manifest (the
-    // next link to the Age: plAgeLoader::UpdateAge, plResPatcher::Update) hashes it in IHashFile and downloads it
-    // again. In the browser a failed patch ends the game, so pfPatcherWorker::IFileThingDownloadCB fails the
-    // download for storage when a write of its file failed (plEmscriptenStdio.cpp removes such a file at fclose),
-    // and otherwise fetches it again, as that next patch would.
+    // A file download whose file is not on disk at the manifest size after Close. Native has no size check: it
+    // ignores the write result (RcvdFileDownloadChunkTrans::Post in plNglFile.cpp), keeps the file, and the next patch
+    // of its manifest (the next link to the Age: plAgeLoader::UpdateAge, plResPatcher::Update) hashes it in IHashFile
+    // and downloads it again. In the browser a failed patch ends the game, so pfPatcherWorker::IFileThingDownloadCB
+    // fails the download for storage when a write of its file failed (plEmscriptenStdio.cpp removes such a file at
+    // fclose); keeps it, as native, when it arrived complete (ArrivedComplete: the manifest size is what differs, and
+    // since IHashFile compares that size first, the file is downloaded again, and kept again, at every later link to
+    // its Age, as natively); and otherwise fetches it again, as that next patch would.
     int64_t  fExpectedSize = -1;
     uint32_t fDeliverSize = 0;          // the bytes the file server sends: the zip size, or the file size
     uint32_t fAttempt = 0;              // 0 for the first download, then 1 per retry
     int64_t  fSizeAtBegin = -1;         // the file's size before Begin's fopen, -1 when absent
     uint32_t fWriteFailuresAtBegin = 0; // the failed writes of this file before Begin (s_writeFailures)
+    int64_t  fInflatedOut = -1;         // a zipped file's inflated bytes (z_stream total_out) at Close, -1 for none
+    int64_t  fInflatedIn = -1;          // the compressed bytes the inflater consumed (total_in) at Close, -1 for none
+
+    // The chunks Write was handed, and the one in which inflate failed
+    uint32_t               fChunks = 0;
+    pfPatcherDownloadChunk fLastChunk{0, 0, 0};
+    pfPatcherDownloadChunk fFailChunk{0, 0, 0};
+    int64_t                fFailIn = -1; // the compressed bytes the inflater had consumed when it failed, -1 for none
+
+    // plZlibStream::Write, noting where inflate failed for the size line
+    uint32_t IWriteZipped(const pfPatcherDownloadChunk& chunk, uint32_t count, const void* buf)
+    {
+        const bool     failedBefore = fErrorOccurred;
+        const uint32_t written = plZlibStream::Write(count, buf);
+        if (!failedBefore && fErrorOccurred) {
+            fFailChunk = chunk;
+            fFailIn = fZStream ? int64_t(uint64_t(static_cast<z_streamp>(fZStream)->total_in)) : -1;
+        }
+        return written;
+    }
 
     // The file's size on disk now, or -1 with the stat errno
     int64_t SizeOnDisk(int& error) const
@@ -403,14 +466,50 @@ public:
     uint32_t Attempt() const { return fAttempt; }
     uint64_t BytesWritten() const { return fBytesWritten; }
 
+    // The download arrived complete, so it is kept as native keeps it: zipped, the gzip stream ended with its CRC-32
+    // and length checked (inflate's Z_STREAM_END with windowBits 31; an error sets fErrorOccurred,
+    // plZlibStream.cpp:129-135) and every inflated byte is on disk, since plZlibStream::Write hands each to
+    // fOutput (:138-139); unzipped, every delivered byte is on disk.
+    bool ArrivedComplete(int64_t onDisk) const
+    {
+        if (onDisk < 0)
+            return false;
+        if (hsCheckBits(fFlags, kFlagZipped))
+            return !fErrorOccurred && fDecompressedOk && onDisk == fInflatedOut;
+        return uint64_t(onDisk) == fBytesWritten;
+    }
+    // The outcome of a download kept by ArrivedComplete
+    ST::string KeptOutcome() const
+    {
+        if (hsCheckBits(fFlags, kFlagZipped))
+            return ST::format(
+                "kept, as native: the gzip stream ended and verified, and all {} inflated bytes are on "
+                "disk; the manifest size differs",
+                fInflatedOut);
+        return ST::format("kept, as native: all {} delivered bytes are on disk; the manifest size differs",
+                          fBytesWritten);
+    }
+
     // The line of a mismatch: what was expected, delivered and found
     ST::string SizeLine(int64_t onDisk, int error, const ST::string& outcome) const
     {
         const ST::string disk = onDisk >= 0 ? ST::format("{} B", onDisk) : ST::format("absent (errno {})", error);
         const ST::string before = fSizeAtBegin >= 0 ? ST::format("{} B", fSizeAtBegin) : ST_LITERAL("absent");
+        const ST::string inflated =
+            fInflatedOut >= 0 ? ST::format("inflated {} B from {} of {} delivered B", fInflatedOut, fInflatedIn,
+                                           fBytesWritten)
+                              : ST_LITERAL("no inflate stream");
+        // Where inflate failed (its compressed offset, and the chunk that held it), or the last chunk
+        const ST::string chunks =
+            fFailIn >= 0 ? ST::format("; inflate failed at compressed byte {}, in chunk {} of {} (offset {}, {} B)",
+                                      fFailIn, fFailChunk.index + 1, fChunks, fFailChunk.offset, fFailChunk.size)
+            : fChunks    ? ST::format("; {} chunks, the last at offset {}, {} B", fChunks, fLastChunk.offset,
+                                      fLastChunk.size)
+                         : ST_LITERAL("; no chunk");
         const ST::string inflate =
             hsCheckBits(fFlags, kFlagZipped)
-                ? ST::format("error {}, stream end {}", fErrorOccurred ? "yes" : "no", fDecompressedOk ? "yes" : "no")
+                ? ST::format("error {}, stream end {}, {}{}", fErrorOccurred ? "yes" : "no",
+                             fDecompressedOk ? "yes" : "no", inflated, chunks)
                 : ST_LITERAL("n/a");
         const uint32_t failures = s_writeFailures ? s_writeFailures(fFilename) : 0;
         return ST::format(
@@ -545,14 +644,18 @@ void pfPatcherWorker::IFileThingDownloadCB(ENetError result, const plFileName& f
     // the message that ends the patch if this download failed
     ST::string failure = filename.AsString();
 #ifdef __EMSCRIPTEN__
-    // A download the file server completed whose file is not at the manifest size (pfPatcherStream above). A failed
-    // download keeps native's branch below. Each mismatch writes one line to the patcher log and the console.
+    // A download the file server completed whose file is not at the manifest size (pfPatcherStream above): a failed
+    // write fails it for storage, a download that arrived complete is kept as native, and any other is fetched again.
+    // A failed download keeps native's branch below. Each mismatch writes one line to the patcher log and the console.
     int           error = 0;
     const int64_t onDisk = IS_NET_SUCCESS(result) ? stream->SizeOnDisk(error) : -1;
     if (IS_NET_SUCCESS(result) && stream->Mismatched(onDisk)) {
-        const auto logMismatch = [&](const ST::string& outcome) {
+        const auto logMismatch = [&](const ST::string& outcome, bool kept = false) {
             const ST::string line = stream->SizeLine(onDisk, error, outcome);
-            PatcherLogRed("\t{}", line);
+            if (kept)
+                PatcherLogYellow("\t{}", line);
+            else
+                PatcherLogRed("\t{}", line);
             std::printf("patcher: %s\n", line.c_str());
             std::fflush(stdout);
         };
@@ -560,6 +663,12 @@ void pfPatcherWorker::IFileThingDownloadCB(ENetError result, const plFileName& f
             logMismatch(ST_LITERAL("a write failed"));
             result = kNetErrInternalError;
             failure = ST::format("Not enough browser storage to write {}", stream->GetFileName());
+        } else if (stream->ArrivedComplete(onDisk)) {
+            // Every byte the file server sent (a zipped file: every byte of its verified gzip stream) is on disk, so
+            // only the manifest size differs. Native keeps the file: the result stays a success and the native block
+            // below whitelists it. The next patch of the manifest downloads it again (IHashFile compares the size
+            // first), as natively, and this line repeats.
+            logMismatch(stream->KeptOutcome(), true);
         } else if (stream->Attempt() < kDownloadRetries && fStarted) {
             // Fetched again at once, as the next patch of this manifest would natively (IHashFile finds no file and
             // enqueues it), in a new stream at the front of the requests, so one request stays in flight. The
@@ -955,12 +1064,15 @@ void pfPatcher::SetWriteFailures(WriteFailuresFunc cb)
 }
 
 #ifdef PLASMA_TEST_HOOKS
-void pfPatcher::SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile)
+void pfPatcher::SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile,
+                                      bool dropEvery, bool dropCorrupt)
 {
+    s_testDropCorrupt = dropCorrupt;
     s_testSizeFile = sizeFile.Normalize();
     s_testSizeDelta = sizeDelta;
     s_testDropFile = dropFile.Normalize();
     s_testDropArmed = dropFile.IsValid();
+    s_testDropEvery = dropEvery;
 }
 #endif
 #endif

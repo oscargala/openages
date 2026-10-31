@@ -25,6 +25,10 @@ target_link_libraries(
         plNetGameLib
         plStatusLog
 )
+if(EMSCRIPTEN)
+    # the browser's size check reads the inflater's counts (pfPatcherStream::Close), so pfPatcher.cpp includes zlib.h
+    target_link_libraries(pfPatcher PRIVATE ZLIB::ZLIB)
+endif()
 
 source_group("Source Files" FILES ${pfPatcher_SOURCES})
 source_group("Header Files" FILES ${pfPatcher_HEADERS})

@@ -163,18 +163,21 @@ public:
     typedef std::function<uint32_t(const plFileName&)> WriteFailuresFunc;
 
     /** Set the browser's count of failed writes of every patcher. A download whose file is not at the manifest
-     *  size failed for storage when its own file's count rose while it ran; otherwise it is downloaded again.
+     *  size failed for storage when its own file's count rose while it ran; otherwise it is kept when it arrived
+     *  complete, as native keeps it, and downloaded again when it did not.
      *  \remarks Set it before any patcher starts. It will be called from the network thread.
      */
     static void SetWriteFailures(WriteFailuresFunc cb);
 
 #ifdef PLASMA_TEST_HOOKS
     /** Harness builds only: test faults in the file downloads of every patcher. The download of sizeFile is checked
-     *  against its manifest size plus sizeDelta; the first download of dropFile loses the last payload it is
-     *  handed. An empty file name sets no fault.
+     *  against its manifest size plus sizeDelta; the first download of dropFile (every download of it when
+     *  dropEvery is set) loses the last payload it is handed, or, with dropCorrupt, has that payload's middle byte
+     *  inverted. An empty file name sets no fault.
      *  \remarks Set it before any patcher starts.
      */
-    static void SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile);
+    static void SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile,
+                                      bool dropEvery = false, bool dropCorrupt = false);
 #endif
 #endif
 
