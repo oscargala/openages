@@ -118,6 +118,13 @@ public:
     bool Eof () const;
     void Clear ();
     void Compact ();
+#ifdef __EMSCRIPTEN__
+    // The receive diagnostic (pnNcCli.cpp): the bytes consumed since the last Compact
+    // (Data() .. Data() + Consumed()) and the bytes not yet consumed
+    const uint8_t* Data() const { return buffer.data(); }
+    size_t         Consumed() const { return size_t(curr - buffer.begin()); }
+    size_t         Remaining() const { return size_t(buffer.end() - curr); }
+#endif
 };
 
 

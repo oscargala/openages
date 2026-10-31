@@ -24,6 +24,10 @@ target_link_libraries(
         pnAsyncCore
         pnEncryption
 )
+if(EMSCRIPTEN)
+    # the receive diagnostic's uptime (hsTimer, pnNcCli.cpp)
+    target_link_libraries(pnNetCli PRIVATE pnNucleusInc pnTimer)
+endif()
 
 source_group("Header Files" FILES ${pnNetCli_HEADERS})
 source_group("Source Files" FILES ${pnNetCli_SOURCES})

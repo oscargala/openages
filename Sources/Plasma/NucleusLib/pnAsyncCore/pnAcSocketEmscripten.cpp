@@ -75,7 +75,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // Differences, all forced by the browser API:
 // - the local address is unknown (cleared) and the remote address is the one asked for;
 // - Nagle cannot be set on a WebSocket. gateway.py turns it off on its TCP side for the game connection only, as
-//   natively (NetCliConnectAccept (pnNcCli.cpp:848), plNglGame.cpp's unbuffered=true); the Worker's connect() cannot;
+//   natively (NetCliConnectAccept (pnNcCli.cpp:1047), plNglGame.cpp's unbuffered=true); the Worker's connect() cannot;
 // - a disconnect requested inside a read callback still notifies (asio's re-armed read
 //   on the closed socket fails with bad_descriptor and logs instead);
 // - once reading has stopped, bytes that still arrive are discarded and logged: a WebSocket

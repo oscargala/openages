@@ -340,5 +340,12 @@ bool NetCliDispatch (
     void *          param
 );
 
+#if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
+// Harness builds only: the occurrence-th Game2Cli PropagateBuffer (counted over every game
+// connection of the session) whose type is classIndex reads its count 2 above its payload, as a server message that
+// is 2 bytes short. 0 turns the fault off.
+void NetCliSetTestCountFault(uint32_t classIndex, unsigned occurrence);
+#endif
+
 
 #endif // PLASMA20_SOURCES_PLASMA_NUCLEUSLIB_PNNETCLI_PNNETCLI_H

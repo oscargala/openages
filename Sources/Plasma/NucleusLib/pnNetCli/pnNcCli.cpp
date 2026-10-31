@@ -52,6 +52,12 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "pnEncryption/plChallengeHash.h"
 #include "pnEncryption/plEncryption.h"
 #include "pnNetBase/pnNbConst.h"
+#ifdef __EMSCRIPTEN__
+#include "hsTimer.h"
+#include "pnNetBase/pnNbProtocol.h"
+
+#include <atomic>
+#endif
 
 #include <algorithm>
 #include <memory>
@@ -145,6 +151,32 @@ struct NetCli {
     // Message buffers
     uint8_t                    sendBuffer[kAsyncSocketBufferSize];
     std::vector<uint8_t>       recvBuffer;
+
+#ifdef __EMSCRIPTEN__
+    // The receive diagnostic: where the parser is in this connection's decrypted stream and
+    // what it last read, for the lines DiagError writes to OLD_ASYNC_LOG.log (LogMsg, pnAcLog.cpp) when the stream
+    // stops parsing. Native has none of it: it keeps the connection after these errors (NetCliDispatch ignores
+    // DispatchData's result), so the browser only records more.
+    struct DiagMsg
+    {
+        uint16_t id;
+        uint64_t start; // the stream offset of its 2-byte id
+        uint64_t wire;  // its bytes on the wire, the id included
+        uint32_t first; // its first field when that is a DWORD (a PropagateBuffer's type), else 0
+        uint32_t count; // its VarCount, else 0
+        bool     hasFirst;
+        bool     hasCount;
+    };
+    uint64_t diagAdded = 0; // decrypted bytes added to input since the handshake
+    DiagMsg  diagCurr{};    // the message being read
+    DiagMsg  diagRing[4]{}; // the last messages dispatched, diagRingNext the oldest
+    unsigned diagRingNext = 0;
+    unsigned diagRingCount = 0;
+    uint8_t  diagTail[16]{}; // the last consumed bytes before input's current buffer
+    unsigned diagTailLen = 0;
+    bool     diagBytesLogged = false; // the first error of a connection logs the bytes around it
+    bool     diagCountLogged = false; // a count over its field's maximum is logged once
+#endif
 
     NetCli()
         : sock(), channel(), recvMsg()
@@ -370,6 +402,115 @@ static void BufferedSendData (
     }
 }
 
+#ifdef __EMSCRIPTEN__
+/*****************************************************************************
+ *
+ *   The receive diagnostic
+ *
+ *   A stream that stops parsing (ERR_NO_HANDLER, ERR_BAD_COUNT) leaves native connected and silent, its parser
+ *   reading the server's bytes from the wrong place. These lines name where: the protocol, the stream offset, the
+ *   last four messages the parser read and, at a connection's first error, the 16 bytes before and after it. They
+ *   go to OLD_ASYNC_LOG.log only (LogMsg), never to the console or the network.
+ *
+ ***/
+
+#ifdef PLASMA_TEST_HOOKS
+// The harness's count fault (NetCliSetTestCountFault): the occurrence-th Game2Cli PropagateBuffer (id 2) carrying
+// class index s_testCountClass reads its VarCount 2 higher, as a server message whose count is 2 above its payload
+static std::atomic<uint32_t> s_testCountClass{0};
+static std::atomic<unsigned> s_testCountOccurrence{0};
+static std::atomic<unsigned> s_testCountSeen{0};
+#endif
+
+//===========================================================================
+static uint64_t DiagOffset(const NetCli* cli)
+{
+    // the stream offset of the next byte the parser reads
+    return cli->diagAdded - cli->input.Remaining();
+}
+
+//===========================================================================
+static ST::string DiagHex(const uint8_t data[], size_t bytes)
+{
+    static const char kHex[] = "0123456789abcdef";
+    std::string       out;
+    for (size_t i = 0; i < bytes; ++i) {
+        if (i)
+            out.push_back(' ');
+        out.push_back(kHex[data[i] >> 4]);
+        out.push_back(kHex[data[i] & 0xF]);
+    }
+    return out.empty() ? ST_LITERAL("-") : ST::string(out.c_str());
+}
+
+//===========================================================================
+static ST::string DiagMsgText(const NetCli::DiagMsg& m)
+{
+    ST::string text = ST::format("id {} start {} wire {} ends {}", m.id, m.start, m.wire, m.start + m.wire);
+    if (m.hasFirst)
+        text += ST::format(" first {#x}", m.first);
+    if (m.hasCount)
+        text += ST::format(" count {}", m.count);
+    return text;
+}
+
+//===========================================================================
+// The 2 bytes just consumed (the bad id, or a string's bad length) are the error's point
+static void DiagError(NetCli* cli, const char what[], unsigned msgId)
+{
+    const uint64_t at = DiagOffset(cli) - 2;
+    ST::string     line = ST::format("pnNetCli diag: {} proto {} id {} at offset {} t={.2f}", what,
+                                     NetMsgChannelGetProtocol(cli->channel), msgId, at, hsTimer::GetSeconds());
+    if (cli->diagBytesLogged) {
+        LogMsg(kLogError, line);
+        return;
+    }
+    cli->diagBytesLogged = true;
+
+    // the last messages read, oldest first
+    line += "; prev";
+    if (!cli->diagRingCount)
+        line += " none";
+    for (unsigned i = 0; i < cli->diagRingCount; ++i) {
+        const unsigned slot = (cli->diagRingNext + std::size(cli->diagRing) - cli->diagRingCount + i) % std::size(cli->diagRing);
+        line += ST::format(" [{}] {}", int(i) - int(cli->diagRingCount), DiagMsgText(cli->diagRing[slot]));
+    }
+
+    // the 16 bytes before the error's point: diagTail, then what this buffer consumed before it
+    const size_t consumed = cli->input.Consumed();
+    const size_t here = consumed >= 2 ? consumed - 2 : 0;
+    uint8_t      before[sizeof(cli->diagTail) * 2];
+    size_t       beforeLen = 0;
+    memcpy(before, cli->diagTail, cli->diagTailLen);
+    beforeLen = cli->diagTailLen;
+    const size_t fromBuffer = std::min(here, sizeof(cli->diagTail));
+    memcpy(before + beforeLen, cli->input.Data() + here - fromBuffer, fromBuffer);
+    beforeLen += fromBuffer;
+    const size_t keep = std::min(beforeLen, sizeof(cli->diagTail));
+
+    // the error's point and the bytes after it, up to 16 from the point
+    const size_t afterLen = std::min(cli->input.Remaining() + (consumed - here), sizeof(cli->diagTail));
+    line += ST::format("; before {}; after {}", DiagHex(before + beforeLen - keep, keep),
+                       DiagHex(cli->input.Data() + here, afterLen));
+    LogMsg(kLogError, line);
+}
+
+//===========================================================================
+// Keeps the last consumed bytes across input.Compact, for DiagError's "before"
+static void DiagKeepTail(NetCli* cli)
+{
+    const size_t consumed = cli->input.Consumed();
+    uint8_t      merged[sizeof(cli->diagTail) * 2];
+    memcpy(merged, cli->diagTail, cli->diagTailLen);
+    const size_t fromBuffer = std::min(consumed, sizeof(cli->diagTail));
+    memcpy(merged + cli->diagTailLen, cli->input.Data() + consumed - fromBuffer, fromBuffer);
+    const size_t total = cli->diagTailLen + fromBuffer;
+    const size_t keep = std::min(total, sizeof(cli->diagTail));
+    memcpy(cli->diagTail, merged + total - keep, keep);
+    cli->diagTailLen = unsigned(keep);
+}
+#endif // __EMSCRIPTEN__
+
 //===========================================================================
 static bool DispatchData (NetCli * cli, void * param) {
 
@@ -382,6 +523,12 @@ static bool DispatchData (NetCli * cli, void * param) {
                 goto NEED_MORE_DATA;
 
             msgId = hsToLE16(msgId);
+
+#ifdef __EMSCRIPTEN__
+            cli->diagCurr = {};
+            cli->diagCurr.id = msgId;
+            cli->diagCurr.start = DiagOffset(cli) - sizeof(msgId);
+#endif
 
             if (cli->recvMsg = NetMsgChannelFindRecvMessage(cli->channel, msgId); cli->recvMsg == nullptr)
                 goto ERR_NO_HANDLER;
@@ -432,6 +579,13 @@ static bool DispatchData (NetCli * cli, void * param) {
                         }
                     }
 
+#ifdef __EMSCRIPTEN__
+                    if (cli->recvField == cli->recvMsg->msg->fields && count == 1 && cli->recvField->size == sizeof(uint32_t)) {
+                        cli->diagCurr.first = *(uint32_t*)data;
+                        cli->diagCurr.hasFirst = true;
+                    }
+#endif
+
                     // Field complete
                 }
                 break;
@@ -464,6 +618,38 @@ static bool DispatchData (NetCli * cli, void * param) {
 
                     // byte-swap value
                     uint32_t val = hsToLE32(*(uint32_t*)data);
+
+#ifdef __EMSCRIPTEN__
+#ifdef PLASMA_TEST_HOOKS
+                    if (const uint32_t testClass = s_testCountClass.load()) {
+                        if (NetMsgChannelGetProtocol(cli->channel) == kNetProtocolCli2Game && cli->diagCurr.id == 2 &&
+                            cli->diagCurr.hasFirst && cli->diagCurr.first == testClass &&
+                            s_testCountSeen.fetch_add(1) + 1 == s_testCountOccurrence.load()) {
+                            LogMsg(kLogError, ST::format("[harness] pnNetCli test fault: the count of id 2 class {#x} "
+                                                         "(occurrence {}) at offset {} reads {} for {}",
+                                                         testClass, s_testCountOccurrence.load(),
+                                                         DiagOffset(cli) - sizeof(uint32_t), val + 2, val));
+                            val += 2;
+                            *(uint32_t*)data = hsToLE32(val);
+                        }
+                    }
+#endif
+                    cli->diagCurr.count = val;
+                    cli->diagCurr.hasCount = true;
+                    // native does not enforce the field's maximum on receipt (nor does this): on the game connection
+                    // a count over it is logged once, as the likely mark of a parser that now waits for bytes that
+                    // never come. Not on the others: a shard's Auth2Cli FileDownloadChunk carries more than its
+                    // field's maximum in every session (DirtSand: 32768 bytes over 1460).
+                    if (NetMsgChannelGetProtocol(cli->channel) == kNetProtocolCli2Game && cli->recvField->count &&
+                        val > cli->recvField->count && !cli->diagCountLogged) {
+                        cli->diagCountLogged = true;
+                        LogMsg(kLogError, ST::format("pnNetCli diag: count {} over the field maximum {} for proto {} "
+                                                     "id {} at offset {} t={.2f}",
+                                                     val, cli->recvField->count, NetMsgChannelGetProtocol(cli->channel),
+                                                     cli->diagCurr.id, DiagOffset(cli) - sizeof(uint32_t),
+                                                     hsTimer::GetSeconds()));
+                    }
+#endif
 
                     // Prepare to read var-length field
                     cli->recvFieldBytes = val * cli->recvField->size;
@@ -535,6 +721,13 @@ static bool DispatchData (NetCli * cli, void * param) {
         if (!cli->recvMsg->recv(cli->recvBuffer.data(), cli->recvBuffer.size(), param))
             goto ERR_DISPATCH_FAILED;
         
+#ifdef __EMSCRIPTEN__
+        cli->diagCurr.wire = DiagOffset(cli) - cli->diagCurr.start;
+        cli->diagRing[cli->diagRingNext] = cli->diagCurr;
+        cli->diagRingNext = (cli->diagRingNext + 1) % std::size(cli->diagRing);
+        cli->diagRingCount = std::min<unsigned>(cli->diagRingCount + 1, std::size(cli->diagRing));
+#endif
+
         // prepare to start next message
         cli->recvMsg        = nullptr;
         cli->recvField      = nullptr;
@@ -554,10 +747,16 @@ NEED_MORE_DATA:
 
 ERR_BAD_COUNT:
     LogMsg(kLogError, "pnNetCli: ERR_BAD_COUNT. msg: {} ({}). cli: {#x}", cli->recvMsg ? cli->recvMsg->msg->name : "(unknown)", msgId, (uintptr_t)cli);
+#ifdef __EMSCRIPTEN__
+    DiagError(cli, "ERR_BAD_COUNT", cli->diagCurr.id);
+#endif
     return false;
 
 ERR_NO_HANDLER:
     LogMsg(kLogError, "pnNetCli: ERR_NO_HANDLER. msg: {} ({}). cli: {#x}", cli->recvMsg ? cli->recvMsg->msg->name : "(unknown)", msgId, (uintptr_t)cli);
+#ifdef __EMSCRIPTEN__
+    DiagError(cli, "ERR_NO_HANDLER", msgId);
+#endif
     return false;
 
 ERR_DISPATCH_FAILED:
@@ -937,6 +1136,9 @@ bool NetCliDispatch (
 
             // Add data to accumulator and dispatch
             cli->input.Add(bytes, data);
+#ifdef __EMSCRIPTEN__
+            cli->diagAdded += bytes;
+#endif
             DispatchData(cli, param);
 
 #if !defined(PLASMA_EXTERNAL_RELEASE) && defined(HS_BUILD_FOR_WIN32)
@@ -958,6 +1160,9 @@ bool NetCliDispatch (
             // free heap buffer (if any)
             free(temp);
 
+#ifdef __EMSCRIPTEN__
+            DiagKeepTail(cli);
+#endif
             cli->input.Compact();
             return cli->recvDispatch;
         }
@@ -974,3 +1179,13 @@ bool NetCliDispatch (
 
     return true;
 }
+
+#if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
+//============================================================================
+void NetCliSetTestCountFault(uint32_t classIndex, unsigned occurrence)
+{
+    s_testCountSeen = 0;
+    s_testCountOccurrence = occurrence ? occurrence : 1;
+    s_testCountClass = classIndex;
+}
+#endif

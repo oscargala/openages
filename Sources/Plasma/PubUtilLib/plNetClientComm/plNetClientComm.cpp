@@ -45,8 +45,15 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <chrono>
 #include <string_view>
 #include <thread>
+#ifdef __EMSCRIPTEN__
+#include <mutex>
+#include <set>
+#endif
 
 #include "HeadSpin.h"
+#ifdef __EMSCRIPTEN__
+#include "hsTimer.h"
+#endif
 #include "plProduct.h"
 #include "hsResMgr.h"
 
@@ -177,6 +184,23 @@ static void INetBufferCallback (
         plNetApp::StaticErrorMsg("NetComm: plNetMessage %u failed to peek buffer", type);
         return;
     }
+#ifdef __EMSCRIPTEN__
+    // A payload that the message read stops short of. A server message whose pnNetCli count is above its payload
+    // shows here first, before its stream's next message is read from the wrong place (pnNcCli.cpp's receive
+    // diagnostic). Logged once per class, to OLD_ASYNC_LOG.log only; the message is handled as natively.
+    if (stream.GetPosition() != bytes) {
+        static std::mutex         s_shortPeekMutex;
+        static std::set<unsigned> s_shortPeekClasses;
+        bool                      first;
+        {
+            std::lock_guard<std::mutex> lock(s_shortPeekMutex);
+            first = s_shortPeekClasses.insert(type).second;
+        }
+        if (first)
+            LogMsg(kLogError, ST::format("NetComm diag: plNetMessage class {#x} read {} of its {} payload bytes t={.2f}",
+                                         type, stream.GetPosition(), bytes, hsTimer::GetSeconds()));
+    }
+#endif
 
     NetCommRecvMsg(msg);
 

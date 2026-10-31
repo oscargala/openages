@@ -623,7 +623,7 @@ class Deployment:
         the client port, plus (resolveUpstreams) their IPv4 addresses, since a game server
         address arrives from the auth server as an IPv4 address (the AgeReply's game server node,
         AgeRequestTrans::Post's m_gameSrvNode, plNglAuth.cpp:2174; NetCliGameStartConnect in
-        INetCliAuthAgeRequestCallback, plNetClientComm.cpp:518)."""
+        INetCliAuthAgeRequestCallback, plNetClientComm.cpp:542)."""
         hosts = set(self.ini_hosts) | set(self.extra_hosts)
         pairs = {(h, self.client_port) for h in hosts}
         resolved = {}
