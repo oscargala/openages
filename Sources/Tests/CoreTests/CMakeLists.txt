@@ -1,5 +1,4 @@
 set(CoreLibTest_SOURCES
-    test_hsBitCast.cpp
     test_hsEndian.cpp
     test_plCmdParser.cpp
     test_RAMStream.cpp

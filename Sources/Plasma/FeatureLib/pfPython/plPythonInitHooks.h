@@ -58,8 +58,7 @@ public:
 
     // In PythonInterface::initPython of the py3 flavour, on the client thread, before the interpreter's core init and
     // again after its main init: whether this run has a harness build's local game code (a configured directory,
-    // plResPatcherLocalGameCode.h). The external flavour then pins the module search path empty and reports the
-    // sys.path entries.
+    // plResPatcherLocalGameCode.h). The external flavour then pins the module search path empty.
     virtual bool LocalGameCode() { return false; }
 
     // In PythonInterface::initPython, on the client thread, right after the "interpreter is now alive" line: the pak

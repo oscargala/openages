@@ -48,11 +48,11 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string_theory/format>
 #include <vector>
 
 #include "HeadSpin.h"
-#include "hsBitCast.h"
 #include "pfDisplayHelpers/plEmscriptenDisplayHelper.h"
 #include "plClient.h"
 #include "plEmscriptenFrameHooks.h"
@@ -100,9 +100,12 @@ void*                               s_fullscreenUser = nullptr;
 
 // [0] = change sequence (the page adds 1 after writing [1]), [1] = the ratio (float bits).
 alignas(8) int32_t s_scaleShared[2] = {0, 0};
-int32_t       s_scaleSeen = 0;
-float         s_scale = 1.f;
+int32_t s_scaleSeen = 0;
+float   s_scale = 1.f;
+#ifdef PLASMA_TEST_HOOKS
+// the count of plDisplayScaleChangedMsg sent, for the status lines only (DISPLAY_STATUS increments it)
 unsigned long s_scaleChanges = 0;
+#endif
 
 void PollScale(void*)
 {
@@ -111,13 +114,13 @@ void PollScale(void*)
         return;
     s_scaleSeen = seq;
     const int32_t bits = __atomic_load_n(&s_scaleShared[1], __ATOMIC_RELAXED);
-    float         scale = hsBitCast<float>(bits);
+    float         scale;
+    std::memcpy(&scale, &bits, sizeof(scale));
     if (scale == s_scale)
         return;
     s_scale = scale;
-    s_scaleChanges++;
     DISPLAY_STATUS("DISPLAY SCALE: devicePixelRatio {.3f} -> plDisplayScaleChangedMsg (change {})", scale,
-                   s_scaleChanges);
+                   ++s_scaleChanges);
     plDisplayScaleChangedMsg* msg = new plDisplayScaleChangedMsg(scale);
     msg->Send();
 }
@@ -154,9 +157,6 @@ void plEmscriptenDisplay::StartScaleWatch(float initialScale)
     plDisplayWatchScale(s_scaleShared);
     plEmscriptenFrameHooks::Add(PollScale);
 }
-
-float         plEmscriptenDisplay::CurrentScale() { return s_scale; }
-unsigned long plEmscriptenDisplay::ScaleChanges() { return s_scaleChanges; }
 
 // ---- Player mode --------------------------------------------------------------------------------
 //
@@ -358,9 +358,8 @@ void SendScale(float scale)
     if (scale <= 0.f || scale == s_scale)
         return;
     s_scale = scale;
-    s_scaleChanges++;
     DISPLAY_STATUS("DISPLAY SCALE: backing {.3f} pixels per CSS pixel -> plDisplayScaleChangedMsg (change {})",
-                   scale, s_scaleChanges);
+                   scale, ++s_scaleChanges);
     plDisplayScaleChangedMsg* msg = new plDisplayScaleChangedMsg(scale);
     msg->Send();
 }

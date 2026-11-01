@@ -181,6 +181,27 @@ static void IClientStatus(const ST::string& line)
 #define CLIENT_FAILURE(...) hsDebugPrintToTerminal(ST::format(__VA_ARGS__))
 #endif
 
+// STATUS_ONLY(statement) keeps a statement that only the status lines read; a product build, which has none, drops it.
+#ifdef PLASMA_TEST_HOOKS
+#define STATUS_ONLY(...) __VA_ARGS__
+#else
+#define STATUS_ONLY(...) ((void)0)
+#endif
+
+// TEST_HOOK(call) makes the call on the client seam when a harness build installed one; TEST_HOOK_OR(call, value) is
+// that call's result then, and value otherwise. A product build makes no call: TEST_HOOK_OR is its value.
+#ifdef PLASMA_TEST_HOOKS
+#define TEST_HOOK(...)                                                       \
+    do {                                                                     \
+        if (plEmscriptenTestHooks* testHooks = plEmscriptenTestHooks::Get()) \
+            testHooks->__VA_ARGS__;                                          \
+    } while (0)
+#define TEST_HOOK_OR(call, value) (plEmscriptenTestHooks::Get() ? plEmscriptenTestHooks::Get()->call : (value))
+#else
+#define TEST_HOOK(...) ((void)0)
+#define TEST_HOOK_OR(call, value) (value)
+#endif
+
 static double s_bootStart = 0.0;
 
 // -----------------------------------------------------------------------------
@@ -535,11 +556,7 @@ static bool MountUserData(const std::string& userData)
     RemoveStartupUserDirs(userData);
     // The user folder lives in OPFS, or in memory where OPFS cannot be mounted (below). A harness build may ask for
     // memory from the start (the client seam's UserFilesInMemory); the product always asks for OPFS.
-    bool userFilesOpfs = true;
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenTestHooks* hooks = plEmscriptenTestHooks::Get())
-        userFilesOpfs = !hooks->UserFilesInMemory();
-#endif
+    bool      userFilesOpfs = !TEST_HOOK_OR(UserFilesInMemory(), false);
     backend_t userBackend = nullptr;
     int       mountErr = 0;
     if (userFilesOpfs) {
@@ -614,10 +631,8 @@ static bool MountFileSystems()
     const bool        patcher = EnvOr("PLASMA_DATA_FILES", "http") == "patcher";
     if (!patcher && !MountGameData(assetRoot, chunk))
         return false;
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenTestHooks* hooks = plEmscriptenTestHooks::Get(); hooks && !hooks->MountFiles(IMountHarnessTree))
+    if (!TEST_HOOK_OR(MountFiles(IMountHarnessTree), true))
         return false;
-#endif
     if (!MountFonts())
         return false;
     const std::string userData = UserDataPath();
@@ -700,15 +715,15 @@ static bool RunLoginDialog()
         shard, record.username.empty() ? "no" : "yes", record.remember ? "on" : "off",
         (record.remember && record.hasHash) ? "yes" : "no");
 
-    unsigned dialogPasses = 0; // NetCommUpdate passes of the dialog loop, for the status lines
-    double   dialogSince = emscripten_get_now();
+    STATUS_ONLY(unsigned dialogPasses = 0); // NetCommUpdate passes of the dialog loop
+    STATUS_ONLY(double dialogSince = emscripten_get_now());
     for (;;) {
         // AUTH_LOGIN_TIMER (UruLoginDialogProc): NetCommUpdate every 10 ms while the dialog is open. The 10 ms is a
         // wait that the player's Login or Quit ends, so the action is taken at once, as the modal loop's GetMessage
         // takes it.
         NetCommUpdate();
         PumpMessageQueueProc();
-        ++dialogPasses;
+        STATUS_ONLY(++dialogPasses);
         if (!WaitForPlayer(10.0))
             continue;
         ST::string  username, password;
@@ -755,13 +770,13 @@ static bool RunLoginDialog()
         if (!NetCliAuthQueryConnected())
             NetCommConnect();
         NetCommAuthenticate(nullptr);
-        const double tAuth = emscripten_get_now();
-        bool         cancelled = false;
-        unsigned     authPasses = 0;
+        STATUS_ONLY(const double tAuth = emscripten_get_now());
+        bool cancelled = false;
+        STATUS_ONLY(unsigned authPasses = 0);
         while (!NetCommIsLoginComplete()) {
             NetCommUpdate();
             PumpMessageQueueProc();
-            ++authPasses;
+            STATUS_ONLY(++authPasses);
             if (WaitForPlayer(10.0) && Take(username, password, remember) == Event::kCancel) {
                 cancelled = true;
                 break;
@@ -776,8 +791,8 @@ static bool RunLoginDialog()
                 "back to the dialog",
                 (emscripten_get_now() - tAuth) / 1000.0, authPasses);
             NetCommDisconnect();
-            dialogPasses = 0;
-            dialogSince = emscripten_get_now();
+            STATUS_ONLY(dialogPasses = 0);
+            STATUS_ONLY(dialogSince = emscripten_get_now());
             continue;
         }
         CLIENT_STATUS("LOGIN: auth result {} ({}) after {.3f} s ({} NetCommUpdate passes)", int(auth),
@@ -793,13 +808,13 @@ static bool RunLoginDialog()
         // to the dialog. The box's message loop goes on dispatching the dialog's AUTH_LOGIN_TIMER, so NetCommUpdate
         // runs every 10 ms behind it until OK; hsMessageBoxPumping keeps that loop running.
         CLIENT_STATUS("LOGIN FAILED: {}; back to the login dialog", ST::string::from_wchar(NetErrorToString(auth)));
-        [[maybe_unused]] const unsigned passesBefore = dialogPasses;
-        [[maybe_unused]] const double   tBox = emscripten_get_now();
+        STATUS_ONLY(const unsigned passesBefore = dialogPasses);
+        STATUS_ONLY(const double tBox = emscripten_get_now());
         hsMessageBoxPumping(AuthFailedText(auth), ST_LITERAL("Authentication Failed"), hsMessageBoxNormal,
-                            hsMessageBoxIconError, [&dialogPasses] {
+                            hsMessageBoxIconError, [&] {
             NetCommUpdate();
             PumpMessageQueueProc();
-            ++dialogPasses;
+            STATUS_ONLY(++dialogPasses);
         }, 10.0);
         CLIENT_STATUS(
             "LOGIN DIALOG: \"Authentication Failed\" answered after {.3f} s "
@@ -860,10 +875,7 @@ static struct LoopState
 // The patcher launcher's cancel and fail exits, before a client or a net exists. Returns rc, the program's exit code.
 static int LauncherExit(int rc)
 {
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenTestHooks* hooks = plEmscriptenTestHooks::Get())
-        hooks->OnExit(plEmscriptenTestHooks::ExitPoint::kLauncher, rc);
-#endif
+    TEST_HOOK(OnExit(plEmscriptenTestHooks::ExitPoint::kLauncher, rc));
     return rc;
 }
 
@@ -1034,13 +1046,12 @@ static void ClientLoad()
         (gClient && !gClient->GetDone()) ? "ready" : "FAILED");
 }
 
-// plClientLoader::ShutdownEnd (plClient::Shutdown, then hsgResMgr::Shutdown), after the platform layers' own teardown
-// (plEmscriptenFrameHooks::AddShutdown). Those layers live outside plClient, so they release what they hold here,
-// while the client and the resource manager still exist, as plClient::Shutdown releases its keys first. Every exit
-// path of the client goes through here.
+// plClientLoader::ShutdownEnd (plClient::Shutdown, then hsgResMgr::Shutdown), after a harness build's instruments
+// release what they hold of the client (the client seam's BeforeShutdownEnd), while the client and the resource
+// manager still exist, as plClient::Shutdown releases its keys first. Every exit path of the client goes through here.
 static void ClientShutdownEnd()
 {
-    plEmscriptenFrameHooks::RunShutdownHooks();
+    TEST_HOOK(BeforeShutdownEnd());
     gClient.ShutdownEnd();
 }
 
@@ -1053,11 +1064,7 @@ static int ClientStart()
 
     // Login (wWinMain): the login dialog, as without /SkipLoginDialog. Only a harness build's client seam may log in
     // another way.
-    bool loginDialog = true;
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenTestHooks* hooks = plEmscriptenTestHooks::Get())
-        loginDialog = hooks->LoginDialog();
-#endif
+    bool loginDialog = TEST_HOOK_OR(LoginDialog(), true);
     if (loginDialog) {
         if (!RunLoginDialog()) {
             // needExit (wWinMain): the client shuts down and the program ends normally.
@@ -1104,10 +1111,7 @@ static int ClientStart()
         gClient->SetMessagePumpProc(PumpMessageQueueProc);
         gClient.StartClient();
         CLIENT_STATUS("StartClient done (BeginGame); MainLoop runs once per requestAnimationFrame from the next tick");
-#ifdef PLASMA_TEST_HOOKS
-        if (plEmscriptenTestHooks* hooks = plEmscriptenTestHooks::Get())
-            hooks->OnLoopStart();
-#endif
+        TEST_HOOK(OnLoopStart());
         return kStartLoop;
     }
     return ClientFinish(ClientEnd::kNotStarted, 0);

@@ -52,8 +52,11 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <string>
 #include <unordered_map>
 
+#ifdef PLASMA_TEST_HOOKS
+#include "plFileSystem.h"
+#endif
+
 extern "C" void plasma_storage_estimate_start(em_proxying_ctx* ctx, double* out);
-extern "C" void plasma_storage_login(const char* how);
 
 namespace
 {
@@ -75,11 +78,6 @@ bool plEmscriptenStorage::Estimate(double& usage, double& quota)
     usage = out[0];
     quota = out[1];
     return usage >= 0 && quota >= 0;
-}
-
-void plEmscriptenStorage::LoginStarted(const char* how)
-{
-    plasma_storage_login(how); // proxied to the main thread (plEmscriptenStorage.js), asynchronous
 }
 
 void plEmscriptenStorage::NoteWriteFailure(const char* path, int error)
@@ -107,3 +105,10 @@ int64_t plEmscriptenStorage::Available()
     const bool known = plEmscriptenStorage::Estimate(usage, quota);
     return known ? (quota > usage ? int64_t(quota - usage) : 0) : -1;
 }
+
+#ifdef PLASMA_TEST_HOOKS
+std::string plEmscriptenStorage::LogFolder()
+{
+    return plFileSystem::GetLogPath().AsString().c_str();
+}
+#endif

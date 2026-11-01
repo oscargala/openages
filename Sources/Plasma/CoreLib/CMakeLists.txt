@@ -37,7 +37,6 @@ endif()
 set(CoreLib_HEADERS
     HeadSpin.h
     hsAlignedAllocator.hpp
-    hsBitCast.h
     hsBitVector.h
     hsBounds.h
     hsColorRGBA.h

@@ -61,6 +61,18 @@ int plFrameLoop_skipped(); // animation frames skipped so far while a tick was s
 #endif
 }
 
+// A call to the harness's frame-loop observer (plEmscriptenFrameLoop.h) when one is installed; nothing in a product
+// build (PLASMA_TEST_HOOKS off).
+#ifdef PLASMA_TEST_HOOKS
+#define FRAMELOOP_OBSERVE(...)                                                                   \
+    do {                                                                                         \
+        if (plEmscriptenFrameLoopObserver* frameObserver = plEmscriptenFrameLoopObserver::Get()) \
+            frameObserver->__VA_ARGS__;                                                          \
+    } while (0)
+#else
+#define FRAMELOOP_OBSERVE(...) ((void)0)
+#endif
+
 namespace
 {
 void (*s_tick)() = nullptr;
@@ -75,10 +87,7 @@ double s_tickEndMs = -1.0; // when the last tick returned
 
 void Tick()
 {
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnTickBegin();
-#endif
+    FRAMELOOP_OBSERVE(OnTickBegin());
 #ifdef PLASMA_PIPELINE_WGPU
     // The wait between two ticks is a yield too, for the pipeline's build pacing (Yield below).
     if (s_tickEndMs >= 0.0)
@@ -90,10 +99,7 @@ void Tick()
 #ifdef PLASMA_PIPELINE_WGPU
     s_tickEndMs = emscripten_get_now();
 #endif
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnTickEnd();
-#endif
+    FRAMELOOP_OBSERVE(OnTickEnd());
 }
 } // namespace
 
@@ -111,10 +117,7 @@ void Start(void (*tick)())
     // Registered before the first tick: the pipeline is made inside one.
     plWGPUPipeline::SetGPUWaitProcs(plEmscriptenSuspendBegin, plEmscriptenSuspendEnd);
 #endif
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnStart();
-#endif
+    FRAMELOOP_OBSERVE(OnStart());
     plFrameLoop_start(Tick);
 }
 
@@ -138,33 +141,21 @@ namespace
 double Yield(bool nextFrame, [[maybe_unused]] const char* how)
 {
     if (!pthread_equal(pthread_self(), s_owner) || !s_inTick) {
-#ifdef PLASMA_TEST_HOOKS
-        if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-            observer->OnYieldRefused();
-#endif
+        FRAMELOOP_OBSERVE(OnYieldRefused());
         return -1.0;
     }
     // The yield suspends inside a Python frame as anywhere else (plEmscriptenFrameLoop.h).
     s_inTick = false;
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnSuspendBegin(how, true);
-#endif
+    FRAMELOOP_OBSERVE(OnSuspendBegin(how, true));
     const double waited = nextFrame ? plFrameLoop_waitFrame() : plFrameLoop_waitTask();
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnSuspendEnd();
-#endif
+    FRAMELOOP_OBSERVE(OnSuspendEnd());
     s_inTick = true;
 #ifdef PLASMA_PIPELINE_WGPU
     // The pipeline's build pacing: a browser that compiles render pipelines on its GPU process's command stream holds
     // this resume until the builds issued before it are compiled (plWGPUDevice::PumpPipelineBuilds).
     plWGPUDevice::NoteYield(waited);
 #endif
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnYield(waited);
-#endif
+    FRAMELOOP_OBSERVE(OnYield(waited));
     return waited;
 }
 } // namespace
@@ -183,29 +174,17 @@ bool plEmscriptenSuspendBegin([[maybe_unused]] const char* how)
 {
     // Yield's suspension; the caller waits (see plEmscriptenFrameLoop.h).
     if (!pthread_equal(pthread_self(), s_owner) || !s_inTick) {
-#ifdef PLASMA_TEST_HOOKS
-        if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-            observer->OnGpuWaitRefused();
-#endif
+        FRAMELOOP_OBSERVE(OnGpuWaitRefused());
         return false;
     }
     s_inTick = false;
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnSuspendBegin(how, false);
-#endif
+    FRAMELOOP_OBSERVE(OnSuspendBegin(how, false));
     return true;
 }
 
 void plEmscriptenSuspendEnd()
 {
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnSuspendEnd();
-#endif
+    FRAMELOOP_OBSERVE(OnSuspendEnd());
     s_inTick = true;
-#ifdef PLASMA_TEST_HOOKS
-    if (plEmscriptenFrameLoopObserver* observer = plEmscriptenFrameLoopObserver::Get())
-        observer->OnGpuWait();
-#endif
+    FRAMELOOP_OBSERVE(OnGpuWait());
 }

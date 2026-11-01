@@ -61,26 +61,14 @@ using HookProc = void (*)(void* user);
 // exists). Adding the same (proc, user) twice registers it twice.
 void Add(HookProc proc, void* user = nullptr);
 
-// Unregisters the first hook registered with (proc, user); false if there is none.
-bool Remove(HookProc proc, void* user = nullptr);
-
 // Runs every hook (main.cpp, at the start of each tick).
 void RunAll();
 
 // Native-style platform message pumps, also called within long loads/movies.
-// Same registration/thread rules as Add/Remove. Input only: do not suspend,
+// Same registration/thread rules as Add. Input only: do not suspend,
 // start client/GPU work, or rerun the ordinary frame hooks from these callbacks.
 void AddMessagePump(HookProc proc, void* user = nullptr);
-bool RemoveMessagePump(HookProc proc, void* user = nullptr);
 void RunMessagePumps();
-
-// Shutdown hooks: a platform layer's own teardown, for state it keeps across frames that must go while the client and
-// its resource manager still exist (keys, keyed objects). Same registration/thread rules as Add. main.cpp runs them
-// once, in the order added, at the shutdown tail of every client exit path, right before plClientLoader::ShutdownEnd
-// (plClient::Shutdown, then hsgResMgr::Shutdown; plClientLoader::ShutdownEnd). The frame hooks never run again after
-// that point, and a static's destructor would only run from exit(), after the resource manager is gone.
-void AddShutdown(HookProc proc, void* user = nullptr);
-void RunShutdownHooks();
 } // namespace plEmscriptenFrameHooks
 
 #endif // plEmscriptenFrameHooks_inc

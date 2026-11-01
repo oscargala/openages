@@ -115,7 +115,6 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "plPythonSDLModifier.h"
 #ifdef PLASMA_TEST_HOOKS
-#include <cstdio>
 #include "plPythonInitHooks.h"
 #endif
 
@@ -952,15 +951,6 @@ void PythonInterface::initPython()
     config._init_main = 1;
     if (!ICheckedInit<PyConfig, Py_InitializeFromConfig, PyConfig_Clear>(config, dbgLog, "Main init failed!"))
         return;
-
-#if defined(PLASMA_EXTERNAL_RELEASE) && defined(PLASMA_TEST_HOOKS)
-    // With a harness build's local game code, report the search-path entries (expected 0).
-    if (plPythonInitHooks* hooks = plPythonInitHooks::Get(); hooks && hooks->LocalGameCode()) {
-        PyObject* sysPath = PySys_GetObject("path"); // borrowed
-        std::fprintf(stderr, "local game code: python sys.path entries = %lld\n",
-                     (long long)(sysPath && PyList_Check(sysPath) ? PyList_Size(sysPath) : -1));
-    }
-#endif
 
 #else
     // CPython 2.3.3, the py2 flavour (Docs/Web/Python 2.3 flavour.md). Cyan's client (CWE

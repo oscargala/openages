@@ -99,10 +99,6 @@ void ResizeNative(int width, int height, bool windowed);
 // frame hook on the client thread sends plDisplayScaleChangedMsg(ratio) for it.
 void StartScaleWatch(float initialScale);
 
-// The scale of the last plDisplayScaleChangedMsg, and how many changes were sent.
-float         CurrentScale();
-unsigned long ScaleChanges();
-
 // ---- Player mode -----------------------------------------------------------------------
 //
 // A page opened without canvas=WxH (index.html: a player's page, whose Module.plasma.display is set) is a resizable

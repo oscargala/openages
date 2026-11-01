@@ -45,6 +45,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #ifndef plEmscriptenStorage_inc
 #define plEmscriptenStorage_inc
 #include <cstdint>
+#ifdef PLASMA_TEST_HOOKS
+#include <string>
+#endif
 
 namespace plEmscriptenStorage
 {
@@ -52,14 +55,16 @@ namespace plEmscriptenStorage
 bool     Estimate(double& usage, double& quota);
 /** quota - usage in bytes, or -1 when unknown: the patchers' storage budget (pfPatcher::SetStorageBudget). */
 int64_t  Available();
-/** The player started a login (how: "dialog", or "env" for the harness's login): navigator.storage.persist() on
- *  the page (pre.js Module.plasma.storage.login). Asynchronous; once per page. */
-void     LoginStarted(const char* how);
 /** A write in the install directory failed and the file was removed (plEmscriptenStdio.cpp). */
 void     NoteWriteFailure(const char* path, int error);
 /** How many writes to path (as it was passed to fopen) have failed so far: the patchers' record of a download's
  *  storage failure (pfPatcher::SetWriteFailures). */
 unsigned WriteFailures(const char* path);
+#ifdef PLASMA_TEST_HOOKS
+/** The harness build's: the client's log folder (plFileSystem::GetLogPath), where plEmscriptenStdio.cpp writes its I/O
+ *  trace (PLASMA_TEST_STDIO_TRACE=1). */
+std::string LogFolder();
+#endif
 } // namespace plEmscriptenStorage
 
 #endif // plEmscriptenStorage_inc

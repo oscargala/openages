@@ -65,11 +65,6 @@ std::vector<Hook>& MessagePumps()
     static std::vector<Hook> hooks;
     return hooks;
 }
-std::vector<Hook>& ShutdownHooks()
-{
-    static std::vector<Hook> hooks;
-    return hooks;
-}
 } // namespace
 
 namespace plEmscriptenFrameHooks
@@ -80,23 +75,11 @@ void Add(HookProc proc, void* user)
         Hooks().push_back({proc, user});
 }
 
-bool Remove(HookProc proc, void* user)
-{
-    std::vector<Hook>& hooks = Hooks();
-    for (auto it = hooks.begin(); it != hooks.end(); ++it) {
-        if (it->proc == proc && it->user == user) {
-            hooks.erase(it);
-            return true;
-        }
-    }
-    return false;
-}
-
 void RunAll()
 {
     if (Hooks().empty())
         return;
-    // a copy: a hook may add or remove hooks
+    // a copy: a hook may add hooks
     const std::vector<Hook> hooks = Hooks();
     for (const Hook& hook : hooks)
         hook.proc(hook.user);
@@ -107,37 +90,10 @@ void AddMessagePump(HookProc proc, void* user)
         MessagePumps().push_back({proc, user});
 }
 
-bool RemoveMessagePump(HookProc proc, void* user)
-{
-    auto& hooks = MessagePumps();
-    for (auto it = hooks.begin(); it != hooks.end(); ++it) {
-        if (it->proc == proc && it->user == user) {
-            hooks.erase(it);
-            return true;
-        }
-    }
-    return false;
-}
-
 void RunMessagePumps()
 {
-    const auto hooks = MessagePumps(); // callbacks may add/remove registrations
+    const auto hooks = MessagePumps(); // callbacks may add registrations
     for (const auto& hook : hooks)
-        hook.proc(hook.user);
-}
-
-void AddShutdown(HookProc proc, void* user)
-{
-    if (proc)
-        ShutdownHooks().push_back({proc, user});
-}
-
-void RunShutdownHooks()
-{
-    // once: taken out of the registry before the first runs
-    const std::vector<Hook> hooks = std::move(ShutdownHooks());
-    ShutdownHooks().clear();
-    for (const Hook& hook : hooks)
         hook.proc(hook.user);
 }
 } // namespace plEmscriptenFrameHooks

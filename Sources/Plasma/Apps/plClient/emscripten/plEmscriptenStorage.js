@@ -40,9 +40,9 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-// Browser storage for the patcher's install directory (OPFS): the persistent-storage request at
-// login and the estimate the patchers check before writing (plEmscriptenStorage.cpp). Both run on the page's main
-// thread (navigator.storage.persist() exists only in a window).
+// Browser storage for the patcher's install directory (OPFS): the estimate the patchers check before writing
+// (plEmscriptenStorage.cpp), on the page's main thread. The persistent-storage request at login is the page's
+// (pre.js Module.plasma.storage.login), which the login dialog calls (plEmscriptenLogin.js).
 addToLibrary({
   // Called on the main thread through emscripten_proxy_sync_with_ctx: writes [usage, quota] (doubles, -1 when
   // unknown) at out, then finishes the proxied call, so the calling pthread blocks only until the promise settles.
@@ -57,16 +57,5 @@ addToLibrary({
     var s = globalThis.navigator && navigator.storage;
     if (!s || typeof s.estimate !== 'function') { done(-1, -1); return; }
     s.estimate().then((e) => done(Number(e.usage ?? -1), Number(e.quota ?? -1)), () => done(-1, -1));
-  },
-
-  // The page's storage request when the player starts a login (the dialog's Login, or the harness env login):
-  // navigator.storage.persist() (pre.js Module.plasma.storage.login). Never on page load: browsers judge persistence
-  // requests by the user's engagement with the site. A harness build also logs the answer
-  // (the private test harness's pre-js).
-  plasma_storage_login__deps: ['$UTF8ToString'],
-  plasma_storage_login__proxy: 'async',   // callers pass string literals (never freed)
-  plasma_storage_login: (how) => {
-    var why = UTF8ToString(how >>> 0);
-    if (typeof Module.plasma?.storage?.login === 'function') Module.plasma.storage.login(why);
   },
 });

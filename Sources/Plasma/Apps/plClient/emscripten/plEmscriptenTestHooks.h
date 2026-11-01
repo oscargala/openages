@@ -131,6 +131,11 @@ public:
     // Before the shutdown of a client that got past its login: the loop's end line.
     virtual void BeforeShutdown() {}
 
+    // At the shutdown tail of every client exit path, right before plClientLoader::ShutdownEnd (plClient::Shutdown,
+    // then hsgResMgr::Shutdown): the instruments release what they keep across frames of the client (keys, keyed
+    // objects) while the client and its resource manager still exist.
+    virtual void BeforeShutdownEnd() {}
+
     // At the end of the program, with its exit code, once the C runtime's buffers are flushed: export the client's
     // files to the page and print the exit lines.
     virtual void OnExit(ExitPoint point, int exitCode) {}
