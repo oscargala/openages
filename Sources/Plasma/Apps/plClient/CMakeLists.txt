@@ -379,7 +379,7 @@ if(EMSCRIPTEN)
     if(PLASMA_WASM_NATIVE_AUDIO)
         string(APPEND _plasma_runtime_helpers ",$plasmaNativeAudio")
     else()
-        string(APPEND _plasma_runtime_helpers ",$plasmaOpenALConeCompat,$plasmaOpenALDistanceCompat,$plasmaOpenALOffsetCompat,$plasmaOpenALQueryCompat")
+        string(APPEND _plasma_runtime_helpers ",$plasmaOpenALConeCompat,$plasmaOpenALDistanceCompat,$plasmaOpenALOffsetCompat,$plasmaOpenALQueryCompat,$plasmaOpenALListenerCompat")
     endif()
     # The asset cache keeps a fixed number of asset origins pinned
     # (emscripten/plEmscriptenAssetCache.js), and the page refuses a deployment whose asset roots name more distinct
@@ -442,11 +442,6 @@ var PlasmaAssetOriginPins = ${CMAKE_MATCH_1};\n")
         "$<${_plasma_debug_config}:-sEXCEPTION_STACK_TRACES=1>"
         "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/pre.js"
         "--pre-js=${CMAKE_CURRENT_BINARY_DIR}/asset-origin-pins.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenFetchBackend.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAssetCache.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAssetCatalog.js"
-        # The JS half of pnAsyncCore's WebSocket socket backend
-        "--js-library=${PLASMA_SOURCE_ROOT}/NucleusLib/pnAsyncCore/pnAcWebSocket.js"
         # getcwd() under a WasmFS mount point returns "/" (plEmscriptenCwd.cpp)
         -Wl,--wrap=getcwd
         -Wl,--wrap=chdir
@@ -464,6 +459,8 @@ var PlasmaAssetOriginPins = ${CMAKE_MATCH_1};\n")
         -Wl,--wrap=fseek
         -Wl,--wrap=ungetc
         -Wl,--wrap=ungetwc
+        # The block cache under those FILEs' descriptors (plEmscriptenStdio.cpp)
+        -Wl,--wrap=__wasi_fd_read
         # WebGPU from the client thread: Dawn's webgpu.h for Emscripten, and the page's
         # #canvas transferred to main()'s pthread as an OffscreenCanvas (libpthread.js:
         # Module.canvas becomes that OffscreenCanvas in the pthread)
@@ -476,58 +473,48 @@ var PlasmaAssetOriginPins = ${CMAKE_MATCH_1};\n")
         # (plEmscriptenFrameLoop.h). JSPI does not transform the wasm (unlike ASYNCIFY,
         # which does not combine with -fwasm-exceptions).
         -sJSPI
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenFrameLoop.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenStorage.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenInput.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenFullscreen.js"
-        # The page halves of the display, the login dialog and the patcher's launcher dialog
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenDisplay.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenLogin.js"
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenPatcher.js"
     )
+    # The client's JavaScript libraries, once each and in link order (Emscripten adds their members in this order).
+    # The emscripten/ ones are named relative to this folder.
+    set(_plasma_js_libraries
+        emscripten/plEmscriptenFetchBackend.js
+        emscripten/plEmscriptenAssetCache.js
+        emscripten/plEmscriptenAssetCatalog.js
+        # The JS half of pnAsyncCore's WebSocket socket backend
+        "${PLASMA_SOURCE_ROOT}/NucleusLib/pnAsyncCore/pnAcWebSocket.js"
+        # The frame loop (-sJSPI above), the storage, the input and the fullscreen request
+        emscripten/plEmscriptenFrameLoop.js
+        emscripten/plEmscriptenStorage.js
+        emscripten/plEmscriptenInput.js
+        emscripten/plEmscriptenFullscreen.js
+        # The page halves of the display, the login dialog and the patcher's launcher dialog
+        emscripten/plEmscriptenDisplay.js
+        emscripten/plEmscriptenLogin.js
+        emscripten/plEmscriptenPatcher.js
+        # The page's audio activation, one rule for both audio outputs below (each registers its AudioContexts with it)
+        emscripten/plEmscriptenAudioActivation.js
+    )
+    # The observers of the input, audio, movies and journeys, and the --wrap link flags of the movie
+    # and native-audio observers, are the private test harness's.
+    if(PLASMA_WASM_NATIVE_AUDIO)
+        list(APPEND _plasma_js_libraries emscripten/plEmscriptenNativeAudio.js)
+    else()
+        list(APPEND _plasma_js_libraries
+            emscripten/plEmscriptenOpenALCompat.js
+            emscripten/plEmscriptenOpenALLifecycle.js
+        )
+    endif()
+    list(TRANSFORM _plasma_js_libraries PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/" REGEX "^emscripten/")
+    list(TRANSFORM _plasma_js_libraries PREPEND "--js-library=" OUTPUT_VARIABLE _plasma_js_library_options)
+    target_link_options(plClient PRIVATE ${_plasma_js_library_options})
     set_property(TARGET plClient APPEND PROPERTY LINK_DEPENDS
+        ${_plasma_js_libraries}
         "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/pre.js"
         "${CMAKE_CURRENT_BINARY_DIR}/asset-origin-pins.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenFetchBackend.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAssetCache.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAssetCatalog.js"
-        "${PLASMA_SOURCE_ROOT}/NucleusLib/pnAsyncCore/pnAcWebSocket.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenFrameLoop.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenStorage.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenInput.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenFullscreen.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenDisplay.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenLogin.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenPatcher.js"
         # Linked through pfWGPUPipeline's and plMessageBox's interface link options
         "${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUPipeline.js"
         "${PLASMA_SOURCE_ROOT}/PubUtilLib/plMessageBox/hsMessageBox_Emscripten.js"
     )
-    if(PLASMA_TEST_HOOKS)
-        # The harness build's count of the WasmFS backend reads under the game-data FILEs (plEmscriptenStdio.cpp).
-        # The product does not link this wrap.
-        target_link_options(plClient PRIVATE -Wl,--wrap=__wasi_fd_read)
-    endif()
-    # The page's audio activation, one rule for both audio outputs below (each registers its AudioContexts with it)
-    target_link_options(plClient PRIVATE
-        "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAudioActivation.js")
-    set_property(TARGET plClient APPEND PROPERTY LINK_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenAudioActivation.js")
-    # The observers of the input, audio, movies and journeys, and the --wrap link flags of the movie
-    # and native-audio observers, are the private test harness's.
-    if(PLASMA_WASM_NATIVE_AUDIO)
-        target_link_options(plClient PRIVATE
-            "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenNativeAudio.js")
-        set_property(TARGET plClient APPEND PROPERTY LINK_DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenNativeAudio.js")
-    else()
-        foreach(_audio_adapter Cones Distance Offset Lifecycle Queries)
-            target_link_options(plClient PRIVATE
-                "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenOpenAL${_audio_adapter}.js")
-            set_property(TARGET plClient APPEND PROPERTY LINK_DEPENDS
-                "${CMAKE_CURRENT_SOURCE_DIR}/emscripten/plEmscriptenOpenAL${_audio_adapter}.js")
-        endforeach()
-    endif()
     # Link without -flto: with -sWASMFS, Emscripten 6.0.12's ThinLTO system libraries fail
     # to link ("import module mismatch for symbol: __wasi_fd_sync", libwasmfs-mt vs
     # libc-mt). The Plasma libraries stay ThinLTO bitcode; wasm-ld still optimizes them

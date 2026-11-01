@@ -44,7 +44,8 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // and the getcwd()/chdir() wraps both build on the WasmFS of the pinned Emscripten release.
 // - The views: Mount merges the immutable fetch assets of the game data with a private writable directory into
 //   the working directory (/uru, main.cpp), MakeReadOnly turns a fetch mount into an immutable view, and
-//   ImmutableAsset, SetGameDataRoot and GameDataPath tell plEmscriptenStdio.cpp which opens are game data.
+//   ImmutableAsset, SetGameDataRoot and GameDataPath tell plEmscriptenStdio.cpp which opens are game data, and
+//   FileIdentity which of them read the same file.
 // - getcwd()/chdir(), linked with -Wl,--wrap (the second half of this file).
 //
 // Platform composition for the pinned Emscripten release's WasmFS, not a replacement filesystem.
@@ -308,6 +309,12 @@ bool plEmscriptenCwd::ImmutableAsset(int fd)
     if (!open) return false;
     auto data = std::dynamic_pointer_cast<CwdData>(open->locked().getFile());
     return data && data->immutable;
+}
+
+const void* plEmscriptenCwd::FileIdentity(int fd)
+{
+    auto open = wasmfs::wasmFS.getFileTable().locked().getEntry(fd);
+    return open ? open->locked().getFile().get() : nullptr;
 }
 
 // Patcher mode: the client's cwd is the per-shard OPFS install directory.

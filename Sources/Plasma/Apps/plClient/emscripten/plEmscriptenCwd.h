@@ -52,6 +52,13 @@ int  Mount(const char* destination, const char* writable, const char* assets);
 int  MakeReadOnly(const char* mount);
 // Whether an open descriptor is an immutable fetch asset of a virtual view.
 bool ImmutableAsset(int fd);
+
+// The WasmFS file an open descriptor reads, as an identity (null if none): the file table's File, which a directory
+// keeps one of per name (a view's CwdDirectory::Remember; WasmFS's dcache, Directory::Handle::getChild,
+// file.cpp:66-67), so every open of a file has the same one. plEmscriptenStdio.cpp's cache compares it; it costs no
+// backend call (fstat would, for the size).
+const void* FileIdentity(int fd);
+
 // The per-shard install directory of patcher mode (plEmscriptenPatcher.h): read-only opens of
 // files under it (or relative to it, the cwd) are game data too, for the same larger stdio buffer.
 void SetGameDataRoot(const char* root);

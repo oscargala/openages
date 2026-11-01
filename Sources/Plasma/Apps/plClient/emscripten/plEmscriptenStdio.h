@@ -40,21 +40,47 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 *==LICENSE==*/
 
-// For non-looping-static/streamed sources, libopenal.js derives bufOffset from
-// elapsed node time but omits that node's initial buffer offset after resume/seek.
-// Retain it so AL_SEC_OFFSET and subsequent pause/resume use the original position.
-addToLibrary({
-  $plasmaOpenALOffsetCompat__deps: ['$AL'],
-  $plasmaOpenALOffsetCompat__postset: 'if (!ENVIRONMENT_IS_PTHREAD) plasmaOpenALOffsetCompat();',
-  $plasmaOpenALOffsetCompat: () => {
-    var original = AL.updateSourceTime;
-    AL.updateSourceTime = source => {
-      var time = original(source);
-      var node = source.audioQueue[0];
-      if (source.state === 0x1012 && !(source.type === 0x1028 && source.looping) &&
-          node && node._startOffset > 0 && time >= node._startTime)
-        source.bufOffset = node._startOffset + (time - node._startTime) * source.playbackRate;
-      return time;
-    };
-  },
-});
+// plEmscriptenStdio.cpp's test seams: a harness build's only (PLASMA_TEST_HOOKS), for the cache's descriptor-level
+// test. The product build declares nothing here.
+#ifndef plEmscriptenStdio_inc
+#define plEmscriptenStdio_inc
+
+#ifdef PLASMA_TEST_HOOKS
+#include <wasi/api.h>
+
+#include <cstddef>
+#include <cstdint>
+
+namespace plEmscriptenStdio
+{
+// The cache's cap, at most the product's 16 MiB; set before any game-data FILE is open.
+void SetCacheCapForTest(size_t cap);
+
+// What the cache's preads call instead of __wasi_fd_pread (null: __wasi_fd_pread), with the same arguments.
+using PreadForTest = __wasi_errno_t (*)(__wasi_fd_t fd, const __wasi_iovec_t* iovs, size_t iovs_len,
+                                        __wasi_filesize_t offset, __wasi_size_t* nread);
+void SetPreadForTest(PreadForTest pread);
+
+struct CacheTotals
+{
+    size_t   resident = 0; // the blocks' bytes and the reservations of the calls in flight
+    size_t   peak = 0;
+    size_t   cap = 0;
+    size_t   pinned = 0; // blocks pinned now
+    uint64_t poisonings = 0;
+};
+CacheTotals CacheTotalsForTest();
+
+// A game-data FILE's descriptor's counts (the "[stdio]" line's); false for any other descriptor.
+struct CacheCounts
+{
+    uint64_t backendReads = 0, served = 0, servedCalls = 0, preads = 0, spanPreads = 0, original = 0;
+    uint64_t evictions = 0, reMisses = 0;
+    size_t   blocks = 0;
+    bool     poisoned = false;
+};
+bool CacheCountsForTest(int fd, CacheCounts& counts);
+} // namespace plEmscriptenStdio
+#endif
+
+#endif // plEmscriptenStdio_inc

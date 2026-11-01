@@ -38,11 +38,15 @@
 # - emscripten/plEmscriptenFetchBackend.js, which replaces src/lib/libwasmfs_fetch.js by defining the
 #   same library symbols, and the OpenAL overrides emscripten/plEmscriptenOpenAL*.js (src/lib/libopenal.js);
 # - the other functions plClient links with -Wl,--wrap (__syscall_poll, fopen, fclose, fseeko, fseek,
-#   ungetc, ungetwc): plEmscriptenPoll.cpp and plEmscriptenStdio.cpp work around this release's WasmFS
-#   and musl behaviour. plEmscriptenStdio.cpp's in-buffer seek mirrors musl's FILE (system/lib/libc/musl:
-#   src/internal/stdio_impl.h:27-53) and relies on src/stdio/fseek.c, __stdio_read.c, __toread.c,
-#   ungetc.c, ungetwc.c, setvbuf.c, ftell.c, ext2.c and __lockfile.c, and on WasmFS readAtOffset and
-#   __wasi_fd_seek (system/lib/wasmfs/syscalls.cpp);
+#   ungetc, ungetwc, __wasi_fd_read): plEmscriptenPoll.cpp and plEmscriptenStdio.cpp work around this
+#   release's WasmFS and musl behaviour. plEmscriptenStdio.cpp's in-buffer seek mirrors musl's FILE
+#   (system/lib/libc/musl: src/internal/stdio_impl.h:27-53) and relies on src/stdio/fseek.c,
+#   __stdio_read.c, __toread.c, ungetc.c, ungetwc.c, setvbuf.c, ftell.c, ext2.c, __lockfile.c, fread.c
+#   and fflush.c, and on WasmFS readAtOffset, __wasi_fd_pread and __wasi_fd_seek
+#   (system/lib/wasmfs/syscalls.cpp); its block cache under the game-data FILEs' reads also relies on
+#   the OPFS backend's read-only snapshot (system/lib/wasmfs/backends/opfs_backend.cpp,
+#   src/lib/libwasmfs_opfs.js), WasmFS's one File per name (system/lib/wasmfs/file.cpp) and dlmalloc's
+#   in-place shrink and never-returned memory (system/lib/dlmalloc.c);
 # - main.cpp's Finish, which calls musl's internal __funcs_on_exit, and main()'s explicit runtime
 #   keepalive around this release's JSPI;
 # - pnAsyncCore's resolver flags (pnAcDns.cpp: this release's getaddrinfo refuses AI_ADDRCONFIG) and
