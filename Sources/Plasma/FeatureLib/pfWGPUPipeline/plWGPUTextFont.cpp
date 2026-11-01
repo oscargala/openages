@@ -116,9 +116,7 @@ void plWGPUTextFont::ICreateTexture(uint16_t* data)
     layout.rowsPerImage = fTextureHeight;
     WGPUExtent3D size = {fTextureWidth, fTextureHeight, 1};
     wgpuQueueWriteTexture(fDevice->fQueue, &dst, outData.data(), outData.size(), &layout, &size);
-#ifdef PLASMA_TEST_HOOKS
-    fDevice->NoteUpload(plWGPUDevice::kUploadOther, outData.size(), ST::format("text font {}", fFace), "create");
-#endif
+    WGPU_TEST_HOOK(fDevice->NoteUpload(plWGPUDevice::kUploadOther, outData.size(), ST::format("text font {}", fFace), "create"));
 
     fTextureView = wgpuTextureCreateView(fTexture, nullptr);
 }

@@ -76,7 +76,6 @@ struct plWGPUShaderProgram
     static const plWGPUShaderProgram* Find(plShaderID::ID id);
     /** Index in the program table (0..kNumPrograms-1), for counters and pipeline keys. */
     uint32_t                          Index() const;
-    static const plWGPUShaderProgram* ByIndex(uint32_t index);
     /** The WGSL module source of a family: ShaderPrelude.wgsl (the device side of both program
         kinds), then the family's programs. */
     static const char*                ModuleSource(const char* family);

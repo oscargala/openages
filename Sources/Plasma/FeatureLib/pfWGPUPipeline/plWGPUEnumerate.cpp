@@ -90,15 +90,14 @@ struct State
     // Device loss (plDXPipeline's fDeviceLost on D3DERR_DEVICELOST): set by the
     // device-lost callback on the client thread's event loop, read by the pipeline at
     // BeginRender only. A re-acquire re-requests the adapter and device with the callbacks below.
-    bool          lost = false;
-    bool          shuttingDown = false;
-    bool          reacquiring = false;
-    bool          releasing = false;   // inside Shutdown's own release of the device
-    bool          shutDown = false;    // Shutdown has run: nothing is acquired any more
-    WGPUDevice    oldDevice = nullptr; // the lost device, until the pipeline has let it go
-    WGPUAdapter   oldAdapter = nullptr;
-    unsigned long losses = 0;
-    double        lostAt = 0.0;
+    bool        lost = false;
+    bool        shuttingDown = false;
+    bool        reacquiring = false;
+    bool        releasing = false;   // inside Shutdown's own release of the device
+    bool        shutDown = false;    // Shutdown has run: nothing is acquired any more
+    WGPUDevice  oldDevice = nullptr; // the lost device, until the pipeline has let it go
+    WGPUAdapter oldAdapter = nullptr;
+    double      lostAt = 0.0;
 
     // A new canvas texture means the previous one was presented (NoteCanvasTexture).
     int  lastTexSerial = 0;
@@ -148,7 +147,6 @@ void OnDeviceLost(WGPUDevice const* device, WGPUDeviceLostReason reason, WGPUStr
         reason == WGPUDeviceLostReason_FailedCreation)
         return;
     s.lost = true;
-    s.losses++;
     s.lostAt = Now();
 }
 
@@ -334,9 +332,8 @@ void plWGPUEnumerate::Shutdown()
     plWGPULog("released the device, the adapter, the canvas surface and the instance");
 }
 
-bool          plWGPUEnumerate::DeviceLost() { return s.lost; }
-unsigned long plWGPUEnumerate::DeviceLosses() { return s.losses; }
-void          plWGPUEnumerate::SetShuttingDown() { s.shuttingDown = true; }
+bool plWGPUEnumerate::DeviceLost() { return s.lost; }
+void plWGPUEnumerate::SetShuttingDown() { s.shuttingDown = true; }
 
 void plWGPUEnumerate::StartReacquire()
 {
@@ -472,11 +469,8 @@ void plWGPUEnumerate::Enumerate(std::vector<hsG3DDeviceRecord>& records, hsDispl
 void plWGPUEnumerate::NoteCanvasTexture(WGPUTexture texture)
 {
     const int serial = plWGPU_textureSerial(texture);
-#ifdef PLASMA_TEST_HOOKS
     // The test hooks' frame and present-gap counters.
-    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-        observer->OnPresent(serial != s.lastTexSerial);
-#endif
+    WGPU_OBSERVE(OnPresent(serial != s.lastTexSerial));
     if (serial == s.lastTexSerial)
         return;
     // The run's second canvas texture: the client's first frame has been presented. Until then the
@@ -487,13 +481,4 @@ void plWGPUEnumerate::NoteCanvasTexture(WGPUTexture texture)
         plWGPU_reportFirstPresent();
     }
     s.lastTexSerial = serial;
-}
-
-void plWGPUEnumerate::LogStats()
-{
-#ifdef PLASMA_TEST_HOOKS
-    // The test hooks' STATS line; the product build prints none.
-    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-        observer->OnLoopReport();
-#endif
 }

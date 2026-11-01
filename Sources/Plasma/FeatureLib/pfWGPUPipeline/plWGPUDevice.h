@@ -86,6 +86,21 @@ struct plWGPUShaderUniforms;
 struct plWGPUFixedState;
 struct plWGPUFFUniforms;
 
+// The pipeline's test seams, one statement each: a call to the harness's pipeline observer
+// (plWGPUPipelineObserver.h) when one is installed, and another call only a harness build makes.
+// A product build (PLASMA_TEST_HOOKS off) compiles neither.
+#ifdef PLASMA_TEST_HOOKS
+#define WGPU_OBSERVE(...)                                                         \
+    do {                                                                          \
+        if (plWGPUPipelineObserver* wgpuObserver = plWGPUPipelineObserver::Get()) \
+            wgpuObserver->__VA_ARGS__;                                            \
+    } while (0)
+#define WGPU_TEST_HOOK(...) __VA_ARGS__
+#else
+#define WGPU_OBSERVE(...) ((void)0)
+#define WGPU_TEST_HOOK(...) ((void)0)
+#endif
+
 class plWGPUDevice
 {
     friend plWGPUPipeline;
@@ -222,8 +237,7 @@ public:
     /// Group 1 of the texture shaders, released after the frame's submit.
     void BindTexture(WGPURenderPassEncoder pass, WGPUTextureView view, WGPUSampler sampler);
 
-    WGPUSampler     GetPointSampler() const { return fPointSampler; }
-    WGPUTextureView GetWhiteTextureView() const { return fWhiteTextureView; }
+    WGPUSampler GetPointSampler() const { return fPointSampler; }
 
     void SetPipeline(WGPURenderPassEncoder pass, plWGPUPipelineState& state);
 
@@ -276,7 +290,6 @@ public:
     void     EndPrewarmWalk();
     /// In a walk: whether the walk's target can be built for (a render target without a clean device ref cannot).
     bool     PrewarmTargetValid() const { return fWalkTargetValid; }
-    bool     InPrewarmWalk() const { return fPrewarmWalkActive; }
     /// Issue the builds still queued, then wait for every build in flight (wgpuInstanceWaitAny, a JSPI suspension
     /// inside a BeginGPUWait/EndGPUWait bracket) and keep the pipelines they made. Called before a scene frame acquires
     /// the canvas (plWGPUPipeline::PrewarmBeforeScene). When the frame loop refuses the wait they stay in flight; a
@@ -297,8 +310,7 @@ public:
     /// Bumped when the device's objects are released (ReleaseAllDeviceObjects): the pipelines and the builds queued
     /// and in flight belong to one generation.
     uint32_t Generation() const { return fGeneration; }
-    /// The builds in flight, and those queued or in flight.
-    size_t   PipelineBuildsInFlight() const { return fPipelineBuilds.size(); }
+    /// The builds queued or in flight.
     size_t   PipelineBuildsPending() const { return fPipelineBuilds.size() + fPipelineQueued.size(); }
 
     /// The frame loop's yields (plEmscriptenFrameLoop's Yield): how long each suspended the client thread.
@@ -321,7 +333,7 @@ public:
 #endif
 
     /// Read a render target's colour back to the CPU (copyTextureToBuffer +
-    /// mapAsync). The bytes arrive in a later frame; TakeReadback hands finished ones over.
+    /// mapAsync). The bytes arrive in a later frame.
     /// A readback owns its map-read buffer. Its map callback holds a reference of its own
     /// (IRequestReadback), so a readback whose owners let go of it lives until its map has ended:
     /// the callback never writes into freed memory.
@@ -347,17 +359,21 @@ public:
         uint32_t             bytesPerPixel = 4;
         std::vector<uint8_t> data; // tightly packed rows (width * bytesPerPixel)
     };
-    bool                                   RequestReadback(const ST::string& name, WGPUTexture texture, uint32_t width, uint32_t height,
-                                                           WGPUTextureFormat format, uint32_t layer = 0, uint32_t bytesPerPixel = 4);
     /// The same copy and map for ExtractMipMap, kept by the caller (not listed in
     /// fReadbacks): the future to wait on is returned with it.
-    std::shared_ptr<Readback>              RequestCaptureReadback(WGPUTexture texture, uint32_t width, uint32_t height,
-                                                                  WGPUFuture& future);
+    std::shared_ptr<Readback> RequestCaptureReadback(WGPUTexture texture, uint32_t width, uint32_t height,
+                                                     WGPUFuture& future);
+    std::shared_ptr<Readback> IRequestReadback(const ST::string& name, WGPUTexture texture, uint32_t width,
+                                               uint32_t height, WGPUTextureFormat format, uint32_t layer,
+                                               uint32_t bytesPerPixel, WGPUFuture& future);
+#ifdef PLASMA_TEST_HOOKS
+    /// The harness build's readbacks, listed in fReadbacks until TakeReadback hands a finished one over.
+    bool                                   RequestReadback(const ST::string& name, WGPUTexture texture, uint32_t width,
+                                                           uint32_t height, WGPUTextureFormat format, uint32_t layer = 0,
+                                                           uint32_t bytesPerPixel = 4);
     bool                                   TakeReadback(Readback& out);
     std::vector<std::shared_ptr<Readback>> fReadbacks;
-    std::shared_ptr<Readback>              IRequestReadback(const ST::string& name, WGPUTexture texture, uint32_t width,
-                                                            uint32_t height, WGPUTextureFormat format, uint32_t layer,
-                                                            uint32_t bytesPerPixel, WGPUFuture& future);
+#endif
 
 private:
     struct plWGPUPipelineRecord

@@ -92,9 +92,7 @@ void plWGPUPlateManager::ICreateGeometry()
         desc.size = sizeof(vertices);
         fVtxBuffer = wgpuDeviceCreateBuffer(pipeline->fDevice.fWGPUDevice, &desc);
         wgpuQueueWriteBuffer(pipeline->fDevice.fQueue, fVtxBuffer, 0, vertices, sizeof(vertices));
-#ifdef PLASMA_TEST_HOOKS
-        pipeline->fDevice.NoteUpload(plWGPUDevice::kUploadOther, sizeof(vertices), ST_LITERAL("plate quad"), "create");
-#endif
+        WGPU_TEST_HOOK(pipeline->fDevice.NoteUpload(plWGPUDevice::kUploadOther, sizeof(vertices), ST_LITERAL("plate quad"), "create"));
     }
 }
 

@@ -1153,10 +1153,8 @@ void plWGPUDevice::IUploadLevels(plWGPUDevice::TextureRef* tRef, plMipmap* src, 
             layout.bytesPerRow = ((w + 3) / 4) * blockBytes;
             layout.rowsPerImage = (rows + 3) / 4;
             wgpuQueueWriteTexture(fQueue, &dst, scratch.data(), scratch.size(), &layout, &size);
-#ifdef PLASMA_TEST_HOOKS
-            NoteUpload(kUploadTexture, scratch.size(), tRef->fOwner && tRef->fOwner->GetKey() ? tRef->fOwner->GetKey()->GetUoid().StringIze() : ST_LITERAL("(unkeyed)"),
-                       fUploadTextureReason ? fUploadTextureReason : "device");
-#endif
+            WGPU_TEST_HOOK(NoteUpload(kUploadTexture, scratch.size(), tRef->fOwner && tRef->fOwner->GetKey() ? tRef->fOwner->GetKey()->GetUoid().StringIze() : ST_LITERAL("(unkeyed)"),
+                                      fUploadTextureReason ? fUploadTextureReason : "device"));
             continue;
         }
 
@@ -1168,10 +1166,8 @@ void plWGPUDevice::IUploadLevels(plWGPUDevice::TextureRef* tRef, plMipmap* src, 
         layout.bytesPerRow = w * 4;
         layout.rowsPerImage = rows;
         wgpuQueueWriteTexture(fQueue, &dst, out.data(), out.size() * sizeof(plWGPUBGRA8), &layout, &size);
-#ifdef PLASMA_TEST_HOOKS
-        NoteUpload(kUploadTexture, out.size() * sizeof(plWGPUBGRA8), tRef->fOwner && tRef->fOwner->GetKey() ? tRef->fOwner->GetKey()->GetUoid().StringIze() : ST_LITERAL("(unkeyed)"),
-                   fUploadTextureReason ? fUploadTextureReason : "device");
-#endif
+        WGPU_TEST_HOOK(NoteUpload(kUploadTexture, out.size() * sizeof(plWGPUBGRA8), tRef->fOwner && tRef->fOwner->GetKey() ? tRef->fOwner->GetKey()->GetUoid().StringIze() : ST_LITERAL("(unkeyed)"),
+                                  fUploadTextureReason ? fUploadTextureReason : "device"));
         if (lvl == 0 && level0Bytes) {
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(out.data());
             level0Bytes->assign(bytes, bytes + out.size() * sizeof(plWGPUBGRA8));
@@ -1212,10 +1208,8 @@ void plWGPUDevice::IGenerateAutoMipmaps(plWGPUDevice::TextureRef* tRef, const st
         layout.rowsPerImage = h;
         WGPUExtent3D size = {w, h, 1};
         wgpuQueueWriteTexture(fQueue, &dst, cur.data(), cur.size(), &layout, &size);
-#ifdef PLASMA_TEST_HOOKS
-        NoteUpload(kUploadTexture, cur.size(), tRef->fOwner && tRef->fOwner->GetKey() ? tRef->fOwner->GetKey()->GetUoid().StringIze() : ST_LITERAL("(unkeyed)"),
-                   fUploadTextureReason ? fUploadTextureReason : "device");
-#endif
+        WGPU_TEST_HOOK(NoteUpload(kUploadTexture, cur.size(), tRef->fOwner && tRef->fOwner->GetKey() ? tRef->fOwner->GetKey()->GetUoid().StringIze() : ST_LITERAL("(unkeyed)"),
+                                  fUploadTextureReason ? fUploadTextureReason : "device"));
         prev.swap(cur);
         pw = w;
         ph = h;
@@ -1392,9 +1386,7 @@ bool plWGPUDevice::IUploadPackTexture(plWGPUDevice::TextureRef* tRef, plMipmap* 
         layout.rowsPerImage = (h + 3) / 4;
         WGPUExtent3D size = {w, h, 1};
         wgpuQueueWriteTexture(fQueue, &dst, e->levelData[packLevel], e->levelSize[packLevel], &layout, &size);
-#ifdef PLASMA_TEST_HOOKS
-        NoteUpload(kUploadTexture, e->levelSize[packLevel], key, "pack");
-#endif
+        WGPU_TEST_HOOK(NoteUpload(kUploadTexture, e->levelSize[packLevel], key, "pack"));
     };
 
     uint32_t dstLevel = 0;
@@ -1795,11 +1787,8 @@ WGPURenderPipeline plWGPUDevice::PipelineState(plWGPUPipelineState* pipelineStat
         // Queued at the draw (PumpPipelineBuilds has not issued it): the draw builds it, as
         // plMetalDevice::PipelineState builds a record neither built nor building (plMetalDevice.cpp:1171-1180), and
         // the build leaves the queue (its entry in fPipelineQueue is skipped).
-#ifdef PLASMA_TEST_HOOKS
-        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-            observer->OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildTaken, queued->second.serial,
-                                      emscripten_get_now() - queued->second.queuedMs);
-#endif
+        WGPU_OBSERVE(OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildTaken, queued->second.serial,
+                                     emscripten_get_now() - queued->second.queuedMs));
         fPipelineQueued.erase(queued);
     } else if (auto build = fPipelineBuilds.find(record); build != fPipelineBuilds.end()) {
         // In flight at the draw: a synchronous duplicate (none is expected once DrainPipelineBuilds has run).
@@ -1807,11 +1796,8 @@ WGPURenderPipeline plWGPUDevice::PipelineState(plWGPUPipelineState* pipelineStat
         plStatusLog::AddLineSF("pipeline.log", 0xffff0000,
                                "pipeline '{}' drawn while its build was in flight: created synchronously",
                                pipelineState->GetDescription());
-#ifdef PLASMA_TEST_HOOKS
-        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-            observer->OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildDuplicate,
-                                      build->second.serial, emscripten_get_now() - build->second.startMs);
-#endif
+        WGPU_OBSERVE(OnPipelineBuild(*this, *pipelineState, plWGPUPipelineObserver::kBuildDuplicate,
+                                     build->second.serial, emscripten_get_now() - build->second.startMs));
     }
 
     const double t0 = emscripten_get_now();
@@ -1825,12 +1811,9 @@ WGPURenderPipeline plWGPUDevice::PipelineState(plWGPUPipelineState* pipelineStat
 
     // Synchronous creation cost
     const double ms = emscripten_get_now() - t0;
-#ifdef PLASMA_TEST_HOOKS
     // The test hooks' pipeline-creation trace (plWGPUPipelineObserver::OnPipelineCreated).
-    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-        observer->OnPipelineCreated(*this, *pipelineState, record.colorFormat, record.depthFormat, record.sampleCount,
-                                    newModule, ms);
-#endif
+    WGPU_OBSERVE(OnPipelineCreated(*this, *pipelineState, record.colorFormat, record.depthFormat, record.sampleCount,
+                                   newModule, ms));
     if (ms > 100.0)
         plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "pipeline '{}' took {.1f} ms to create (over 100 ms)",
                                pipelineState->GetDescription(), ms);
@@ -2423,9 +2406,7 @@ void plWGPUDevice::IFlushUniforms()
         if (arena.used > arena.flushed) {
             wgpuQueueWriteBuffer(fQueue, arena.buffer, arena.flushed, arena.shadow.data() + arena.flushed,
                                  Align4(arena.used - arena.flushed));
-#ifdef PLASMA_TEST_HOOKS
-            NoteUpload(kUploadUniform, Align4(arena.used - arena.flushed), ST::string(), nullptr);
-#endif
+            WGPU_TEST_HOOK(NoteUpload(kUploadUniform, Align4(arena.used - arena.flushed), ST::string(), nullptr));
             arena.flushed = arena.used;
         }
     }
@@ -2444,9 +2425,7 @@ bool plWGPUDevice::BindVertexBytes(WGPURenderPassEncoder pass, uint32_t slot, co
     } else {
         wgpuQueueWriteBuffer(fQueue, buffer, offset, data, size);
     }
-#ifdef PLASMA_TEST_HOOKS
-    NoteUpload(kUploadUniform, Align4(size), ST::string(), nullptr);
-#endif
+    WGPU_TEST_HOOK(NoteUpload(kUploadUniform, Align4(size), ST::string(), nullptr));
     wgpuRenderPassEncoderSetVertexBuffer(pass, slot, buffer, offset, size);
     return true;
 }
@@ -2723,10 +2702,7 @@ bool plWGPUDevice::PrewarmFixedFunction(const FixedFunctionDraw& draw)
                                                   walk ? fWalkSampleCount : fSampleCount),
                                 sig);
     }
-#ifdef PLASMA_TEST_HOOKS
-    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-        observer->OnFixedFunctionKey(*this, key, fixed, true, program, sig);
-#endif
+    WGPU_OBSERVE(OnFixedFunctionKey(*this, key, fixed, true, program, sig));
     plWGPUFixedFunctionPipelineState state(this, key, fixed, program,
                                            program ? fFixedProgramTexts[program - 1].c_str() : nullptr);
     return PrewarmPipelineStateFor(&state);
@@ -2796,11 +2772,8 @@ uint32_t plWGPUDevice::IFixedProgram(const plWGPUFFUniforms& u, const plWGPUFixe
                                    sig.fog, sig.fogMode, sig.spec, sig.func, stages.to_string());
         }
         fFixedProgramIds.emplace(sig, program);
-#ifdef PLASMA_TEST_HOOKS
-        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-            observer->OnFixedProgram(*this, sig, program, program ? fFixedProgramTexts[program - 1].c_str() : nullptr,
-                                     admitted);
-#endif
+        WGPU_OBSERVE(OnFixedProgram(*this, sig, program, program ? fFixedProgramTexts[program - 1].c_str() : nullptr,
+                                    admitted));
     }
     if (program && fFixedFailed.count({pipelineKey, program}))
         return 0;
@@ -2962,10 +2935,7 @@ bool plWGPUDevice::DrawFixedFunction(const FixedFunctionDraw& draw)
                                                            CurrentTargetSampleCount());
     plWGPUFixedFragmentSig sig;
     const uint32_t         program = IFixedProgram(u, key, pipelineKey, sig);
-#ifdef PLASMA_TEST_HOOKS
-    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-        observer->OnFixedFunctionKey(*this, key, fixed, false, program, sig);
-#endif
+    WGPU_OBSERVE(OnFixedFunctionKey(*this, key, fixed, false, program, sig));
     WGPURenderPipeline pipeline;
     auto               pit = fFixedPipelines[key.plateVertex].find({pipelineKey, program});
     if (pit != fFixedPipelines[key.plateVertex].end()) {
@@ -3303,17 +3273,6 @@ bool plWGPUDevice::DrawShader(const FixedFunctionDraw& draw)
     return true;
 }
 
-bool plWGPUDevice::RequestReadback(const ST::string& name, WGPUTexture texture, uint32_t width, uint32_t height,
-                                   WGPUTextureFormat format, uint32_t layer, uint32_t bytesPerPixel)
-{
-    WGPUFuture                future;
-    std::shared_ptr<Readback> rb = IRequestReadback(name, texture, width, height, format, layer, bytesPerPixel, future);
-    if (!rb)
-        return false;
-    fReadbacks.push_back(rb);
-    return true;
-}
-
 std::shared_ptr<plWGPUDevice::Readback> plWGPUDevice::RequestCaptureReadback(WGPUTexture texture, uint32_t width,
                                                                              uint32_t height, WGPUFuture& future)
 {
@@ -3399,24 +3358,6 @@ std::shared_ptr<plWGPUDevice::Readback> plWGPUDevice::IRequestReadback(const ST:
     if (!future.id)
         delete static_cast<std::shared_ptr<Readback>*>(ci.userdata1);
     return rb;
-}
-
-bool plWGPUDevice::TakeReadback(Readback& out)
-{
-    for (auto it = fReadbacks.begin(); it != fReadbacks.end(); ++it) {
-        if ((*it)->done) {
-            out.name = (*it)->name;
-            out.width = (*it)->width;
-            out.height = (*it)->height;
-            out.format = (*it)->format;
-            out.failed = (*it)->failed;
-            out.bytesPerPixel = (*it)->bytesPerPixel;
-            out.data.swap((*it)->data);
-            fReadbacks.erase(it); // its map has ended, so this was the last reference: the buffer goes with it
-            return true;
-        }
-    }
-    return false;
 }
 
 // MARK: - The front buffer and the GPU waits
@@ -3588,67 +3529,6 @@ bool plWGPUDevice::IReadTexture(WGPUTexture texture, uint32_t width, uint32_t he
     return true;
 }
 
-// MARK: - Upload ledger (harness build only)
-
-#ifdef PLASMA_TEST_HOOKS
-
-const char* plWGPUDevice::UploadClassName(UploadClass c)
-{
-    switch (c) {
-        case kUploadStaticVB:
-            return "staticVB";
-        case kUploadStaticVBRefill:
-            return "staticVBRefill";
-        case kUploadStaticIB:
-            return "staticIB";
-        case kUploadDirtyIB:
-            return "dirtyIB";
-        case kUploadVolatileVB:
-            return "volatileVB";
-        case kUploadTexture:
-            return "texture";
-        case kUploadUniform:
-            return "uniform";
-        case kUploadOther:
-            return "other";
-        default:
-            return "?";
-    }
-}
-
-void plWGPUDevice::NoteGroupOwner(const void* group)
-{
-    // The drawable a buffer group is drawn with, for fills outside the span checks
-    const plDrawableSpans* drawable = static_cast<const plDrawableSpans*>(fUploadDrawable);
-    if (group && drawable && drawable->GetKey() && fGroupOwners.find(group) == fGroupOwners.end())
-        fGroupOwners[group] = drawable->GetKey()->GetUoid().StringIze();
-}
-
-ST::string plWGPUDevice::UploadDrawableOwner(const void* group, uint32_t idx, const char* what) const
-{
-    const plDrawableSpans* drawable = static_cast<const plDrawableSpans*>(fUploadDrawable);
-    ST::string             key;
-    if (drawable && drawable->GetKey()) {
-        key = drawable->GetKey()->GetUoid().StringIze();
-        fGroupOwners[group] = key;
-    } else {
-        // a fill outside a span's checks: the drawable this group was last checked with
-        auto it = fGroupOwners.find(group);
-        key = it != fGroupOwners.end() ? it->second + " (by group)" : ST_LITERAL("(no drawable)");
-    }
-    return ST::format("{} group {} {} {} (group@0x{x})", key, fUploadGroup, what, idx, uintptr_t(group));
-}
-
-void plWGPUDevice::NoteUpload(UploadClass c, uint64_t bytes, const ST::string& owner, const char* reason)
-{
-    if (c == kUploadStaticVBRefill || (c == kUploadTexture && reason && std::strcmp(reason, "not-dirty") == 0)) {
-        static uint32_t sLogged = 0;
-        if (sLogged++ < 40)
-            plWGPULog("re-upload ({}): {} {} bytes, {}", UploadClassName(c), owner, bytes, reason ? reason : "");
-    }
-}
-#endif
-
 // MARK: - Gamma at present
 
 static const char kGammaCorrectionWGSL[] =
@@ -3677,9 +3557,7 @@ void plWGPUDevice::SetGammaTable(const uint16_t (&table)[3][256])
     layout.rowsPerImage = 3;
     WGPUExtent3D size = {256, 3, 1};
     wgpuQueueWriteTexture(fQueue, &dst, &table[0][0], sizeof(table), &layout, &size);
-#ifdef PLASMA_TEST_HOOKS
-    NoteUpload(kUploadTexture, sizeof(table), "gamma LUT", "SetGamma");
-#endif
+    WGPU_TEST_HOOK(NoteUpload(kUploadTexture, sizeof(table), "gamma LUT", "SetGamma"));
 }
 
 void plWGPUDevice::ICreateGammaAdjustState()
@@ -3820,7 +3698,7 @@ void plWGPUDevice::IReleaseGammaDeviceObjects()
 void plWGPUDevice::ReleaseAllDeviceObjects()
 {
     // Everything this device created on the lost WebGPU device (plDXPipeline::IReleaseDeviceObjects
-    // releases the D3D objects; these are the WebGPU-only ones). The
+    // releases the D3D objects; these are the WebGPU-only ones). The harness build's
     // pending readbacks stay listed: their maps fail with the lost device and TakeReadback hands
     // them over as failed.
 #ifdef PLASMA_TEST_HOOKS

@@ -117,19 +117,18 @@ public:
     static WGPUInstance Instance();
 
     /// The current device was lost (its lost callback ran, not at shutdown).
-    static bool          DeviceLost();
-    static unsigned long DeviceLosses();
+    static bool DeviceLost();
     /// Re-request the adapter and device after a loss; Ready() turns true again when they
     /// arrive. FinishReacquire(), called once the pipeline has released every object of the
     /// lost device, releases its handle and clears the loss (true once, when the new Device()
     /// is there).
-    static void          StartReacquire();
-    static bool          FinishReacquire();
+    static void StartReacquire();
+    static bool FinishReacquire();
     /// The pipeline is going away: a device loss from now on is not one to recover from.
-    static void          SetShuttingDown();
+    static void SetShuttingDown();
     /// Releases the device, the adapter, the canvas surface and the instance, once, on the client thread; run at exit
     /// (the app's Finish() calls it).
-    static void          Shutdown();
+    static void Shutdown();
 
     /// A canvas texture acquired for a frame: a new one means the previous frame was presented, and the second
     /// one of the run tells the page that the client's first frame is on the canvas.
@@ -141,9 +140,10 @@ public:
     /// (GPUAdapterInfo vendor "apple", architecture "metal-<n>"). WebKit on Metal (architecture "apple") and every
     /// other adapter keep the uber shader for every draw. Decided, and logged, per adapter (OnAdapter).
     static bool          SpecialisedFixedPrograms();
-    /// The client loop's once-a-second report: the test harness build's STATS line (its pipeline observer);
-    /// nothing in the product build.
-    static void          LogStats();
+#ifdef PLASMA_TEST_HOOKS
+    /// The client loop's once-a-second report: the test harness build's STATS line (its pipeline observer).
+    static void LogStats();
+#endif
 
 private:
     static void Enumerate(std::vector<hsG3DDeviceRecord>& records, hsDisplayHndl display);
@@ -348,8 +348,9 @@ public:
     void RegisterLight(plLightInfo* light) override;
     void UnRegisterLight(plLightInfo* light) override;
 
+#ifdef PLASMA_TEST_HOOKS
     /// What the span path drew in a frame. The test harness's render dump reads these counts (its rows, its
-    /// settle rule and the row ids).
+    /// settle rule and the row ids); a product build keeps none of them.
     struct FrameCounters
     {
         uint32_t passes;              // draws issued by ILoopOverLayers
@@ -367,6 +368,7 @@ public:
     };
     FrameCounters fCounters;
     FrameCounters fLastCounters;
+#endif
 
 private:
     bool fIsFullscreen; // plDXGeneralSettings::fFullscreen
@@ -662,12 +664,15 @@ private:
     // Properties (plDXPipeline.h)
     inline plWGPUD3D9::DWORD inlGetD3DColor(const hsColorRGBA& c) const;
 
-    /// Counts a pass about to be drawn (fCounters), from the emulated device state.
+#ifdef PLASMA_TEST_HOOKS
+    /// Counts a pass about to be drawn (fCounters), from the emulated device state, and logs the first bump and
+    /// specular pass of each material.
     void ICountPass();
 
     /// The context of the current draw. The test harness's pipeline observer records it in a dump frame's
     /// per-draw rows: the render_ops fields, plus the emulated D3D9
-    /// state each draw used and its lit colour and stage outputs at the draw's first vertex.
+    /// state each draw used and its lit colour and stage outputs at the draw's first vertex. Its kind also selects
+    /// the passes ICountPass counts (RenderPrims). A product build keeps neither.
     enum RowKind
     {
         kRowBase,          // a material pass of ILoopOverLayers (counted in fCounters.passes)
@@ -700,9 +705,8 @@ private:
         plLightInfo*     light = nullptr;
         plRenderTarget*  target = nullptr;
     };
-    // In both builds: its kind also selects the passes ICountPass counts (RenderPrims).
     RowContext fRowCtx;
-#ifdef PLASMA_TEST_HOOKS
+
     // Harness build only: the render dump arms the next frame (fRowsArmNext), whose draws its rows then record
     // (fRowsArmed).
     bool fRowsArmed; // this frame's draws are recorded

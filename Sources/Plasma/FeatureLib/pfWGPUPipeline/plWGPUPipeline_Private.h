@@ -89,6 +89,7 @@ public:
         // drawn.
         if (fPipe->fUnsupportedProgramPass)
             return false;
+#ifdef PLASMA_TEST_HOOKS
         // The material passes are the counted passes (the render dump's render_ops rows);
         // projections, shadows and the other draws have their own counters.
         if (fPipe->fRowCtx.kind == plWGPUPipeline::kRowBase || fPipe->fRowCtx.kind == plWGPUPipeline::kRowAux)
@@ -97,6 +98,7 @@ public:
         fPipe->fRowCtx.vLength = fVLength;
         fPipe->fRowCtx.iStart = fIStart;
         fPipe->fRowCtx.iLength = fNumTris * 3;
+#endif
 
         // As plRenderTriListFunc::RenderPrims (Stats.Show "Polys")
         plProfile_IncCount(DrawFeedTriangles, fNumTris);

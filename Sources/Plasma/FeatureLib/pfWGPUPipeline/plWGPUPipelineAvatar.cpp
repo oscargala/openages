@@ -159,9 +159,9 @@ void plWGPUPipeline::IPreprocessAvatarTextures()
             }
         }
 
+#ifdef PLASMA_TEST_HOOKS
         if (!fPrewarmWalk)
             fCounters.clothingOutfits++;
-#ifdef PLASMA_TEST_HOOKS
         if (observer) {
             plWGPUClothingView view;
             view.outfit = co;
@@ -368,9 +368,9 @@ void plWGPUPipeline::IDrawClothingQuad(float x, float y, float w, float h, float
     ptr[3].fUv[1] -= 1.f;
 
     // DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, ptr, sizeof(plAVTexVert))
+#ifdef PLASMA_TEST_HOOKS
     if (!fPrewarmWalk)
         fCounters.clothingQuads++;
-#ifdef PLASMA_TEST_HOOKS
     if (plWGPUPipelineObserver* observer = fPrewarmWalk ? nullptr : plWGPUPipelineObserver::Get()) {
         plWGPUClothingView view;
         view.x = x;
@@ -382,9 +382,9 @@ void plWGPUPipeline::IDrawClothingQuad(float x, float y, float w, float h, float
         view.texture = tex;
         observer->OnClothing(*this, plWGPUPipelineObserver::kQuad, view);
     }
-#endif
     const int kind = fRowCtx.kind;
     fRowCtx.kind = kRowClothing;
+#endif
     plWGPUDevice::FixedFunctionDraw draw;
     draw.vertexBytes = ptr;
     draw.vertexBytesSize = sizeof(ptr);
@@ -396,5 +396,5 @@ void plWGPUPipeline::IDrawClothingQuad(float x, float y, float w, float h, float
         fDevice.PrewarmFixedFunction(draw); // the draw's pipeline, started; nothing drawn
     else
         IDrawFixedFunction(draw);
-    fRowCtx.kind = kind;
+    WGPU_TEST_HOOK(fRowCtx.kind = kind);
 }

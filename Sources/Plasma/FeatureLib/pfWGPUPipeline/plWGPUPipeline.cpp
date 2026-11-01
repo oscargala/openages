@@ -148,8 +148,10 @@ plWGPUPipeline::plWGPUPipeline(hsDisplayHndl display, hsWindowHndl window, const
     fIdxBuffRefList = nullptr;
     fCurrLayerIdx = 0;
     fDevice.fPipeline = this;
+#ifdef PLASMA_TEST_HOOKS
     memset(&fCounters, 0, sizeof(fCounters));
     memset(&fLastCounters, 0, sizeof(fLastCounters));
+#endif
 
     // plDXPipeline::IClearMembers, the members the ported span path reads.
     // The material code sets its D3D9 state on the emulated device.
@@ -302,7 +304,9 @@ plWGPUPipeline::~plWGPUPipeline()
     // has ended (plWGPUDevice::IRequestReadback). The WebGPU device itself, the adapter, the surface and the
     // instance are plWGPUEnumerate's and are released at exit (plWGPUEnumerate::Shutdown).
     fPendingCaptures.clear();
+#ifdef PLASMA_TEST_HOOKS
     fDevice.fReadbacks.clear();
+#endif
 }
 
 void plWGPUPipeline::ICreateDeviceObjects()
@@ -938,15 +942,12 @@ bool plWGPUPipeline::BeginRender()
         // Superfluous setting of Z state (as plDXPipeline::BeginRender).
         fD3DDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
 
-#ifdef PLASMA_TEST_HOOKS
         // The test harness's render dump settles here, on the previous frame's passes, before the counters are
         // cleared; it may arm this frame's rows (fRowsArmNext).
-        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-            observer->OnBeginRender(*this);
-#endif
+        WGPU_OBSERVE(OnBeginRender(*this));
 
-        // A new frame's counters
-        memset(&fCounters, 0, sizeof(fCounters));
+        // A new frame's counters (the test harness's)
+        WGPU_TEST_HOOK(memset(&fCounters, 0, sizeof(fCounters)));
         fFrameWaveBiasSeen = false; // the waveset clock
         fFrameWaveBiasMixed = false;
 
@@ -959,8 +960,8 @@ bool plWGPUPipeline::BeginRender()
         fRowsArmNext = false;
         fDevice.fKeepLastDraw = fRowsArmed;
         fDevice.fRowsArmedMirror = fRowsArmed; // no texture pack upload while rows record
-#endif
         fRowCtx = RowContext();
+#endif
 
         if (!fDevice.CreateNewCommandBuffer()) {
             // No canvas texture: D3D9's BeginScene failure sets fDeviceLost (plDXPipeline::BeginRender)
@@ -1002,13 +1003,10 @@ bool plWGPUPipeline::EndRender()
 
         IClearShadowSlaves();
 
-        fLastCounters = fCounters;
-#ifdef PLASMA_TEST_HOOKS
+        WGPU_TEST_HOOK(fLastCounters = fCounters);
         // The test harness's GFX settings line and, on the dump frame, the render dump; first the harness's
         // readbacks that have completed (the shadow maps, clothing composites and shader targets).
-        if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
-            observer->OnEndRender(*this);
-#endif
+        WGPU_OBSERVE(OnEndRender(*this));
     }
 
     // Do this last, after we've drawn everything
@@ -1775,7 +1773,6 @@ struct plWGPUPipeline::PrewarmSaved
     plWGPUFogSettings          fog;
     hsMatrix44                 bumpDu, bumpDv, bumpDw;
     bool                       unsupportedPass;
-    RowContext                 rowCtx;
     plWGPUD3D9::D3DCULL        cullMode;
     hsMatrix44                 matrixL2W, matrixW2L, matrixProj, matrixW2C, matrixC2W;
     float                      viewport[4];
@@ -1796,6 +1793,9 @@ struct plWGPUPipeline::PrewarmSaved
     hsGDeviceRef*              renderTargetRef;
     size_t                     renderTargets, views, overrideMats;
     double                     t0;
+#ifdef PLASMA_TEST_HOOKS
+    RowContext rowCtx; // the test harness's draw context
+#endif
 };
 
 void plWGPUPipeline::IPrewarmBegin(PrewarmSaved& s, const char* seat)
@@ -1830,7 +1830,7 @@ void plWGPUPipeline::IPrewarmBegin(PrewarmSaved& s, const char* seat)
     s.bumpDv = fBumpDvMatrix;
     s.bumpDw = fBumpDwMatrix;
     s.unsupportedPass = fUnsupportedProgramPass;
-    s.rowCtx = fRowCtx;
+    WGPU_TEST_HOOK(s.rowCtx = fRowCtx);
     s.cullMode = fDevice.fCurrCullMode;
     s.matrixL2W = fDevice.fMatrixL2W;
     s.matrixW2L = fDevice.fMatrixW2L;
@@ -1904,7 +1904,7 @@ void plWGPUPipeline::IPrewarmEnd(PrewarmSaved& s)
     fBumpDvMatrix = s.bumpDv;
     fBumpDwMatrix = s.bumpDw;
     fUnsupportedProgramPass = s.unsupportedPass;
-    fRowCtx = s.rowCtx;
+    WGPU_TEST_HOOK(fRowCtx = s.rowCtx);
     fDevice.fCurrCullMode = s.cullMode;
     fDevice.fMatrixL2W = s.matrixL2W;
     fDevice.fMatrixW2L = s.matrixW2L;
@@ -2357,11 +2357,13 @@ void plWGPUPipeline::IPrewarmDrawable(plDrawableSpans* drawable, const std::vect
         if (!IPrewarmSpanFormat(drawable, ice, vertexFormat, numTris))
             continue;
 
+#ifdef PLASMA_TEST_HOOKS
         // The trace's pass, as RenderSpans names the span's draw (restored by IPrewarmEnd).
         fRowCtx = RowContext();
         fRowCtx.drawable = drawable;
         fRowCtx.spanIndex = int(i);
         fRowCtx.material = material;
+#endif
 
         ISetupTransforms(drawable, ice, lastL2W);
 
@@ -2373,60 +2375,6 @@ void plWGPUPipeline::IPrewarmDrawable(plDrawableSpans* drawable, const std::vect
     }
     fPrewarmHeldDrawable = false;
 }
-
-#ifdef PLASMA_TEST_HOOKS
-void plWGPUPipeline::IPrewarmCensus()
-{
-    // Every loaded page's loaded plDrawableSpans against the walked set: the coverage of the room
-    // seat. A census only; nothing is walked from it. The iterators collect; the counting runs after the iteration.
-    plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get();
-    if (!observer)
-        return;
-    class plPrewarmCensus : public plRegistryPageIterator, public plRegistryKeyIterator
-    {
-    public:
-        std::vector<std::pair<plUoid, ST::string>> fDrawables; // a loaded drawable and its page's name
-        ST::string                                 fPage;
-        bool                                       EatPage(plRegistryPageNode* page) override
-        {
-            fPage = ST::format("{}_{}", page->GetPageInfo().GetAge(), page->GetPageInfo().GetPage());
-            page->IterateKeys(this, plDrawableSpans::Index());
-            return true;
-        }
-        bool EatKey(const plKey& key) override
-        {
-            if (plDrawableSpans::ConvertNoRef(key->ObjectIsLoaded()))
-                fDrawables.emplace_back(key->GetUoid(), fPage);
-            return true;
-        }
-    } census;
-    static_cast<plResManager*>(hsgResMgr::ResMgr())->IteratePages(&census);
-
-    uint32_t                                notWalked = 0;
-    std::vector<std::pair<ST::string, int>> byPage;
-    std::vector<plDrawableSpans*>           named;
-    for (const auto& [uoid, page] : census.fDrawables) {
-        if (fPrewarmWalked.count(uoid))
-            continue;
-        notWalked++;
-        if (named.size() < 16) {
-            if (plDrawableSpans* drawable = plDrawableSpans::ConvertNoRef(IPrewarmLoadedObject(uoid)))
-                named.push_back(drawable);
-        }
-        auto it = std::find_if(byPage.begin(), byPage.end(), [&page = page](const auto& p) { return p.first == page; });
-        if (it == byPage.end())
-            byPage.emplace_back(page, 1);
-        else
-            it->second++;
-    }
-    ST::string_stream pages;
-    for (size_t i = 0; i < byPage.size(); i++)
-        pages << (i ? ", " : "") << byPage[i].first << " (" << byPage[i].second << ")";
-    observer->OnPrewarmCensus(*this, uint32_t(census.fDrawables.size()), notWalked, pages.to_string().c_str());
-    for (plDrawableSpans* drawable : named)
-        observer->OnPrewarmCensusDrawable(*this, drawable);
-}
-#endif
 
 bool plWGPUPipeline::SetGamma(float eR, float eG, float eB)
 {
@@ -2874,11 +2822,9 @@ bool plWGPUPipeline::IRefreshDynVertices(plGBufferGroup* group, plWGPUVertexBuff
         memcpy(padded.data(), vData, size);
         wgpuQueueWriteBuffer(fDevice.fQueue, vertexBuffer, 0, padded.data(), writeSize);
     }
-#ifdef PLASMA_TEST_HOOKS
     // The test harness's upload record: DX's per-frame dynamic refill (plDXPipeline::IRefreshDynVertices).
-    fDevice.NoteUpload(plWGPUDevice::kUploadVolatileVB, writeSize, fDevice.UploadDrawableOwner(group, vRef->fIndex, "vb"),
-                       vRef->fData ? "skinned" : "volatile");
-#endif
+    WGPU_TEST_HOOK(fDevice.NoteUpload(plWGPUDevice::kUploadVolatileVB, writeSize, fDevice.UploadDrawableOwner(group, vRef->fIndex, "vb"),
+                                      vRef->fData ? "skinned" : "volatile"));
 
     // The draws' base vertex: the refreshed range starts at offset 0 of its buffer, where
     // D3D9's starts at newStart of the shared dynamic buffer (plDXPipeline::IRefreshDynVertices).
@@ -2925,7 +2871,7 @@ void plWGPUPipeline::IDrawPlate(plPlate* plate)
         // And this to override cullmode set based on material 2-sidedness.
         fD3DDevice->SetRenderState(D3DRS_CULLMODE, fDevice.fCurrCullMode = D3DCULL_CW);
 
-        ICountPass();
+        WGPU_TEST_HOOK(ICountPass());
 
         plWGPUDevice::FixedFunctionDraw draw;
         draw.vertexBuffer = pm->GetVertexBuffer();
@@ -2936,13 +2882,15 @@ void plWGPUPipeline::IDrawPlate(plPlate* plate)
         draw.start = 0;
         draw.count = 4;
         draw.topology = WGPUPrimitiveTopology_TriangleStrip;
+#ifdef PLASMA_TEST_HOOKS
         const RowContext saved = fRowCtx;
         fRowCtx = RowContext();
         fRowCtx.kind = kRowPlate;
         fRowCtx.material = material;
         fRowCtx.layer = fCurrLayerIdx;
+#endif
         IDrawFixedFunction(draw);
-        fRowCtx = saved;
+        WGPU_TEST_HOOK(fRowCtx = saved);
     }
 
     IPopPiggyBacks();
@@ -3396,6 +3344,7 @@ void plWGPUPipeline::RenderSpans(plDrawableSpans* drawable, const std::vector<in
             fDevice.fUploadDrawable = nullptr; // the upload record's owner context ends here
 #endif
 
+#ifdef PLASMA_TEST_HOOKS
             fRowCtx = RowContext();
             fRowCtx.kind = kRowBase;
             fRowCtx.drawable = drawable;
@@ -3405,6 +3354,7 @@ void plWGPUPipeline::RenderSpans(plDrawableSpans* drawable, const std::vector<in
             fRowCtx.group = drawable->GetBufferGroup(tempIce.fGroupIdx);
             fRowCtx.vbIdx = tempIce.fVBufferIdx;
             fRowCtx.ibIdx = tempIce.fIBufferIdx;
+#endif
 
             // Draw this span now
             IRenderBufferSpan(tempIce,
@@ -3475,13 +3425,13 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
 
     // Loop across all the layers we need to draw
     int j;
-    int passIndex = -1; // the material pass this is (the per-draw rows' `pass`)
+    WGPU_TEST_HOOK(int passIndex = -1); // the material pass this is (the per-draw rows' `pass`)
     for (j = 0; j < material->GetNumLayers();) {
         int iCurrMat = j;
         j = IHandleMaterial(material, iCurrMat, &span);
         if (j == -1)
             break;
-        passIndex++;
+        WGPU_TEST_HOOK(passIndex++);
 
         // Set for the prewarm's walk of a pass the opacity test below skips this frame.
         bool opacityAnimated = false;
@@ -3515,9 +3465,11 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
         }
 
         ISetFogParameters(&span, material->GetLayer(iCurrMat));
+#ifdef PLASMA_TEST_HOOKS
         fRowCtx.layer = iCurrMat;
         fRowCtx.pass = passIndex;
         fRowCtx.material = material;
+#endif
 
         ISetShaders(material->GetLayer(iCurrMat)->GetVertexShader(), material->GetLayer(iCurrMat)->GetPixelShader());
 
@@ -3591,7 +3543,7 @@ void plWGPUPipeline::IRenderProjectionEach(const plWGPURenderPrimFunc& render, h
 
         // Lower end boards are iffy on when they'll project correctly.
         if (fSettings.fCantProj && !li->GetProperty(plLightInfo::kLPForceProj)) {
-            fCounters.projCantProj++;
+            WGPU_TEST_HOOK(fCounters.projCantProj++);
             continue;
         }
 
@@ -3612,13 +3564,17 @@ void plWGPUPipeline::IRenderProjectionEach(const plWGPURenderPrimFunc& render, h
             ISetShaders(nullptr, nullptr);
 
             // Do the render with projection.
+#ifdef PLASMA_TEST_HOOKS
             const int kind = fRowCtx.kind;
             fRowCtx.kind = kRowProjEach;
             fRowCtx.light = li;
             fCounters.projEachPasses++;
+#endif
             render.RenderPrims();
+#ifdef PLASMA_TEST_HOOKS
             fRowCtx.kind = kind;
             fRowCtx.light = nullptr;
+#endif
 
             // DX loops again on -1 (undefined: IHandleMaterial with layer -1); this pass was
             // just drawn by ILoopOverLayers, so it does not happen. Logged if it ever does.
@@ -3645,7 +3601,7 @@ void plWGPUPipeline::IRenderProjections(const plWGPURenderPrimFunc& render)
     IDisableSpanLights();
     for (plLightInfo* li : fLights.fProjAll) {
         if (fSettings.fCantProj && !li->GetProperty(plLightInfo::kLPForceProj)) {
-            fCounters.projCantProj++;
+            WGPU_TEST_HOOK(fCounters.projCantProj++);
             continue;
         }
 
@@ -3692,13 +3648,17 @@ void plWGPUPipeline::IRenderProjection(const plWGPURenderPrimFunc& render, plLig
     fLayerState[1].fBlendFlags = uint32_t(-1);
 
     // Okay, render it already.
+#ifdef PLASMA_TEST_HOOKS
     const int kind = fRowCtx.kind;
     fRowCtx.kind = kRowProjAll;
     fRowCtx.light = li;
     fCounters.projAllPasses++;
+#endif
     render.RenderPrims();
+#ifdef PLASMA_TEST_HOOKS
     fRowCtx.kind = kind;
     fRowCtx.light = nullptr;
+#endif
 
     fD3DDevice->LightEnable(ref->fD3DIndex, false);
 }
@@ -3728,10 +3688,10 @@ void plWGPUPipeline::IRenderShadowsOntoSpan(const plWGPURenderPrimFunc& render, 
         // (plDXPipeline.cpp:11602-11612): the walk records it (plWGPUDevice::WalkTexture).
         fDevice.WalkTexture(0, false);
         if (!IsDebugFlagSet(plPipeDbg::kFlagNoShadowApply)) {
-            const int kind = fRowCtx.kind;
-            fRowCtx.kind = kRowShadowReceive;
+            WGPU_TEST_HOOK(const int kind = fRowCtx.kind);
+            WGPU_TEST_HOOK(fRowCtx.kind = kRowShadowReceive);
             render.RenderPrims();
-            fRowCtx.kind = kind;
+            WGPU_TEST_HOOK(fRowCtx.kind = kind);
         }
         return;
     }
@@ -3749,7 +3709,7 @@ void plWGPUPipeline::IRenderShadowsOntoSpan(const plWGPURenderPrimFunc& render, 
                 ISetupShadowRcvTextureStages(mat);
 
                 first = false;
-                fCounters.shadowReceiveSpans++;
+                WGPU_TEST_HOOK(fCounters.shadowReceiveSpans++);
             }
 
             // Now setup any state specific to this shadow slave.
@@ -3785,13 +3745,17 @@ void plWGPUPipeline::IRenderShadowsOntoSpan(const plWGPURenderPrimFunc& render, 
             fD3DDevice->LightEnable(shadow->fLightIndex, true);
 
             if (!IsDebugFlagSet(plPipeDbg::kFlagNoShadowApply)) {
+#ifdef PLASMA_TEST_HOOKS
                 const int kind = fRowCtx.kind;
                 fRowCtx.kind = kRowShadowReceive;
                 fRowCtx.slave = shadow;
                 fCounters.shadowReceivePasses++;
+#endif
                 render.RenderPrims();
+#ifdef PLASMA_TEST_HOOKS
                 fRowCtx.kind = kind;
                 fRowCtx.slave = nullptr;
+#endif
             }
 
             // Disable it again.
@@ -3831,23 +3795,27 @@ void plWGPUPipeline::IRenderAuxSpan(const plSpan& span, const plAuxSpan* aux)
     plWGPURenderTriListFunc render(this, vRef, iRef, iRef->fOffset, aux->fVStartIdx, aux->fVLength, aux->fIStartIdx, aux->fILength / 3);
 
     // Now just loop through the aux material, rendering in as many passes as it takes.
-    hsGMaterial*     material = aux->fMaterial;
+    hsGMaterial* material = aux->fMaterial;
+#ifdef PLASMA_TEST_HOOKS
     const RowContext saved = fRowCtx;
     fRowCtx.kind = kRowAux;
     fRowCtx.material = material;
     fRowCtx.group = aux->fGroup;
     fRowCtx.vbIdx = aux->fVBufferIdx;
     fRowCtx.ibIdx = aux->fIBufferIdx;
+#endif
     int j;
-    int passIndex = -1; // the material pass this is (the per-draw rows' `pass`)
+    WGPU_TEST_HOOK(int passIndex = -1); // the material pass this is (the per-draw rows' `pass`)
     for (j = 0; j < material->GetNumLayers();) {
         int iCurrMat = j;
         j = IHandleMaterial(material, iCurrMat, &span);
         if (j == -1)
             break;
-        passIndex++;
+        WGPU_TEST_HOOK(passIndex++);
+#ifdef PLASMA_TEST_HOOKS
         fRowCtx.layer = iCurrMat;
         fRowCtx.pass = passIndex;
+#endif
 
         ISetShaders(material->GetLayer(iCurrMat)->GetVertexShader(), material->GetLayer(iCurrMat)->GetPixelShader());
 
@@ -3865,7 +3833,7 @@ void plWGPUPipeline::IRenderAuxSpan(const plSpan& span, const plAuxSpan* aux)
 
         render.RenderPrims();
     }
-    fRowCtx = saved;
+    WGPU_TEST_HOOK(fRowCtx = saved);
 }
 
 void plWGPUPipeline::IRenderAuxSpans(const plSpan& span)
@@ -4880,6 +4848,7 @@ void plWGPULightSettings::ReleaseD3DIndex(uint32_t idx)
 
 //// Frame counters ////////////////////////////////////////////////////////////////
 
+#ifdef PLASMA_TEST_HOOKS
 void plWGPUPipeline::ICountPass()
 {
     fCounters.passes++;
@@ -4902,6 +4871,7 @@ void plWGPUPipeline::ICountPass()
         }
     }
 }
+#endif
 
 bool plWGPUPipeline::IDrawFixedFunction(const plWGPUDevice::FixedFunctionDraw& draw)
 {

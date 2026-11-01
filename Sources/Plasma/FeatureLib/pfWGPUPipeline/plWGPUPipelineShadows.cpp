@@ -386,22 +386,24 @@ void plWGPUPipeline::IDrawBlurQuad()
     // DrawPrimitive(D3DPT_TRIANGLESTRIP, 0, 2) from the stream ISetBlurQuadToRender set.
     // The prewarm's walk: the draw's pipeline, started; nothing drawn, no buffer, no counter.
     if (fPrewarmWalk) {
-        const int kind = fRowCtx.kind;
-        fRowCtx.kind = kRowBlur;
+        WGPU_TEST_HOOK(const int kind = fRowCtx.kind);
+        WGPU_TEST_HOOK(fRowCtx.kind = kRowBlur);
         plWGPUDevice::FixedFunctionDraw draw;
         draw.xyzTex1 = true;
         draw.start = 0;
         draw.count = 4;
         draw.topology = WGPUPrimitiveTopology_TriangleStrip;
         fDevice.PrewarmFixedFunction(draw);
-        fRowCtx.kind = kind;
+        WGPU_TEST_HOOK(fRowCtx.kind = kind);
         return;
     }
     if (!fBlurQuad)
         return;
+#ifdef PLASMA_TEST_HOOKS
     fCounters.shadowBlurPasses++;
     const int kind = fRowCtx.kind;
     fRowCtx.kind = kRowBlur;
+#endif
     plWGPUDevice::FixedFunctionDraw draw;
     draw.vertexBuffer = fBlurQuad;
     draw.xyzTex1 = true;
@@ -409,7 +411,7 @@ void plWGPUPipeline::IDrawBlurQuad()
     draw.count = 4;
     draw.topology = WGPUPrimitiveTopology_TriangleStrip;
     IDrawFixedFunction(draw);
-    fRowCtx.kind = kind;
+    WGPU_TEST_HOOK(fRowCtx.kind = kind);
 }
 
 void plWGPUPipeline::IReleaseBlurVBuffers()
@@ -480,9 +482,7 @@ bool plWGPUPipeline::ICreateBlurVBuffers()
             return false;
         }
         wgpuQueueWriteBuffer(fDevice.fQueue, vBuffer, 0, ptr, sizeof(ptr));
-#ifdef PLASMA_TEST_HOOKS
-        fDevice.NoteUpload(plWGPUDevice::kUploadOther, sizeof(ptr), ST_LITERAL("blur quad"), "create");
-#endif
+        WGPU_TEST_HOOK(fDevice.NoteUpload(plWGPUDevice::kUploadOther, sizeof(ptr), ST_LITERAL("blur quad"), "create"));
 
         fBlurVBuffers[which] = vBuffer;
     }
@@ -592,6 +592,7 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
     bool flip = slave->ReverseCull();
     ISetCullMode(flip);
 
+#ifdef PLASMA_TEST_HOOKS
     const RowContext saved = fRowCtx;
     fRowCtx.kind = kRowShadowCast;
     fRowCtx.drawable = drawable;
@@ -600,6 +601,7 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
     fRowCtx.group = drawable->GetBufferGroup(span.fGroupIdx);
     fRowCtx.vbIdx = span.fVBufferIdx;
     fRowCtx.slave = slave;
+#endif
     if (fPrewarmWalk) {
         plWGPUPrewarmTriListFunc prewarm(this, walkVertexFormat, walkTris);
         prewarm.RenderPrims();
@@ -608,10 +610,10 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
         fPrewarmTally.started += prewarm.fStarted;
     } else {
         plWGPURenderTriListFunc render(this, vRef, iRef, iRef->fOffset, vStart, vLength, iStart, iLength / 3);
-        fCounters.shadowCastSpans++;
+        WGPU_TEST_HOOK(fCounters.shadowCastSpans++);
         render.RenderPrims();
     }
-    fRowCtx = saved;
+    WGPU_TEST_HOOK(fRowCtx = saved);
 }
 
 plWGPUTextureRef* plWGPUPipeline::IGetULutTextureRef()
@@ -649,9 +651,7 @@ plWGPUTextureRef* plWGPUPipeline::IGetULutTextureRef()
         layout.rowsPerImage = height;
         WGPUExtent3D size = {width, height, 1};
         wgpuQueueWriteTexture(fDevice.fQueue, &dst, tData, sizeof(tData), &layout, &size);
-#ifdef PLASMA_TEST_HOOKS
-        fDevice.NoteUpload(plWGPUDevice::kUploadOther, sizeof(tData), ST_LITERAL("shadow ULut"), "create");
-#endif
+        WGPU_TEST_HOOK(fDevice.NoteUpload(plWGPUDevice::kUploadOther, sizeof(tData), ST_LITERAL("shadow ULut"), "create"));
 
         ref->SetDirty(false);
         ref->Link(&fTextureRefList);
@@ -1137,7 +1137,7 @@ void plWGPUPipeline::IPreprocessShadows()
     // was enabled when rendering to a render target.
     ISetAnisotropy(false);
 
-    fCounters.shadowSlaves = uint32_t(fShadows.size());
+    WGPU_TEST_HOOK(fCounters.shadowSlaves = uint32_t(fShadows.size()));
 
     // The test harness's shadow rows record each slave's prepared fields here, before any cast
     // and in fShadows order, because the cast changes them: IPushShadowCastState calls
@@ -1164,8 +1164,8 @@ void plWGPUPipeline::IPreprocessShadows()
             iSlave--;
             continue;
         }
-        fCounters.shadowCasters++;
 #ifdef PLASMA_TEST_HOOKS
+        fCounters.shadowCasters++;
         if (fRowsArmed)
             if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
                 observer->OnShadowMap(*this, slave, plWGPUPipelineObserver::kSlaveCast);

@@ -99,11 +99,6 @@ uint32_t plWGPUShaderProgram::Index() const
     return uint32_t(this - kPrograms);
 }
 
-const plWGPUShaderProgram* plWGPUShaderProgram::ByIndex(uint32_t index)
-{
-    return index < kNumPrograms ? &kPrograms[index] : nullptr;
-}
-
 const char* plWGPUShaderProgram::ModuleSource(const char* family)
 {
     static const std::pair<const char*, const char*> kFamilies[] = {
