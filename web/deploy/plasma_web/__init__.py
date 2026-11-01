@@ -57,8 +57,6 @@ Modules:
                     page origins a server admits, and the .fetch-manifest listing of a fetch tree
   emit_static       a static-host kit for one deployment (plasma-web-emit-static)
   provenance        source.json, the licence files and the notices every kit and server carries
-  analyse_gamecode  a python.pak's marshal families, which deployment uses to refuse a pak the build cannot run
-                    (plasma-web-analyse-gamecode)
 
 The package runs from a checkout of the repository: the origin server and the static kit serve the checkout's player
 page, its runtime configuration module and input modules, and the free fonts. ROOT is that checkout, and the paths

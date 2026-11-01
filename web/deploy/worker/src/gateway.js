@@ -52,8 +52,7 @@ import { connect } from 'cloudflare:sockets';
 import { IPV4, clientAddress, ipKey, ipv4Number } from './address.js';
 import * as joinToken from './join_token.js';
 import { LEASE_RENEW_MS } from './objects.js';
-import { writePieces } from './pieces.js';
-import { QueueBudget } from './queue_budget.js';
+import { QueueBudget, writePieces } from './queue_budget.js';
 
 // The Plasma connection types a client may open (pnNpCommon.h EConnType: kConnTypeCliToAuth 10, kConnTypeCliToGame
 // 11, kConnTypeCliToFile 16, kConnTypeCliToGateKeeper 22). A connection's first byte is its type; any other first
@@ -66,7 +65,7 @@ const MAX_FRAME_OUT = 65536; // gateway.py READ_CHUNK: the largest frame sent to
 // connection with none of its bytes delivered: through a deployed Worker to a TCP echo, 65,536 B is relayed, while
 // 65,537 B and 128 KiB end 1000 "Shard disconnected" and 256 KiB to 1 MiB end 1011. A local workerd takes 1 MiB in one
 // write. So each browser frame, up to MAX_MESSAGE, is written in pieces of at most this, in order, each awaited
-// before the next (pieces.js writePieces).
+// before the next (queue_budget.js writePieces).
 const MAX_WRITE = 65536;
 // gateway.py stops reading the browser's socket while MAX_QUEUE (16) received frames wait for the shard. A Worker
 // cannot pause a WebSocket's incoming side, so the same bound, 16 frames of at most 1 MiB, is a byte cap on the frames

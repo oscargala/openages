@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 300
     env:
       HOST_TRIPLET: x64-linux
-      # The wrangler release the Worker's contract test runs (web/deploy/worker/test_contract.py).
+      # The wrangler release the Worker's contract test runs (web/tests/test_contract.py).
       WRANGLER_VERSION: "4.149.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

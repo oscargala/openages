@@ -52,7 +52,7 @@ the static headers, and the status relay /runtime/status (server.py relay_status
 status server.
 AddressKeyTest compares the Worker's address key (src/address.js, run in Node) with gateway.py's; QueueBudgetTest runs
 the Worker's isolate queue budget (src/queue_budget.js) in Node, and WritePiecesTest its upstream write's 64 KiB pieces
-(src/pieces.js); EmitWorkerTest checks emit_worker.py. Two cases load
+(writePieces, in the same module); EmitWorkerTest checks emit_worker.py. Two cases load
 the queue: several flooding relays beside a quiet one (the quiet relay keeps its throughput; in the Worker the relays
 of one isolate share limits.isolateQueueBytes), and a relay whose shard connection fails mid-write (its queued bytes
 come back).
@@ -98,8 +98,8 @@ from websockets.protocol import State
 from plasma_web import deployment as deployment_file  # the web package (web/deploy: installed, or on PYTHONPATH)
 from plasma_web import join_token
 
-HERE = Path(__file__).resolve().parent
-TREE = HERE.parents[2]
+TREE = Path(__file__).resolve().parents[2]
+WORKER = TREE / "web/deploy/worker"  # the Worker this contract tests (src/, emit_worker.py)
 
 WRANGLER = os.environ.get("PLASMA_WRANGLER") or shutil.which("wrangler")
 NODE = os.environ.get("PLASMA_NODE") or shutil.which("node")
@@ -313,7 +313,7 @@ class WorkerDev:
         )
         with open(run / "emit_worker.out", "w") as out:
             subprocess.run(
-                [sys.executable, str(HERE / "emit_worker.py"), str(dep), str(run / "kit"), str(run / "worker")],
+                [sys.executable, str(WORKER / "emit_worker.py"), str(dep), str(run / "kit"), str(run / "worker")],
                 check=True,
                 stdout=out,
             )
@@ -1804,7 +1804,7 @@ class AddressKeyTest(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=30,
-            cwd=HERE,
+            cwd=WORKER,
         )
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         return json.loads(r.stdout)
@@ -1812,7 +1812,7 @@ class AddressKeyTest(unittest.TestCase):
     def test_ip_key_matches_gateway(self):
         from plasma_web import gateway
 
-        url = (HERE / "src/address.js").as_uri()
+        url = (WORKER / "src/address.js").as_uri()
         script = (
             f"import {{ ipKey }} from {json.dumps(url)};"
             "let s = ''; process.stdin.on('data', d => s += d);"
@@ -1827,7 +1827,7 @@ class AddressKeyTest(unittest.TestCase):
                 ipaddress.ip_address(text)
 
     def test_client_address(self):
-        url = (HERE / "src/address.js").as_uri()
+        url = (WORKER / "src/address.js").as_uri()
         script = (
             f"import {{ clientAddress }} from {json.dumps(url)};"
             "let s = ''; process.stdin.on('data', d => s += d);"
@@ -1855,7 +1855,7 @@ class QueueBudgetTest(unittest.TestCase):
         refused frame closes its relay's queue, as the relay does (gateway.js: close 1008, then finish)."""
         if not NODE:
             self.fail("node not found: set PLASMA_NODE or put node on PATH")
-        url = (HERE / "src/queue_budget.js").as_uri()
+        url = (WORKER / "src/queue_budget.js").as_uri()
         script = (
             f"import {{ QueueBudget }} from {json.dumps(url)}; import readline from 'node:readline';"
             f"const b = new QueueBudget({int(limit)}); const closeOnRefusal = {json.dumps(close_on_refusal)};"
@@ -1877,7 +1877,7 @@ class QueueBudgetTest(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd=HERE,
+            cwd=WORKER,
         )
 
         def apply(op):
@@ -2070,8 +2070,8 @@ class QueueBudgetTest(unittest.TestCase):
 
 
 class WritePiecesTest(unittest.TestCase):
-    """The upstream write's pieces (src/pieces.js writePieces, in Node, with gateway.js's 64 KiB): a frame goes to the
-    shard as consecutive views of at most 64 KiB, in order, each write awaited before the next; a stop or a failed
+    """The upstream write's pieces (src/queue_budget.js writePieces, in Node, with gateway.js's 64 KiB): a frame goes to
+    the shard as consecutive views of at most 64 KiB, in order, each write awaited before the next; a stop or a failed
     write ends the frame there."""
 
     MAX = 65536  # gateway.js MAX_WRITE
@@ -2083,7 +2083,7 @@ class WritePiecesTest(unittest.TestCase):
         once, and the result (true, false, or the rejection's message)."""
         if not NODE:
             self.fail("node not found: set PLASMA_NODE or put node on PATH")
-        url = (HERE / "src/pieces.js").as_uri()
+        url = (WORKER / "src/queue_budget.js").as_uri()
         script = (
             f"import {{ writePieces }} from {json.dumps(url)};"
             f"const MAX = {self.MAX}; const out = []; let seed = 20261029;"
@@ -2111,7 +2111,7 @@ class WritePiecesTest(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=HERE,
+            cwd=WORKER,
         )
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         return json.loads(r.stdout)
@@ -2173,7 +2173,7 @@ class EmitWorkerTest(unittest.TestCase):
         r = subprocess.run(
             [
                 sys.executable,
-                str(HERE / "emit_worker.py"),
+                str(WORKER / "emit_worker.py"),
                 str(root / "deployment.json"),
                 str(root / "kit"),
                 str(root / "out"),

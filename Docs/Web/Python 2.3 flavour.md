@@ -31,9 +31,8 @@ the shard, the py2 flavour embeds the same CPython 2.3.3 and puts the API those
 scripts expect on top of H-uru's glue.
 
 The pak format itself is the same in both clients; only the marshal data in it
-differs. The game-code analyser in the deployment tools
-(`web/deploy/plasma_web/analyse_gamecode.py`) reports, for a captured pak, which
-marshal family and Python version wrote each entry.
+differs. The private test harness carries a game-code analyser that reports, for
+a captured pak, which marshal family and Python version wrote each entry.
 
 ## The interpreter and its pin
 

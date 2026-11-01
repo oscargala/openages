@@ -67,7 +67,6 @@ import json
 import os
 import re
 import socket
-import struct
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -824,33 +823,6 @@ def initial_graphics_ini(value):
 
 def load(path):
     return Deployment(path)
-
-
-def pak_build_refusal(pak, build):
-    """None when every entry of this python.pak runs on the build, else the refusal text (marshal families,
-    leading bytes, type codes and first opcodes found)."""
-    from plasma_web import analyse_gamecode
-
-    data = Path(pak).read_bytes()
-    if analyse_gamecode.secure_magic(data):
-        return f"{Path(pak).name} is encrypted; a sealed pak is plaintext"
-    try:
-        entries = analyse_gamecode.read_pak(data)
-    except (ValueError, struct.error) as e:
-        return f"{Path(pak).name} is not a plPythonPack file: {e}"
-    rows = []
-    for name, _, _, raw in entries:
-        fam, det = analyse_gamecode.classify(raw)
-        rows.append({"name": name, "family": fam, "details": det})
-    c = analyse_gamecode.family_check(rows, build)
-    if c["ok"]:
-        return None
-    return (
-        f"{Path(pak).name} does not run on the {build} build ({c['client']}, {c['python']}): "
-        + "; ".join(f"{k} x{v}" for k, v in sorted(c["reasons"].items()))
-        + f" (found families {c['found']['families']}, leading bytes {c['found']['leading_bytes']}, "
-        f"first opcodes {c['found']['first_opcodes']})"
-    )
 
 
 def client_build_files(build_dir, build):

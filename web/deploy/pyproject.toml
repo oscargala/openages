@@ -19,7 +19,6 @@ plasma-web-server = "plasma_web.server:main"
 plasma-web-gateway = "plasma_web.gateway:cli"
 plasma-web-deployment = "plasma_web.deployment:main"
 plasma-web-emit-static = "plasma_web.emit_static:main"
-plasma-web-analyse-gamecode = "plasma_web.analyse_gamecode:main"
 
 [tool.setuptools]
 packages = ["plasma_web"]

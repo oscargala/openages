@@ -59,7 +59,6 @@ Prerequisites, from a clean clone:
   directory of web/build/build-client.sh. Without it those checks are skipped.
 None needs a shard, MOULa data or a host path: every fixture is made in a temporary folder and removed.
 
-  test_analyse_gamecode  analyse_gamecode on synthetic inputs
   test_rules             the rules kept in one module each, and the page's copies of two of them (under node)
   test_deployment        the operator deployment file and its consumers: the servers, the gateway, the static kit
   test_origin_server     the origin server's connection handling and response policy
@@ -69,6 +68,9 @@ None needs a shard, MOULa data or a host path: every fixture is made in a tempor
   test_contract          the gateway contract against gateway.py and the Worker (web/deploy/worker, wrangler dev)
   test_config            the deployment loader, the player page and the origin server's policy, in Chromium
   wgsl_regen             the WGSL generated from the upstream D3D9 shaders (d3d9_to_wgsl.py --check) is current
+  test_check_notices     the third-party notices check (web/build/notices/check_notices.py) on fixture trees
+  test_source_bundle     the corresponding-source bundle (web/build/notices/source_bundle.py) on a synthetic lock
+  test_fetch_cleanup     python2/build.sh fetch leaves no temporary folder behind when it fails or is stopped (git on PATH)
 
 --out DIR keeps test_config's evidence (screenshots, JSON, summary.json) under DIR, and each suite's output in
 DIR/<suite>.txt.
@@ -93,7 +95,6 @@ REGEN = ROOT / "Sources/Plasma/FeatureLib/pfWGPUPipeline/ShaderSrc/gen/d3d9_to_w
 SUITES = {
     name: (HERE / f"{name}.py", HERE)
     for name in (
-        "test_analyse_gamecode",
         "test_rules",
         "test_deployment",
         "test_origin_server",
@@ -102,9 +103,13 @@ SUITES = {
         "test_tls",
     )
 }
-SUITES["test_contract"] = (WORKER / "test_contract.py", WORKER)
+SUITES["test_contract"] = (HERE / "test_contract.py", WORKER)
 SUITES["test_config"] = (HERE / "test_config.py", HERE)
 SUITES["wgsl_regen"] = (REGEN, ROOT)
+NOTICES = ROOT / "web/build/notices"
+SUITES["test_check_notices"] = (NOTICES / "test_check_notices.py", NOTICES)
+SUITES["test_source_bundle"] = (NOTICES / "test_source_bundle.py", NOTICES)
+SUITES["test_fetch_cleanup"] = (ROOT / "web/build/python2/test_fetch_cleanup.py", ROOT / "web/build/python2")
 PREREQUISITES = ("node", "openssl", "playwright", "chromium", "wrangler", "build")
 RAN = re.compile(r"^Ran (\d+) tests? in ")
 RESULT = re.compile(r"^(OK|FAILED)\b(?: \((.*)\))?$")

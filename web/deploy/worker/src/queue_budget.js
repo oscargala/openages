@@ -122,3 +122,20 @@ export class RelayQueue {
     this.budget.queues.delete(this);
   }
 }
+
+// The upstream half of a relay writes each browser frame to the shard's socket in pieces, as the downstream half sends
+// the shard's bytes to the browser in pieces of at most gateway.js MAX_FRAME_OUT. TCP carries a byte stream with no
+// message boundaries, so the shard reads the same bytes in the same order however they are cut, and gateway.py hands
+// each frame to its asyncio transport in one write (make_relay upstream), which sends it as the socket takes it.
+
+export async function writePieces(bytes, max, write) {
+  // Calls write(piece) for consecutive views of bytes (a Uint8Array) of at most max bytes, in order, and awaits each
+  // call before the next, so at most one piece is in flight. The views share the frame's memory: no piece is copied,
+  // and the frame stays held until its last piece is written. write may return false to stop: the rest is not
+  // written, and writePieces returns false. A rejected write rejects writePieces with its error, and the rest is not
+  // written. An empty frame writes nothing. Returns true when every piece was written.
+  for (let o = 0; o < bytes.byteLength; o += max) {
+    if ((await write(bytes.subarray(o, o + max))) === false) return false;
+  }
+  return true;
+}
