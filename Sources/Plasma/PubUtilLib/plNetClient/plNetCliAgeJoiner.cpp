@@ -121,6 +121,8 @@ plNCAgeJoiner* plNCAgeJoiner::s_instance = nullptr;
 
 #ifdef PLASMA_TEST_HOOKS
 static void (*s_linkTestHook)(NetCommAge& age) = nullptr; // NCAgeJoinerSetLinkTestHook
+// NCAgeJoinerSetStateRequestTestHook
+static void (*s_stateRequestTestHook)(const NetCommAge& age) = nullptr;
 #endif
 
 /*****************************************************************************
@@ -290,6 +292,10 @@ void plNCAgeJoiner::ExecNextOp () {
                 nextOp = kSimStateRcvd;
             }
             else {
+#ifdef PLASMA_TEST_HOOKS
+                if (s_stateRequestTestHook) // NCAgeJoinerSetStateRequestTestHook
+                    s_stateRequestTestHook(age);
+#endif
                 // Request age player list
                 nc->ISendMembersListRequest();
 
@@ -540,5 +546,12 @@ void NCAgeJoinerSetLinkTestHook(
     void (*hook)(NetCommAge& age))
 {
     s_linkTestHook = hook;
+}
+
+//============================================================================
+void NCAgeJoinerSetStateRequestTestHook(
+    void (*hook)(const NetCommAge& age))
+{
+    s_stateRequestTestHook = hook;
 }
 #endif

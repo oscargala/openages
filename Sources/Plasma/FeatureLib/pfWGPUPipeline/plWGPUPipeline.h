@@ -319,7 +319,7 @@ public:
     /// drawn, the wait, and the client's state.
     void     NotePrewarmWait(uint32_t before, uint32_t after, uint32_t frames, double ms, const char* detail);
     /// plClient::IDraw, at an Age's arrival frame: the first scene frame whose IUpdate sent plAgeLoadedMsg (the
-    /// joiner's kNotifyAgeLoaded, plNetCliAgeJoiner.cpp:337-342) and plInitialAgeStateLoadedMsg
+    /// joiner's kNotifyAgeLoaded, plNetCliAgeJoiner.cpp:343-348) and plInitialAgeStateLoadedMsg
     /// (plNetClientMgr.cpp:780-784). Their handlers can change what walked drawables draw with
     /// (plGrassShaderMod::ISetupShaders refs its shaders onto a layer then, plGrassShaderMod.cpp:175-179, 221-273), so
     /// the next frame start re-walks every walked drawable (cause "arrival", IPrewarmFrameStart); the walk starts only
