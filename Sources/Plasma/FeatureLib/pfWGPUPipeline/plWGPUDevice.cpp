@@ -403,11 +403,8 @@ void plWGPUDevice::SetMSAASampleCount(uint8_t sampleCount)
 
 void plWGPUDevice::ReleaseSamplerStates()
 {
-    for (WGPUSampler& sampler : fSamplerStates) {
-        if (sampler)
-            wgpuSamplerRelease(sampler);
-        sampler = nullptr;
-    }
+    for (WGPUSampler& sampler : fSamplerStates)
+        plWGPURelease(sampler);
 }
 
 WGPUSampler plWGPUDevice::SampleStateForClampFlags(hsGMatState::hsGMatClampFlags sampleState) const
@@ -515,8 +512,7 @@ void plWGPUDevice::IEndRenderPass()
 {
     if (fCurrentRenderTargetCommandEncoder) {
         wgpuRenderPassEncoderEnd(fCurrentRenderTargetCommandEncoder);
-        wgpuRenderPassEncoderRelease(fCurrentRenderTargetCommandEncoder);
-        fCurrentRenderTargetCommandEncoder = nullptr;
+        plWGPURelease(fCurrentRenderTargetCommandEncoder);
     }
 }
 
@@ -587,8 +583,7 @@ void plWGPUDevice::ISubmitOffscreen()
         IFlushUniforms();
         wgpuQueueSubmit(fQueue, 1, &cb);
         wgpuCommandBufferRelease(cb);
-        wgpuCommandEncoderRelease(fCurrentOffscreenCommandBuffer);
-        fCurrentOffscreenCommandBuffer = nullptr;
+        plWGPURelease(fCurrentOffscreenCommandBuffer);
     }
 }
 
@@ -1084,17 +1079,15 @@ void plWGPUDevice::IUploadLevels(plWGPUDevice::TextureRef* tRef, plMipmap* src, 
                                  std::vector<uint8_t>* level0Bytes, uint32_t cubeEdge, const CubeZeroPixels* zeroPixels,
                                  uint32_t dstLevelOffset)
 {
-    // Uploads levels 0..levels of src into one layer. Level sizes and data offsets come from
-    // sizeSource, as D3D9 fills every cube face with the first face's level sizes
-    // (plDXPipeline::IFillD3DCubeTexture). For 2D textures sizeSource is src.
-    // cubeEdge, for a cube face of w x h with w > h: D3D9's cube is square, edge = face 0's
-    // width (plDXPipeline::IMakeD3DCubeTexture), and the memcpy of face 0's level-i byte count
-    // from the start of the locked level (IFillD3DCubeTexture) leaves the face's h_i rows at the
-    // top of an edge_i x edge_i level. Rows h_i..edge_i-1, which Plasma never writes, are zero
-    // bytes in the D3D9 source format here, converted by the same branch as the face's rows: one
-    // edge_i x edge_i write per level. zeroPixels: on the software-decompression path, the
-    // codec's decode of a zero source block and of a zero raw pixel (ICubeZeroDecode). A square
-    // face (h_i == edge_i) and every 2D texture (cubeEdge 0) pad nothing.
+    // Uploads levels 0..levels of src into one layer. Level sizes and data offsets come from sizeSource, as D3D9 fills
+    // every cube face with the first face's level sizes (plDXPipeline::IFillD3DCubeTexture); for 2D textures sizeSource
+    // is src. cubeEdge, for a cube face of w x h with w > h: D3D9's cube is square, edge = face 0's width
+    // (plDXPipeline::IMakeD3DCubeTexture), and the memcpy of face 0's level-i byte count from the start of the locked
+    // level (IFillD3DCubeTexture) leaves the face's h_i rows at the top of an edge_i x edge_i level. Rows
+    // h_i..edge_i-1, which Plasma never writes, are zero bytes in the D3D9 source format here, converted by the same
+    // branch as the face's rows: one edge_i x edge_i write per level. zeroPixels: on the software-decompression path,
+    // the codec's decode of a zero source block and of a zero raw pixel (ICubeZeroDecode). A square face (h_i ==
+    // edge_i) and every 2D texture (cubeEdge 0) pad nothing.
     const uint8_t*       base = reinterpret_cast<const uint8_t*>(src->GetImage());
     const uint32_t       available = src->GetTotalSize();
     uint32_t             offset = 0;
@@ -1268,13 +1261,12 @@ void plWGPUDevice::MakeTextureRef(plWGPUDevice::TextureRef* tRef, plMipmap* img)
 
     if (!img->GetImage()) {
         // D3D9 makes the ref of an image-less mipmap like any other (plDXPipeline::MakeTextureRef):
-        // IProcessMipmapLevels gives numLevels = GetNumLevels() and totalSize 0 (a plDynamicTextMap
-        // before plDynamicTextMap::IIsValid), IGetPixelScratch(0) gives no data, IReloadTexture
-        // creates the fMaxWidth x fMaxHeight = GetWidth() x GetHeight() texture and IFillD3DTexture
-        // logs and returns without writing it; then SetDirty(false). So: the shape the filled path
-        // would take (IAllowedLevels reads only the header and the kAutoGenMipmap block above), no
-        // upload, no generated chain; the never-written texture reads WebGPU's zero initialisation.
-        // IUploadSource is not called (its decompression path would read the missing image).
+        // IProcessMipmapLevels gives numLevels = GetNumLevels() and totalSize 0 (a plDynamicTextMap before
+        // plDynamicTextMap::IIsValid), IGetPixelScratch(0) gives no data, IReloadTexture creates the fMaxWidth x
+        // fMaxHeight = GetWidth() x GetHeight() texture and IFillD3DTexture logs and returns without writing it; then
+        // SetDirty(false). So: the shape the filled path would take (IAllowedLevels reads only the header and the
+        // kAutoGenMipmap block above), no upload, no generated chain; the never-written texture reads WebGPU's zero
+        // initialisation. IUploadSource (whose decompression path would read the missing image) is not called.
         tRef->fUploadPath = img->IsCompressed() ? plWGPUTextureRef::kUploadBC : plWGPUTextureRef::kUploadUncompressed;
         int32_t levels = IAllowedLevels(img);
         autoGenLevels(img->GetWidth(), img->GetHeight(), levels);
@@ -1615,8 +1607,7 @@ bool plWGPUDevice::CreateNewCommandBuffer()
         static unsigned long sNoTexture = 0;
         if (sNoTexture++ < 5)
             plStatusLog::AddLineSF("pipeline.log", 0xffff0000, "no canvas texture this frame (status {})", int(st.status));
-        if (st.texture)
-            wgpuTextureRelease(st.texture);
+        plWGPURelease(st.texture);
         if (st.status == WGPUSurfaceGetCurrentTextureStatus_Outdated || st.status == WGPUSurfaceGetCurrentTextureStatus_Lost)
             ConfigureSurface(fDrawableWidth ? fDrawableWidth : fPipeline->Width(), fDrawableHeight ? fDrawableHeight : fPipeline->Height());
         return false;
@@ -1637,16 +1628,10 @@ bool plWGPUDevice::CreateNewCommandBuffer()
 
     // cache the depth buffer; it persists across frames (D3D9 semantics).
     if (depthNeedsRebuild) {
-        if (fCurrentDrawableDepthView)
-            wgpuTextureViewRelease(fCurrentDrawableDepthView);
-        if (fCurrentDrawableDepthTexture)
-            wgpuTextureRelease(fCurrentDrawableDepthTexture);
-        if (fCurrentFragmentMSAAOutputView)
-            wgpuTextureViewRelease(fCurrentFragmentMSAAOutputView);
-        if (fCurrentFragmentMSAAOutputTexture)
-            wgpuTextureRelease(fCurrentFragmentMSAAOutputTexture);
-        fCurrentFragmentMSAAOutputView = nullptr;
-        fCurrentFragmentMSAAOutputTexture = nullptr;
+        plWGPURelease(fCurrentDrawableDepthView);
+        plWGPURelease(fCurrentDrawableDepthTexture);
+        plWGPURelease(fCurrentFragmentMSAAOutputView);
+        plWGPURelease(fCurrentFragmentMSAAOutputTexture);
 
         WGPUTextureDescriptor desc = WGPU_TEXTURE_DESCRIPTOR_INIT;
         desc.label = Str("plWGPU drawable depth");
@@ -1670,15 +1655,11 @@ bool plWGPUDevice::CreateNewCommandBuffer()
     // non-tiler branch): allocated once a gamma table exists, rebuilt with the depth buffer.
     fFramePostprocessed = NeedsPostprocessing();
     if ((fUnprocessedTexture && depthNeedsRebuild) || (fUnprocessedTexture == nullptr && fFramePostprocessed)) {
-        if (fUnprocessedView)
-            wgpuTextureViewRelease(fUnprocessedView);
-        if (fUnprocessedTexture)
-            wgpuTextureRelease(fUnprocessedTexture);
+        plWGPURelease(fUnprocessedView);
+        plWGPURelease(fUnprocessedTexture);
         // The bind group goes with the view it names: a new view may reuse the released
         // handle's address, so the cache must not be matched by pointer alone.
-        if (fGammaBindGroup)
-            wgpuBindGroupRelease(fGammaBindGroup);
-        fGammaBindGroup = nullptr;
+        plWGPURelease(fGammaBindGroup);
         WGPUTextureDescriptor desc = WGPU_TEXTURE_DESCRIPTOR_INIT;
         desc.label = Str("plWGPU unprocessed output");
         // CopySrc: it is the front buffer (ReadFrontBuffer).
@@ -2156,16 +2137,14 @@ WGPUShaderModule plWGPUDevice::ShaderModule(const char* source, const char* labe
     // Called once for each pipeline about to be created from the module (IPipelineDescriptor, the gamma pipeline).
     // plMetalDevice takes every pipeline's functions from one library (plMetalDevice.cpp:1100-1101); a WebGPU module
     // stands in for it, but one module object serves at most kShaderModulePipelines creations, and the next creation
-    // gets a new module from the same text.
-    // Why: Safari 27.0.1 (WebKit on Metal) adds another bounds clamp, `__wgslMin(i, (8u - 1u))`, around each dynamic
-    // array index of a module every time it compiles a stage from that module object: two per pipeline created, one
-    // per failed attempt. The 128th creation on one object nests 255 of them and fails ("bracket nesting level
-    // exceeded maximum of 256" from the Metal compiler); so does every later one, and a draw that creates one
-    // synchronously invalidates its pass. The uber fixed-function module reached it at Ercana and GreatZero. A new
-    // module object from the same text starts again from none. WGSL and WebGPU set no such limit, and other adapters
-    // compile a module from the same text to the same program (G-PIX). The bound holds while base + 2 * k * cap <= 256,
-    // where k is the deepest nesting of dynamic indexes in one expression (1 in every source today).
-    // Measured in Safari 27.0.1's own console on 2026-10-29: the message and the counts above.
+    // gets a new module from the same text. Safari 27.0.1 (WebKit on Metal) adds a bounds clamp, `__wgslMin(i, (8u -
+    // 1u))`, around each dynamic array index of a module every time it compiles a stage from that module object (two
+    // per pipeline created, one per failed attempt): the 128th creation on one object nests 255 of them and fails
+    // ("bracket nesting level exceeded maximum of 256" from the Metal compiler), as does every later one, and a draw
+    // that creates one synchronously invalidates its pass (the uber fixed-function module gets there in Ercana and
+    // GreatZero). A new module object from the same text starts again from none. WGSL and WebGPU set no such limit, and
+    // other adapters compile a module from the same text to the same program (G-PIX). The bound holds while base + 2 *
+    // k * cap <= 256, where k is the deepest nesting of dynamic indexes in one expression (1 in every source).
     if (!ShaderModuleCreates(source)) {
         ShaderModuleEntry& entry = fShaderModules[source];
         entry.pipelines++;
@@ -2246,9 +2225,7 @@ void plWGPUDevice::SubmitCommandBuffer()
             // writes again until the next frame's passes: it is the front buffer, before the
             // ramp. Then the LUT pass into the canvas texture.
             ISetFrontBuffer(fUnprocessedTexture);
-            if (fFrontBufferCopy)
-                wgpuTextureRelease(fFrontBufferCopy);
-            fFrontBufferCopy = nullptr;
+            plWGPURelease(fFrontBufferCopy);
             PostprocessIntoDrawable();
         } else {
             // Drawn straight to the canvas texture, which expires when the task ends: the
@@ -2258,8 +2235,7 @@ void plWGPUDevice::SubmitCommandBuffer()
             const WGPUTextureFormat format = wgpuTextureGetFormat(fCurrentDrawable);
             if (!fFrontBufferCopy || w != wgpuTextureGetWidth(fFrontBufferCopy) ||
                 h != wgpuTextureGetHeight(fFrontBufferCopy) || format != wgpuTextureGetFormat(fFrontBufferCopy)) {
-                if (fFrontBufferCopy)
-                    wgpuTextureRelease(fFrontBufferCopy);
+                plWGPURelease(fFrontBufferCopy);
                 WGPUTextureDescriptor desc = WGPU_TEXTURE_DESCRIPTOR_INIT;
                 desc.label = Str("plWGPU front buffer");
                 desc.usage = WGPUTextureUsage_CopyDst | WGPUTextureUsage_CopySrc;
@@ -2282,20 +2258,15 @@ void plWGPUDevice::SubmitCommandBuffer()
         IFlushUniforms();
         wgpuQueueSubmit(fQueue, 1, &cb);
         wgpuCommandBufferRelease(cb);
-        wgpuCommandEncoderRelease(fCurrentCommandBuffer);
-        fCurrentCommandBuffer = nullptr;
+        plWGPURelease(fCurrentCommandBuffer);
     }
 
     for (WGPUBindGroup group : fFrameBindGroups)
         wgpuBindGroupRelease(group);
     fFrameBindGroups.clear();
 
-    if (fCurrentDrawableView)
-        wgpuTextureViewRelease(fCurrentDrawableView);
-    fCurrentDrawableView = nullptr;
-    if (fCurrentDrawable)
-        wgpuTextureRelease(fCurrentDrawable);
-    fCurrentDrawable = nullptr;
+    plWGPURelease(fCurrentDrawableView);
+    plWGPURelease(fCurrentDrawable);
     fCurrentFragmentOutputView = nullptr;
     fCurrentDepthView = nullptr;
     fCurrentRenderTarget = nullptr;
@@ -2622,6 +2593,34 @@ WGPUBindGroup plWGPUDevice::IFixedBindGroup(const std::array<void*, 24>& key)
     return group;
 }
 
+void plWGPUDevice::IFixedState(const FixedFunctionDraw& draw, plWGPUFixedState& fixed) const
+{
+    const DWORD* rs = fD3D.fRenderState;
+    fixed = plWGPUFixedState();
+    fixed.topology = draw.topology;
+    // D3DCULL_CW culls clockwise triangles: front faces are counter-clockwise in WebGPU's
+    // terms (same window orientation), so cull the back (the plates confirm it).
+    fixed.frontFace = WGPUFrontFace_CCW;
+    switch (rs[D3DRS_CULLMODE]) {
+        case D3DCULL_CW:
+            fixed.cullMode = WGPUCullMode_Back;
+            break;
+        case D3DCULL_CCW:
+            fixed.cullMode = WGPUCullMode_Front;
+            break;
+        default:
+            fixed.cullMode = WGPUCullMode_None;
+            break;
+    }
+    if (rs[D3DRS_ZENABLE]) {
+        fixed.depthCompare = CompareFunction(rs[D3DRS_ZFUNC]);
+        fixed.depthWrite = rs[D3DRS_ZWRITEENABLE] != 0;
+    } else {
+        fixed.depthCompare = WGPUCompareFunction_Always;
+        fixed.depthWrite = false;
+    }
+}
+
 void plWGPUDevice::IFixedFunctionKey(const FixedFunctionDraw& draw, plWGPUFixedFunctionKey& key, plWGPUFixedState& fixed) const
 {
     const DWORD*                                         rs = fD3D.fRenderState;
@@ -2655,29 +2654,7 @@ void plWGPUDevice::IFixedFunctionKey(const FixedFunctionDraw& draw, plWGPUFixedF
     key.vertexFormat = vertexKind ? 0 : draw.vertexFormat;
     key.plateVertex = vertexKind;
 
-    fixed = plWGPUFixedState();
-    fixed.topology = draw.topology;
-    // D3DCULL_CW culls clockwise triangles: front faces are counter-clockwise in WebGPU's
-    // terms (same window orientation), so cull the back (the plates confirm it).
-    fixed.frontFace = WGPUFrontFace_CCW;
-    switch (rs[D3DRS_CULLMODE]) {
-        case D3DCULL_CW:
-            fixed.cullMode = WGPUCullMode_Back;
-            break;
-        case D3DCULL_CCW:
-            fixed.cullMode = WGPUCullMode_Front;
-            break;
-        default:
-            fixed.cullMode = WGPUCullMode_None;
-            break;
-    }
-    if (rs[D3DRS_ZENABLE]) {
-        fixed.depthCompare = CompareFunction(rs[D3DRS_ZFUNC]);
-        fixed.depthWrite = rs[D3DRS_ZWRITEENABLE] != 0;
-    } else {
-        fixed.depthCompare = WGPUCompareFunction_Always;
-        fixed.depthWrite = false;
-    }
+    IFixedState(draw, fixed);
 }
 
 bool plWGPUDevice::PrewarmFixedFunction(const FixedFunctionDraw& draw)
@@ -3106,27 +3083,7 @@ void plWGPUDevice::IShaderKey(const FixedFunctionDraw& draw, WGPUTextureFormat d
     // layers).
     key.fog = rs[D3DRS_FOGENABLE] ? 1 : 0;
 
-    fixed = plWGPUFixedState();
-    fixed.topology = draw.topology;
-    fixed.frontFace = WGPUFrontFace_CCW;
-    switch (rs[D3DRS_CULLMODE]) {
-        case D3DCULL_CW:
-            fixed.cullMode = WGPUCullMode_Back;
-            break;
-        case D3DCULL_CCW:
-            fixed.cullMode = WGPUCullMode_Front;
-            break;
-        default:
-            fixed.cullMode = WGPUCullMode_None;
-            break;
-    }
-    if (rs[D3DRS_ZENABLE]) {
-        fixed.depthCompare = CompareFunction(rs[D3DRS_ZFUNC]);
-        fixed.depthWrite = rs[D3DRS_ZWRITEENABLE] != 0;
-    } else {
-        fixed.depthCompare = WGPUCompareFunction_Always;
-        fixed.depthWrite = false;
-    }
+    IFixedState(draw, fixed);
     if (depthFormat == WGPUTextureFormat_Undefined) {
         // A target without depth (the CompRT, zDepth 0, plWaveSet7::ICreateTransferRenderTarget): D3D9 with no depth
         // surface tests and writes nothing.
@@ -3372,19 +3329,14 @@ void plWGPUDevice::ISetFrontBuffer(WGPUTexture frame)
     // A reference of its own, taken before the old one goes: frame may be the texture it already holds
     if (frame)
         wgpuTextureAddRef(frame);
-    if (fFrontBuffer)
-        wgpuTextureRelease(fFrontBuffer);
+    plWGPURelease(fFrontBuffer);
     fFrontBuffer = frame;
 }
 
 void plWGPUDevice::IReleaseFrontBuffer()
 {
-    if (fFrontBuffer)
-        wgpuTextureRelease(fFrontBuffer);
-    fFrontBuffer = nullptr;
-    if (fFrontBufferCopy)
-        wgpuTextureRelease(fFrontBufferCopy);
-    fFrontBufferCopy = nullptr;
+    plWGPURelease(fFrontBuffer);
+    plWGPURelease(fFrontBufferCopy);
 }
 
 bool plWGPUDevice::BeginGPUWait(const char* how)
@@ -3564,9 +3516,7 @@ void plWGPUDevice::ICreateGammaAdjustState()
 {
     // plMetalDevice::CreateGammaAdjustState, the non-tiler
     // descriptor: the canvas format, one sample, no depth.
-    if (fGammaPipeline)
-        wgpuRenderPipelineRelease(fGammaPipeline);
-    fGammaPipeline = nullptr;
+    plWGPURelease(fGammaPipeline);
     if (!fGammaBindGroupLayout) {
         WGPUBindGroupLayoutEntry entries[2] = {WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT};
         entries[0].binding = 0;
@@ -3622,8 +3572,7 @@ void plWGPUDevice::PostprocessIntoDrawable()
     if (!fGammaPipeline || !fUnprocessedView || !fGammaLUTView)
         return;
     if (!fGammaBindGroup || fGammaBindGroupInput != fUnprocessedView || fGammaBindGroupLUT != fGammaLUTView) {
-        if (fGammaBindGroup)
-            wgpuBindGroupRelease(fGammaBindGroup);
+        plWGPURelease(fGammaBindGroup);
         WGPUBindGroupEntry entries[2] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
         entries[0].binding = 0;
         entries[0].textureView = fUnprocessedView;
@@ -3660,36 +3609,20 @@ void plWGPUDevice::IReleaseGammaDeviceObjects()
 {
     // The device-side objects of the post pass. The table itself is kept by the pipeline
     // (plWGPUPipeline::fGammaRamp) and re-set on the new device (ICreateDeviceObjects).
-    if (fGammaBindGroup)
-        wgpuBindGroupRelease(fGammaBindGroup);
-    fGammaBindGroup = nullptr;
+    plWGPURelease(fGammaBindGroup);
     fGammaBindGroupInput = nullptr;
     fGammaBindGroupLUT = nullptr;
-    if (fGammaPipeline)
-        wgpuRenderPipelineRelease(fGammaPipeline);
-    fGammaPipeline = nullptr;
+    plWGPURelease(fGammaPipeline);
     fGammaPipelineFormat = WGPUTextureFormat_Undefined;
-    if (fGammaPipelineLayout)
-        wgpuPipelineLayoutRelease(fGammaPipelineLayout);
-    fGammaPipelineLayout = nullptr;
-    if (fGammaBindGroupLayout)
-        wgpuBindGroupLayoutRelease(fGammaBindGroupLayout);
-    fGammaBindGroupLayout = nullptr;
-    if (fGammaLUTView)
-        wgpuTextureViewRelease(fGammaLUTView);
-    fGammaLUTView = nullptr;
-    if (fGammaLUTTexture)
-        wgpuTextureRelease(fGammaLUTTexture);
-    fGammaLUTTexture = nullptr;
-    if (fUnprocessedView)
-        wgpuTextureViewRelease(fUnprocessedView);
-    fUnprocessedView = nullptr;
+    plWGPURelease(fGammaPipelineLayout);
+    plWGPURelease(fGammaBindGroupLayout);
+    plWGPURelease(fGammaLUTView);
+    plWGPURelease(fGammaLUTTexture);
+    plWGPURelease(fUnprocessedView);
     // The front buffer goes with the unprocessed texture that holds it
     if (fFrontBuffer && fFrontBuffer == fUnprocessedTexture)
         IReleaseFrontBuffer();
-    if (fUnprocessedTexture)
-        wgpuTextureRelease(fUnprocessedTexture);
-    fUnprocessedTexture = nullptr;
+    plWGPURelease(fUnprocessedTexture);
     fFramePostprocessed = false;
 }
 
@@ -3709,18 +3642,10 @@ void plWGPUDevice::ReleaseAllDeviceObjects()
     fGroupOwners.clear();
 #endif
     IEndRenderPass();
-    if (fCurrentOffscreenCommandBuffer)
-        wgpuCommandEncoderRelease(fCurrentOffscreenCommandBuffer);
-    fCurrentOffscreenCommandBuffer = nullptr;
-    if (fCurrentCommandBuffer)
-        wgpuCommandEncoderRelease(fCurrentCommandBuffer);
-    fCurrentCommandBuffer = nullptr;
-    if (fCurrentDrawableView)
-        wgpuTextureViewRelease(fCurrentDrawableView);
-    fCurrentDrawableView = nullptr;
-    if (fCurrentDrawable)
-        wgpuTextureRelease(fCurrentDrawable);
-    fCurrentDrawable = nullptr;
+    plWGPURelease(fCurrentOffscreenCommandBuffer);
+    plWGPURelease(fCurrentCommandBuffer);
+    plWGPURelease(fCurrentDrawableView);
+    plWGPURelease(fCurrentDrawable);
     fCurrentFragmentOutputView = nullptr;
     fCurrentDepthView = nullptr;
     fCurrentRenderTarget = nullptr;
@@ -3763,48 +3688,38 @@ void plWGPUDevice::ReleaseAllDeviceObjects()
 
     for (std::vector<Arena>* arenas : {&fUniformArenas, &fVertexArenas}) {
         for (Arena& arena : *arenas) {
-            if (arena.group)
-                wgpuBindGroupRelease(arena.group);
-            if (arena.buffer)
-                wgpuBufferRelease(arena.buffer);
+            plWGPURelease(arena.group);
+            plWGPURelease(arena.buffer);
         }
         arenas->clear();
     }
 
     ReleaseSamplerStates();
-    auto releaseSampler = [](WGPUSampler& s) { if (s) wgpuSamplerRelease(s); s = nullptr; };
-    auto releaseTexture = [](WGPUTexture& t) { if (t) wgpuTextureRelease(t); t = nullptr; };
-    auto releaseView = [](WGPUTextureView& v) { if (v) wgpuTextureViewRelease(v); v = nullptr; };
-    auto releaseBuffer = [](WGPUBuffer& b) { if (b) wgpuBufferRelease(b); b = nullptr; };
-    auto releaseGroupLayout = [](WGPUBindGroupLayout& l) { if (l) wgpuBindGroupLayoutRelease(l); l = nullptr; };
-    auto releaseLayout = [](WGPUPipelineLayout& l) { if (l) wgpuPipelineLayoutRelease(l); l = nullptr; };
-    releaseSampler(fPointSampler);
+    plWGPURelease(fPointSampler);
 
-    releaseView(fCurrentDrawableDepthView);
-    releaseTexture(fCurrentDrawableDepthTexture);
-    releaseView(fCurrentFragmentMSAAOutputView);
-    releaseTexture(fCurrentFragmentMSAAOutputTexture);
+    plWGPURelease(fCurrentDrawableDepthView);
+    plWGPURelease(fCurrentDrawableDepthTexture);
+    plWGPURelease(fCurrentFragmentMSAAOutputView);
+    plWGPURelease(fCurrentFragmentMSAAOutputTexture);
     fDrawableWidth = 0;
     fDrawableHeight = 0;
     IReleaseFrontBuffer();
     IReleaseGammaDeviceObjects();
 
-    releaseView(fWhiteTextureView);
-    releaseTexture(fWhiteTexture);
-    releaseView(fWhiteCubeTextureView);
-    releaseTexture(fWhiteCubeTexture);
-    releaseBuffer(fZeroVertexBuffer);
+    plWGPURelease(fWhiteTextureView);
+    plWGPURelease(fWhiteTexture);
+    plWGPURelease(fWhiteCubeTextureView);
+    plWGPURelease(fWhiteCubeTexture);
+    plWGPURelease(fZeroVertexBuffer);
 
-    releaseLayout(fUniformsOnlyLayout);
-    releaseLayout(fUniformsAndTextureLayout);
-    releaseLayout(fFixedFunctionLayout);
-    releaseLayout(fShaderLayout);
-    releaseGroupLayout(fUniformBindGroupLayout);
-    releaseGroupLayout(fTextureBindGroupLayout);
-    releaseGroupLayout(fFixedTextureBindGroupLayout);
+    plWGPURelease(fUniformsOnlyLayout);
+    plWGPURelease(fUniformsAndTextureLayout);
+    plWGPURelease(fFixedFunctionLayout);
+    plWGPURelease(fShaderLayout);
+    plWGPURelease(fUniformBindGroupLayout);
+    plWGPURelease(fTextureBindGroupLayout);
+    plWGPURelease(fFixedTextureBindGroupLayout);
 
-    if (fQueue)
-        wgpuQueueRelease(fQueue);
-    fQueue = nullptr;
+    plWGPURelease(fQueue);
     fWGPUDevice = nullptr;
 }

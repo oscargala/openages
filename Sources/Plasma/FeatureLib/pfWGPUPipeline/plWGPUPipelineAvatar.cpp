@@ -66,15 +66,12 @@ using namespace plWGPUD3D9;
 
 void plWGPUPipeline::IPreprocessAvatarTextures()
 {
-    // plDXPipeline::IPreprocessAvatarTextures: compose each outfit's texture into its
-    // render target from the base texture and the items' layers.
-    // The prewarm's walk (plWGPUPipeline::IPrewarmTargets) runs it too, to start each quad's pipeline: it frees,
-    // assigns and clears nothing (the outfits, their targets and dirty items stay for the frame's compose), counts and
-    // reports nothing, and makes or binds no texture (IDrawClothingQuad).
-    // plClient's wait for the pipeline builds (IWaitPipelineBuilds) draws progress frames D3D9 does not have: there the
-    // next primary BeginRender after a frame not drawn is the next scene frame's (plClient::IDraw). While it holds the
-    // outfits (PrewarmHoldOutfits), a progress frame's BeginRender leaves both lists as the last scene frame left them:
-    // no free, no compose, no swap.
+    // plDXPipeline::IPreprocessAvatarTextures: compose each outfit's texture into its render target from the base
+    // texture and the items' layers. The prewarm's walk (plWGPUPipeline::IPrewarmTargets) runs it to start each quad's
+    // pipeline, freeing, assigning, clearing, counting, reporting, making and binding nothing (IDrawClothingQuad).
+    // plClient's wait for the pipeline builds (IWaitPipelineBuilds) draws progress frames D3D9 does not have (there the
+    // next primary BeginRender after a frame not drawn is the next scene frame's, plClient::IDraw): while it holds the
+    // outfits (PrewarmHoldOutfits), a progress frame's BeginRender leaves both lists as the last scene frame left them.
     if (fPrewarmOutfitsHeld && !fPrewarmWalk)
         return;
     if (!fPrewarmWalk)

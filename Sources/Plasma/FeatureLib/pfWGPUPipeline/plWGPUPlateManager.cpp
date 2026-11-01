@@ -98,10 +98,7 @@ void plWGPUPlateManager::ICreateGeometry()
 
 void plWGPUPlateManager::IReleaseGeometry()
 {
-    if (fVtxBuffer) {
-        wgpuBufferRelease(fVtxBuffer);
-        fVtxBuffer = nullptr;
-    }
+    plWGPURelease(fVtxBuffer);
 }
 
 void plWGPUPlateManager::IDrawToDevice(plPipeline* pipe)

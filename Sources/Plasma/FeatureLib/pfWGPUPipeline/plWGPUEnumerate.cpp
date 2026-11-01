@@ -154,8 +154,7 @@ void OnDevice(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView 
 {
     if (s.shutDown) {
         // A re-acquire still in flight at exit: nothing takes the device any more
-        if (device)
-            wgpuDeviceRelease(device);
+        plWGPURelease(device);
         return;
     }
     if (status != WGPURequestDeviceStatus_Success || !device) {
@@ -177,8 +176,7 @@ void OnAdapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringV
 {
     if (s.shutDown) {
         // A re-acquire still in flight at exit: nothing takes the adapter any more
-        if (adapter)
-            wgpuAdapterRelease(adapter);
+        plWGPURelease(adapter);
         return;
     }
     if (status != WGPURequestAdapterStatus_Success || !adapter) {
@@ -195,16 +193,14 @@ void OnAdapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringV
         s.adapterDesc = s.adapterArchitecture;
     plWGPULog("ADAPTER after {.1f} ms: vendor '{}' architecture '{}' description '{}' backend {}",
               Now() - s.t0, View(info.vendor), View(info.architecture), View(info.description), int(info.backendType));
-    // The specialised fixed-function programs run only where they were measured to draw what the uber shader draws:
-    // an Apple GPU on Metal in Dawn, whose adapter info has vendor "apple" and architecture "metal-<n>" (Chromium
-    // reports "metal-3"). Two measurements make that claim. The pipeline bench drew every proven program against the
-    // uber, bit for bit, which covers the arithmetic. The client's own frames of six posed scenes matched the uber
-    // build's to the pixel, which covers what the bench cannot see: on Metal the frame also depends on which
-    // interstage variables a fragment program reads. WebKit on Metal (vendor "apple", architecture "apple", as Safari
-    // 27.0.1 reports it) has the bench's identity but no client frames yet, so it keeps the uber shader until its own
-    // frames of those scenes match. Every other adapter keeps it because the fma pins of FixedPipelineShaders.wgsl
-    // hold only where fma is fused, as Metal's is. A WebKit that reported "metal-<n>" would be admitted, so the
-    // FIXED PROGRAMS line below says which way each adapter went.
+    // The specialised fixed-function programs run only where they are proven to draw what the uber shader draws: an
+    // Apple GPU on Metal in Dawn (adapter vendor "apple", architecture "metal-<n>"; Chromium reports "metal-3"). There
+    // every proven program draws as the uber does, bit for bit (the pipeline bench), and the client's frames equal the
+    // uber build's to the pixel, which the bench cannot show: on Metal the frame also depends on which interstage
+    // variables a fragment program reads. WebKit on Metal (vendor "apple", architecture "apple", as Safari 27.0.1
+    // reports it) keeps the uber shader until its own frames are proven; every other adapter keeps it because the fma
+    // pins of FixedPipelineShaders.wgsl hold only where fma is fused, as Metal's is. A WebKit that reported "metal-<n>"
+    // would be admitted, so the FIXED PROGRAMS line below says which way each adapter went.
     const std::string vendor = View(info.vendor), architecture = View(info.architecture);
     s.specialisedFixed = vendor == "apple" && architecture.rfind("metal-", 0) == 0;
     const char* admittedBy = "";
@@ -312,23 +308,13 @@ void plWGPUEnumerate::Shutdown()
     s.shuttingDown = true;
     s.ready = false;
     s.releasing = true; // the release destroys the device and runs its lost callback now: not a loss
-    for (WGPUDevice* device : {&s.device, &s.oldDevice}) {
-        if (*device)
-            wgpuDeviceRelease(*device);
-        *device = nullptr;
-    }
+    for (WGPUDevice* device : {&s.device, &s.oldDevice})
+        plWGPURelease(*device);
     s.releasing = false;
-    for (WGPUAdapter* adapter : {&s.adapter, &s.oldAdapter}) {
-        if (*adapter)
-            wgpuAdapterRelease(*adapter);
-        *adapter = nullptr;
-    }
-    if (s.surface)
-        wgpuSurfaceRelease(s.surface);
-    s.surface = nullptr;
-    if (s.instance)
-        wgpuInstanceRelease(s.instance);
-    s.instance = nullptr;
+    for (WGPUAdapter* adapter : {&s.adapter, &s.oldAdapter})
+        plWGPURelease(*adapter);
+    plWGPURelease(s.surface);
+    plWGPURelease(s.instance);
     plWGPULog("released the device, the adapter, the canvas surface and the instance");
 }
 
@@ -365,12 +351,8 @@ bool plWGPUEnumerate::FinishReacquire()
         return false;
     s.reacquiring = false;
     s.lost = false;
-    if (s.oldDevice)
-        wgpuDeviceRelease(s.oldDevice);
-    s.oldDevice = nullptr;
-    if (s.oldAdapter)
-        wgpuAdapterRelease(s.oldAdapter);
-    s.oldAdapter = nullptr;
+    plWGPURelease(s.oldDevice);
+    plWGPURelease(s.oldAdapter);
     return true;
 }
 unsigned long plWGPUEnumerate::ErrorCount() { return s.errors; }
@@ -436,15 +418,14 @@ void plWGPUEnumerate::Enumerate(std::vector<hsG3DDeviceRecord>& records, hsDispl
     // The default mode is the page's canvas (the screen mode follows it).
     devRec.SetDefaultModeIndex(0);
 
-    // The D3D9 client's chipset tweaks (hsGDirect3DTnLEnumerate::IFudgeDirectXDevice, which TryDirect3DTnLDriver
-    // calls once ITryDirect3DTnLDevice has listed the modes and their FSAA types, plDXEnumerate.cpp:718-719; as
-    // plGLEnumerate.cpp's fillDeviceRecord), keyed as IFudgeDirectXDevice keys them, only on what the adapter
-    // reports (plDXEnumerate.cpp:637-685). WebKit on Metal, adapter vendor and architecture "apple" (the identity the FIXED
-    // PROGRAMS rule names in OnAdapter), takes its own row: the default row plus kCapsNoAA, the set IFudgeDirectXDevice
-    // gives the GeForce FX 5200 (plDXEnumerate.cpp:676-679; hsG3DDeviceSelector.cpp's CFT), which clears every mode's FSAA types.
-    // Every other adapter takes the default row: LOD bias, Z bias and fog ratings, and kCapsDoesSmallTextures
-    // cleared. Decided at every Enumerate (plClient::IDetectAudioVideoSettings and InitPipeline alike) and logged
-    // with IFudgeDirectXDevice's text (plDXEnumerate.cpp:678, 684).
+    // The D3D9 client's chipset tweaks (hsGDirect3DTnLEnumerate::IFudgeDirectXDevice, which TryDirect3DTnLDriver calls
+    // once ITryDirect3DTnLDevice has listed the modes and their FSAA types, plDXEnumerate.cpp:718-719; as
+    // plGLEnumerate.cpp's fillDeviceRecord), keyed as IFudgeDirectXDevice keys them, on what the adapter reports
+    // (plDXEnumerate.cpp:637-685). WebKit on Metal, adapter vendor and architecture "apple" (the FIXED PROGRAMS
+    // identity, OnAdapter), takes the default row plus kCapsNoAA, the set IFudgeDirectXDevice gives the GeForce FX 5200
+    // (plDXEnumerate.cpp:676-679; hsG3DDeviceSelector.cpp's CFT), which clears every mode's FSAA types. Every other
+    // adapter takes the default row: LOD bias, Z bias and fog ratings, and kCapsDoesSmallTextures cleared. Decided at
+    // every Enumerate and logged with IFudgeDirectXDevice's text (plDXEnumerate.cpp:678, 684).
     bool        webKitOnMetal = s.adapterVendor == ST_LITERAL("apple") && s.adapterArchitecture == ST_LITERAL("apple");
     const char* fudgedBy = "";
 #ifdef PLASMA_TEST_HOOKS

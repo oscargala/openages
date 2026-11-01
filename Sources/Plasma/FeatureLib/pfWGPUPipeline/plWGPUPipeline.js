@@ -75,30 +75,27 @@ addToLibrary({
   // The optional HD texture pack (plWGPUTexturePack.cpp): one streaming fetch on the browser main thread into one wasm
   // allocation of the response's length. Not through WasmFS: the fetch backend's chunk cache, read-ahead and persistent
   // store (plEmscriptenFetchBackend.js) are for the game files; a pack is read once per Age visit and held by the
-  // client.
-  // Not in the HTTP cache (no-store); the client checks every byte with SHA-256. A verified pack is kept in Cache
-  // Storage instead (below).
+  // client. Not in the HTTP cache (no-store); the client checks every byte with SHA-256. A verified pack is kept in
+  // Cache Storage instead (below).
   // block: four 32-bit words shared with the client thread: [0] state (0 in flight, 1 complete, 2 abandoned by the
   // client, < 0 failed: -1 missing, -2 unreadable, -3 origin refused, -4 too large, -5 out of memory), [1] bytes
   // written, [2] the buffer (0 until the length is known), [3] the length. The client owns the block and the buffer
   // unless it abandoned the fetch first (compare-exchange 0 -> 2); then this side frees both when it ends.
   // Origins: the page's own, or one of the deployment's pinned asset origins (PLASMA_RUNTIME_ASSET_CACHE_ORIGINS, the
   // rule of plEmscriptenAssetCache.js PlasmaAssetCache.create and identity()); credentials, query and fragment are
-  // refused.
-  // The pin list is checked by plEmscriptenAssetCache.js's own rule (PlasmaAssetCache.pinnedOrigins: at most
+  // refused. The pin list is checked by plEmscriptenAssetCache.js's own rule (PlasmaAssetCache.pinnedOrigins: at most
   // config.mjs's ASSET_ORIGIN_PINS, a duplicate rejects the whole list), so both admit the same origins.
-  // Packs are kept between sessions in Cache Storage ($plWGPUTexturePackCache). The block
-  // gains [4] the source (0 the network, 1 the Cache Storage entry) and, at byte 20, the entry's key SHA-256 (32
-  // bytes); both are written before [2]. mode 0: after the origin checks, the URL's entry is used when the server
-  // answers 304 to a request conditional on the entry's ETag; any other answer evicts it, and a 200 is read as the
-  // network response. mode 1 (the client found the cached pack defective): the entry is evicted first, then the
-  // network. A Cache Storage failure is a cache miss: the network is used.
-  // The kept packs share one byte cap (capBytes): the packs used least recently are evicted first to stay within it.
-  // A pack's use is the time the client took it into use: its network fetch kept (store), or its entry read after a
-  // 304 (fetch). The use times live in one small JSON record in the same cache (recencyUrl), never in the packs'
-  // entries, so no pack is copied to record a use. Every change to the kept set and the record runs under one lock
-  // (exclusive: Web Locks across the origin's pages, else a promise chain in this page). A pack larger than the cap is
-  // never kept.
+  // Packs are kept between sessions in Cache Storage ($plWGPUTexturePackCache). The block gains [4] the source (0 the
+  // network, 1 the Cache Storage entry) and, at byte 20, the entry's key SHA-256 (32 bytes); both are written before
+  // [2]. mode 0: after the origin checks, the URL's entry is used when the server answers 304 to a request conditional
+  // on the entry's ETag; any other answer evicts it, and a 200 is read as the network response. mode 1 (the client
+  // found the cached pack defective): the entry is evicted first, then the network. A Cache Storage failure is a cache
+  // miss: the network is used.
+  // The kept packs share one byte cap (capBytes): the packs used least recently are evicted first to stay within it. A
+  // pack's use is the time the client took it into use: its network fetch kept (store), or its entry read after a 304
+  // (fetch). The use times live in one small JSON record in the same cache (recencyUrl), never in the packs' entries,
+  // so no pack is copied to record a use. Every change to the kept set and the record runs under one lock (exclusive:
+  // Web Locks across the origin's pages, else a promise chain in this page). A pack larger than the cap is never kept.
   $plWGPUTexturePackCache: {
     name: 'plasma-hdpack-v1',
     capBytes: 256 * 1024 * 1024,

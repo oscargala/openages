@@ -138,14 +138,8 @@ void plWGPUTextureRef::Release()
     // by a new one, so every release invalidates that cache (plWGPUDevice::IFixedBindGroup).
     if (fTextureView || fTexture)
         fReleaseSerial++;
-    if (fTextureView) {
-        wgpuTextureViewRelease(fTextureView);
-        fTextureView = nullptr;
-    }
-    if (fTexture) {
-        wgpuTextureRelease(fTexture);
-        fTexture = nullptr;
-    }
+    plWGPURelease(fTextureView);
+    plWGPURelease(fTexture);
     SetDirty(true);
 }
 
@@ -188,18 +182,9 @@ void plWGPURenderTargetRef::Release()
         }
     }
     fDepthFormat = WGPUTextureFormat_Undefined;
-    if (fRenderView) {
-        wgpuTextureViewRelease(fRenderView);
-        fRenderView = nullptr;
-    }
-    if (fDepthView) {
-        wgpuTextureViewRelease(fDepthView);
-        fDepthView = nullptr;
-    }
-    if (fDepthBuffer) {
-        wgpuTextureRelease(fDepthBuffer);
-        fDepthBuffer = nullptr;
-    }
+    plWGPURelease(fRenderView);
+    plWGPURelease(fDepthView);
+    plWGPURelease(fDepthBuffer);
     plWGPUTextureRef::Release();
     SetDirty(true);
 }

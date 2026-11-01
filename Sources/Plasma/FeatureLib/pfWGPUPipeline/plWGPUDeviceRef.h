@@ -53,6 +53,32 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "HeadSpin.h"
 #include "hsGDeviceRef.h"
 
+// Release a WebGPU handle and null it, as plDXPipeline's ReleaseObject (plDXPipeline.h:115) does a D3D object: one
+// overload per handle type.
+template <typename T>
+inline void plWGPURelease(T& h, void (*release)(T))
+{
+    if (h) {
+        release(h);
+        h = nullptr;
+    }
+}
+inline void plWGPURelease(WGPUAdapter& h) { plWGPURelease(h, wgpuAdapterRelease); }
+inline void plWGPURelease(WGPUBindGroup& h) { plWGPURelease(h, wgpuBindGroupRelease); }
+inline void plWGPURelease(WGPUBindGroupLayout& h) { plWGPURelease(h, wgpuBindGroupLayoutRelease); }
+inline void plWGPURelease(WGPUBuffer& h) { plWGPURelease(h, wgpuBufferRelease); }
+inline void plWGPURelease(WGPUCommandEncoder& h) { plWGPURelease(h, wgpuCommandEncoderRelease); }
+inline void plWGPURelease(WGPUDevice& h) { plWGPURelease(h, wgpuDeviceRelease); }
+inline void plWGPURelease(WGPUInstance& h) { plWGPURelease(h, wgpuInstanceRelease); }
+inline void plWGPURelease(WGPUPipelineLayout& h) { plWGPURelease(h, wgpuPipelineLayoutRelease); }
+inline void plWGPURelease(WGPUQueue& h) { plWGPURelease(h, wgpuQueueRelease); }
+inline void plWGPURelease(WGPURenderPassEncoder& h) { plWGPURelease(h, wgpuRenderPassEncoderRelease); }
+inline void plWGPURelease(WGPURenderPipeline& h) { plWGPURelease(h, wgpuRenderPipelineRelease); }
+inline void plWGPURelease(WGPUSampler& h) { plWGPURelease(h, wgpuSamplerRelease); }
+inline void plWGPURelease(WGPUSurface& h) { plWGPURelease(h, wgpuSurfaceRelease); }
+inline void plWGPURelease(WGPUTexture& h) { plWGPURelease(h, wgpuTextureRelease); }
+inline void plWGPURelease(WGPUTextureView& h) { plWGPURelease(h, wgpuTextureViewRelease); }
+
 class plGBufferGroup;
 class plBitmap;
 class plRenderTarget;
@@ -141,8 +167,8 @@ public:
         fBufferSize = size;
         if (fCurrentPass >= fBuffers[fCurrentFrame].size())
             fBuffers[fCurrentFrame].resize(fCurrentPass + 1);
-        else if (fBuffers[fCurrentFrame][fCurrentPass].buffer)
-            wgpuBufferRelease(fBuffers[fCurrentFrame][fCurrentPass].buffer);
+        else
+            plWGPURelease(fBuffers[fCurrentFrame][fCurrentPass].buffer);
         fBuffers[fCurrentFrame][fCurrentPass] = {buffer, size};
     }
 
@@ -152,10 +178,8 @@ public:
     void ReleaseBuffers()
     {
         for (auto& frame : fBuffers) {
-            for (auto& entry : frame) {
-                if (entry.buffer)
-                    wgpuBufferRelease(entry.buffer);
-            }
+            for (auto& entry : frame)
+                plWGPURelease(entry.buffer);
             frame.clear();
         }
         fBuffer = nullptr;

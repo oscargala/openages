@@ -104,12 +104,10 @@ const char* plWGPUClearPipelineState::GetShaderSource() const
 
 const char* plWGPUClearPipelineState::GetFragmentFunction() const
 {
-    // A depth-only clear still has the pass's colour target (writeMask None, GetWriteMask).
-    // WebKit's WebGPU rejects a pipeline whose fragment entry writes only @builtin(frag_depth)
-    // while a colour target is present, even with writeMask 0, and accepts the same pipeline
-    // when the entry also writes @location(0); Chromium accepts both. The colour value goes to
-    // a writeMask-0 target and is never written, so the depth-only clear uses the
-    // colour-and-depth entry.
+    // A depth-only clear still has the pass's colour target (writeMask None, GetWriteMask). WebKit's WebGPU rejects a
+    // pipeline whose fragment entry writes only @builtin(frag_depth) beside a colour target, even with writeMask 0, and
+    // accepts it when the entry also writes @location(0) (Chromium accepts both); that value is never written, so the
+    // depth-only clear uses the colour-and-depth entry.
     if (fShouldClearDepth)
         return "clearFragmentColorDepth";
     return "clearFragmentColor";

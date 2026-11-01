@@ -88,10 +88,8 @@ void plWGPUTextFont::ICreateTexture(uint16_t* data)
     // D3DFMT_A4R4G4B4 (plDXTextFont::ICreateTexture), which WebGPU lacks: each 4-bit channel n
     // samples as n/15, stored here as n*17 in rgba8unorm. (Metal multiplies by 255 into a
     // uint8_t, plMetalTextFont::ICreateTexture, which keeps only 0 or 255 for odd nibbles.)
-    if (fTextureView)
-        wgpuTextureViewRelease(fTextureView);
-    if (fTexture)
-        wgpuTextureRelease(fTexture);
+    plWGPURelease(fTextureView);
+    plWGPURelease(fTexture);
 
     WGPUTextureDescriptor desc = WGPU_TEXTURE_DESCRIPTOR_INIT;
     desc.label = WGPUStringView{"Font texture", WGPU_STRLEN};
@@ -132,12 +130,8 @@ void plWGPUTextFont::IInitStateBlocks()
 
 void plWGPUTextFont::DestroyObjects()
 {
-    if (fTextureView)
-        wgpuTextureViewRelease(fTextureView);
-    if (fTexture)
-        wgpuTextureRelease(fTexture);
-    fTextureView = nullptr;
-    fTexture = nullptr;
+    plWGPURelease(fTextureView);
+    plWGPURelease(fTexture);
     fInitialized = false;
 }
 

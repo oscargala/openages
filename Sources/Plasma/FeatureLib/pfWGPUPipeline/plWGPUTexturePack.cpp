@@ -134,14 +134,13 @@ struct Pack
 };
 
 // One Age's pack state: from the fetch's start (plAgeLoader::UpdateAge's prefetch or the Age's first room) until
-// another Age's pack starts, or the setting turns off. The pack is verified (IAdvance's checks, in the pack's
-// order) as its bytes arrive, a few ms per frame (Pump), and taken into use only at the Age's first room, before any
-// of its surfaces is drawn: held = HD for the visit, shipped = the shipped textures for the visit (a failed or late
-// fetch, or the setting off at a room). A shipped visit never turns HD; the next join of the Age tries again.
-// The bytes come from the pack's Cache Storage entry when its server confirms the entry is current (the game
-// files' persisted chunks are likewise revalidated online every session), else from the network; either way every
-// byte is checked here. A cached pack that fails a check is evicted and fetched
-// again from the network, once. A pack verified from the network is then kept in Cache Storage for later sessions.
+// another Age's pack starts, or the setting turns off. The pack is verified (IAdvance's checks, in the pack's order) as
+// its bytes arrive, a few ms per frame (Pump), and taken into use only at the Age's first room, before any of its
+// surfaces is drawn: held = HD for the visit, shipped = the shipped textures for the visit (a failed or late fetch, or
+// the setting off at a room); a shipped visit never turns HD, the next join tries again. The bytes come from Cache
+// Storage when the server confirms the entry is current, else from the network, and every byte is checked here; a
+// cached pack that fails a check is evicted and fetched again, once, and a pack verified from the network is kept in
+// Cache Storage.
 enum class State
 {
     kNone,

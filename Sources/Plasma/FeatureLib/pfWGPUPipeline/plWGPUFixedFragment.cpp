@@ -254,8 +254,8 @@ std::string plWGPUFixedFragment::Module(const plWGPUFixedFragmentSig& sig) const
     // call, the signature having no cube bit for it), and SPECULARENABLE is fixedFragment's runtime statement. A
     // program that leaves the uber's in.specular or a stage's in.t<s> unread draws differently on Dawn/Metal. With no
     // alpha function the entry keeps the uber's alpha test (alphaTest and its statement, which those draws never
-    // take): a program's texture samples depend on whether it contains a discard at all. fixed_fragment_table.py says
-    // where each was measured.
+    // take): a program's texture samples depend on whether it contains a discard at all. fixed_fragment_table.py names
+    // the evidence for each.
     const char* fns[2 * 8 + 3];
     size_t      nfns = 0;
     auto        helper = [&fns, &nfns](const char* text) {

@@ -342,11 +342,7 @@ public:
         Readback() = default;
         Readback(const Readback&) = delete;
         Readback& operator=(const Readback&) = delete;
-        ~Readback()
-        {
-            if (buffer)
-                wgpuBufferRelease(buffer);
-        }
+        ~Readback() { plWGPURelease(buffer); }
 
         ST::string           name;
         uint32_t             width = 0;
@@ -430,11 +426,7 @@ private:
         PipelineBuildResult() = default;
         PipelineBuildResult(const PipelineBuildResult&) = delete;
         PipelineBuildResult& operator=(const PipelineBuildResult&) = delete;
-        ~PipelineBuildResult()
-        {
-            if (pipeline)
-                wgpuRenderPipelineRelease(pipeline);
-        }
+        ~PipelineBuildResult() { plWGPURelease(pipeline); }
 
         bool                          done = false;
         WGPUCreatePipelineAsyncStatus status = WGPUCreatePipelineAsyncStatus_Force32;
@@ -484,6 +476,9 @@ private:
     std::unordered_map<plWGPUPipelineRecord, uint32_t, plWGPUPipelineRecordHashFunction> fPrewarmUnused;
 #endif
 
+    // The topology, cull and depth state both kinds of draw share, from the draw and the current D3D9 state
+    // (D3DRS_CULLMODE, ZENABLE, ZFUNC, ZWRITEENABLE).
+    void IFixedState(const FixedFunctionDraw& draw, plWGPUFixedState& fixed) const;
     // The key and fixed state of a fixed-function draw (DrawFixedFunction's), and of a shader-program draw on a target
     // whose depth format is depthFormat (DrawShader's; both programs set), from the current D3D9 state. The draws and
     // the prewarm compute their pipelines with these.
@@ -724,16 +719,13 @@ public:
 private:
     bool ICreateTexture(TextureRef* tRef, uint32_t width, uint32_t height, uint32_t layers, int32_t levels);
 
-    // The front buffer: the final colour of the last primary frame that presented, after the
-    // passes (and their MSAA resolve), before the gamma ramp (D3D9's ramp acts at scan-out,
-    // downstream of the front buffer). It is what IDirect3DDevice9::GetFrontBufferData reads
-    // (plDXPipeline::CaptureScreen). A postprocessed frame stays in fUnprocessedTexture until the
-    // next frame's passes, so that texture is the front buffer. A frame drawn straight to the
-    // canvas, until the client sets the first gamma table (pfConsoleCommands.cpp, Graphics.Gamma2),
-    // is copied into fFrontBufferCopy at SubmitCommandBuffer: the canvas texture expires when the
-    // task ends.
-    // fFrontBuffer holds a reference of its own: a texture rebuilt at the start of the next frame
-    // still holds the last presented one.
+    // The front buffer: the final colour of the last primary frame that presented, after the passes (and their MSAA
+    // resolve), before the gamma ramp (D3D9's ramp acts at scan-out, downstream of the front buffer): what
+    // IDirect3DDevice9::GetFrontBufferData reads (plDXPipeline::CaptureScreen). A postprocessed frame stays in
+    // fUnprocessedTexture until the next frame's passes, so that texture is the front buffer. A frame drawn straight to
+    // the canvas, until the client sets the first gamma table (pfConsoleCommands.cpp, Graphics.Gamma2), is copied into
+    // fFrontBufferCopy at SubmitCommandBuffer: the canvas texture expires when the task ends. fFrontBuffer holds a
+    // reference of its own: a texture rebuilt at the start of the next frame still holds the last presented one.
     WGPUTexture fFrontBuffer;
     WGPUTexture fFrontBufferCopy;
     void        ISetFrontBuffer(WGPUTexture frame);
@@ -771,12 +763,11 @@ public:
     void SetGammaTable(const uint16_t (&table)[3][256]);
     bool NeedsPostprocessing() const { return fGammaLUTTexture != nullptr; }
 
-    /// CaptureScreen's read of the front buffer: copy fFrontBuffer to a
-    /// map-read buffer (rows padded to 256 bytes), wait for the map (wgpuInstanceWaitAny, a JSPI
-    /// suspension bracketed by BeginGPUWait/EndGPUWait), and return the rows top to bottom as
-    /// kARGB32Config texels (B, G, R, A in memory; swizzled from rgba8unorm when the canvas format
-    /// is not bgra8unorm), alpha opaque. False when no frame has been presented yet, when the
-    /// wait is not allowed here, or when the map fails.
+    /// CaptureScreen's read of the front buffer: copy fFrontBuffer to a map-read buffer (rows padded to 256 bytes),
+    /// wait for the map (wgpuInstanceWaitAny, a JSPI suspension bracketed by BeginGPUWait/EndGPUWait), and return the
+    /// rows top to bottom as kARGB32Config texels (B, G, R, A in memory; swizzled from rgba8unorm when the canvas
+    /// format is not bgra8unorm), alpha opaque. False when no frame has been presented yet, when the wait is not
+    /// allowed here, or when the map fails.
     bool ReadFrontBuffer(std::vector<uint32_t>& texels, uint32_t& width, uint32_t& height, double& waitMs);
     /// wgpuInstanceWaitAny on one future, suspending the tick, inside a
     /// BeginGPUWait/EndGPUWait bracket: the frame loop's procs (plWGPUPipeline::SetGPUWaitProcs). BeginGPUWait is
