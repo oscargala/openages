@@ -49,7 +49,11 @@ wrong-type frames), on a deployment's /connect route, plus the client address be
 cap and its release on every end of a connection and after a crash, the shard-disconnect close, the 502 on a failed
 connect, the 1 MiB message limit, frames of 64 KiB to 1 MiB reaching the shard intact, the bound on queued frames and
 the static headers, and the status relay /runtime/status (server.py relay_status and StatusRelay) against a local fake
-status server.
+status server, and the refusals around the Worker's nonce spend, which runs beside its lease chain: a replay, a token
+refused by a full cap or a full nonce store, and a token refused before any Durable Object, none of them keeping a slot
+(on the Worker read from its Durable Objects' local storage as well).
+AdmissionOrderTest runs the Worker's admission (src/gateway.js handleConnect) in Node with stand-in bindings that log
+each Durable Object call, and JoinTokenCheckTest compares src/join_token.js check() with join_token.py's.
 AddressKeyTest compares the Worker's address key (src/address.js, run in Node) with gateway.py's; QueueBudgetTest runs
 the Worker's isolate queue budget (src/queue_budget.js) in Node, and WritePiecesTest its upstream write's 64 KiB pieces
 (writePieces, in the same module); EmitWorkerTest checks emit_worker.py. Two cases load
@@ -81,6 +85,7 @@ import secrets
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -400,6 +405,32 @@ class WorkerDev:
         while time.time() % 60 > 35:
             await asyncio.sleep(1)
 
+    def durable_objects(self):
+        """The Worker's Durable Objects as wrangler dev stores them under --persist-to: for each class, the objects
+        that have storage (an object gets its database when it is first called) and their storage keys counted by
+        prefix ("l" a lease, objects.js Leases; "n" a spent nonce, JoinNonces). Each object is one SQLite database
+        whose keys are in the table _cf_KV; the class's metadata.sqlite exists from the start, and its absence means
+        the layout changed (an error, so that no case passes on an empty reading)."""
+        name = json.loads((self.run / "worker/wrangler.json").read_text())["name"]
+        out = {}
+        for cls in ("JoinNonces", "IpSlots", "Capacity"):
+            folder = self.run / "state/v3/do" / f"{name}-{cls}"
+            if not (folder / "metadata.sqlite").is_file():
+                raise RuntimeError(f"no Durable Object storage for {cls} under {folder}")
+            objects = [p for p in sorted(folder.glob("*.sqlite")) if p.name != "metadata.sqlite"]
+            keys = collections.Counter()
+            for path in objects:
+                with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
+                    for (key,) in db.execute("SELECT key FROM _cf_KV"):
+                        keys[key.split(":", 1)[0]] += 1
+            out[cls] = {"objects": len(objects), **keys}
+        return out
+
+    def leases(self):
+        """The leases held, per class: {"IpSlots": n, "Capacity": n}."""
+        objects = self.durable_objects()
+        return {cls: objects[cls].get("l", 0) for cls in ("IpSlots", "Capacity")}
+
     def stop(self):
         if self.proc is not None and self.proc.poll() is None:
             try:
@@ -417,6 +448,12 @@ class WorkerDev:
 
 
 BACKENDS = {"gateway": LocalPair, "worker": WorkerDev}
+
+
+def client(address):
+    """open()'s keyword arguments for a client at this address behind the proxy (start(proxy=True)): CF-Connecting-IP,
+    which wrangler dev passes through and gateway.py trusts from 127.0.0.1 then."""
+    return {"additional_headers": {"CF-Connecting-IP": address}}
 
 
 class Contract:
@@ -465,6 +502,27 @@ class Contract:
 
     def token(self, deployment=NAME, ttl=60, now=None):
         return join_token.issue(self.secret, deployment, ttl, now)[0]
+
+    def signed(self, nonce, expiry=None):
+        """A valid token of this deployment with the given nonce (join_token.issue picks a random one); it expires in
+        60 s unless `expiry` is given."""
+        claims = {"d": NAME, "e": int(time.time()) + 60 if expiry is None else expiry, "n": nonce}
+        payload = join_token._b64(json.dumps(claims, separators=(",", ":")).encode())
+        return f"v1.{payload}.{join_token._b64(join_token._mac(self.secret, payload))}"
+
+    async def leases_back(self, seconds=5):
+        """Waits for the relays that ended to give their slots back: on the Worker until its Durable Objects hold no
+        lease (within `seconds`), returning them; on gateway.py, which frees a slot as its connection closes, half a
+        second (test_concurrency's wait), returning None."""
+        if self.backend != "worker":
+            await asyncio.sleep(0.5)
+            return None
+        deadline = time.monotonic() + seconds
+        while True:
+            held = self.inst.leases()
+            if not any(held.values()) or time.monotonic() > deadline:
+                return held
+            await asyncio.sleep(0.1)
 
     def open(self, url, token=None, origin=None, **kw):
         protocols = ["plasma"] + ([f"plasma.join.{token}"] if token else [])
@@ -828,6 +886,146 @@ class Contract:
             self.assertEqual(first, (503, "Gateway at capacity"))
             self.assertGreater(waited, 60)
             self.assertLess(waited, 130)
+
+    # The Worker spends a token's nonce (JoinNonces) while its lease chain runs (IpSlots, then Capacity); gateway.py
+    # checks the whole token and then takes its slots. The refusals below are gateway.py's order on both backends, and
+    # no refusal keeps a slot. On the Worker the cases also read its Durable Objects' storage (WorkerDev.leases).
+    async def test_replay_gives_its_leases_back(self):
+        # A replayed token while its address and the gateway have room: 401, and the leases the Worker's chain took
+        # meanwhile are given back before the answer. The address's cap is 1 and the global cap 2 with one held, so the
+        # address's next connection is admitted at once only if both came back.
+        url = self.start(proxy=True, connections=2, connectionsPerIp=1, connectsPerMinutePerIp=1000)
+        tok = self.token()
+        held = await self.open(url, tok, **client("203.0.113.1"))
+        seen = {"replay": await self.refused(url, tok, **client("203.0.113.2"))}
+        if self.backend == "worker":
+            seen["leases after the replay"] = self.inst.leases()
+        fresh = await self.open(url, self.token(), **client("203.0.113.2"))
+        seen["third address"] = await self.refused(url, self.token(), **client("203.0.113.3"))
+        await held.close()
+        await fresh.close()
+        seen["after both closed"] = await self.leases_back()
+        again = [await self.admitted(url, **client(a)) for a in ("203.0.113.4", "203.0.113.5")]
+        for ws in again:
+            await ws.close()
+        self.record(**seen)
+        self.assertEqual(seen["replay"], (401, "Join token already used"))
+        self.assertEqual(seen["third address"], (503, "Gateway at capacity"))
+        if self.backend == "worker":
+            self.assertEqual(seen["leases after the replay"], {"IpSlots": 1, "Capacity": 1})  # the held relay's
+            self.assertEqual(seen["after both closed"], {"IpSlots": 0, "Capacity": 0})
+
+    async def test_token_spent_at_address_capacity(self):
+        # A fresh token refused 429 by the per-address cap is spent (gateway.py spends it before it takes a slot): a
+        # second use answers 401, while the cap is still full (the replay refusal comes first) and after it is free.
+        url = self.start(connectionsPerIp=1, connectsPerMinutePerIp=1000)
+        held = await self.open(url, self.token())
+        tok = self.token()
+        seen = {"at capacity": await self.refused(url, tok), "again at capacity": await self.refused(url, tok)}
+        if self.backend == "worker":
+            objects = self.inst.durable_objects()
+            seen["spent nonces"] = objects["JoinNonces"].get("n", 0)
+            seen["leases"] = self.inst.leases()
+        await held.close()
+        seen["after the close"] = await self.leases_back()
+        seen["again, room"] = await self.refused(url, tok)
+        async with self.open(url, self.token()):  # the refusals kept no slot
+            pass
+        self.record(**seen)
+        self.assertEqual(seen["at capacity"], (429, "Too many concurrent connections from this address"))
+        self.assertEqual(seen["again at capacity"], (401, "Join token already used"))
+        self.assertEqual(seen["again, room"], (401, "Join token already used"))
+        if self.backend == "worker":
+            self.assertEqual(seen["spent nonces"], 2)  # the held relay's token and tok
+            self.assertEqual(seen["leases"], {"IpSlots": 1, "Capacity": 1})  # the held relay's
+            self.assertEqual(seen["after the close"], {"IpSlots": 0, "Capacity": 0})
+
+    async def test_token_spent_at_global_capacity(self):
+        # A fresh token refused 503 by the global cap is spent, and the per-address lease the chain took before the
+        # global one is given back: that address is admitted once the global slot is free (a kept lease would answer
+        # 429, which admitted() does not wait out).
+        url = self.start(proxy=True, connections=1, connectionsPerIp=1, connectsPerMinutePerIp=1000)
+        held = await self.open(url, self.token(), **client("203.0.113.1"))
+        tok = self.token()
+        seen = {"global cap": await self.refused(url, tok, **client("203.0.113.2"))}
+        if self.backend == "worker":
+            seen["leases"] = self.inst.leases()
+        seen["again"] = await self.refused(url, tok, **client("203.0.113.3"))
+        await held.close()
+        ws = await self.admitted(url, **client("203.0.113.2"))
+        await ws.close()
+        self.record(**seen)
+        self.assertEqual(seen["global cap"], (503, "Gateway at capacity"))
+        self.assertEqual(seen["again"], (401, "Join token already used"))
+        if self.backend == "worker":
+            self.assertEqual(seen["leases"], {"IpSlots": 1, "Capacity": 1})  # the held relay's
+
+    async def test_full_nonce_store_gives_its_leases_back(self):
+        # The Worker keeps at most NONCES_PER_SHARD (4096) unexpired nonces per JoinNonces shard, the nonce's first
+        # character (objects.js, gateway.js nonceShard), and refuses one more 503 "Gateway at capacity". That refusal
+        # comes from the nonce spend while the lease chain holds both leases: they are given back before the answer.
+        if self.backend != "worker":
+            self.skipTest("gateway.py's replay store (join_token.Verifier) has no bound: no 503 from it")
+        url = self.start(proxy=True, connections=1, connectionsPerIp=1, connectsPerMinutePerIp=100000)
+        held = await self.open(url, self.signed("B" + secrets.token_urlsafe(16)[1:]), **client("203.0.113.1"))
+        # Fill shard "A" with tokens the address cap refuses 429 after their nonces are spent.
+        fill = [self.signed("A" + secrets.token_urlsafe(16)[1:]) for _ in range(4096)]
+        statuses = collections.Counter()
+        for i in range(0, len(fill), 64):
+            got = await asyncio.gather(*(self.refused(url, t, **client("203.0.113.1")) for t in fill[i : i + 64]))
+            statuses.update(status for status, _ in got)
+        seen = {"fill": dict(statuses), "spent nonces": self.inst.durable_objects()["JoinNonces"].get("n", 0)}
+        await held.close()
+        seen["after the close"] = await self.leases_back()
+        seen["one more"] = await self.refused(
+            url, self.signed("A" + secrets.token_urlsafe(16)[1:]), **client("203.0.113.2")
+        )
+        seen["leases after it"] = self.inst.leases()
+        async with self.open(url, self.signed("C" + secrets.token_urlsafe(16)[1:]), **client("203.0.113.2")):
+            pass  # another shard, at once: both slots are free
+        self.record(**seen)
+        self.assertEqual(seen["fill"], {429: 4096})
+        self.assertEqual(seen["spent nonces"], 4097)  # the fill and the held relay's
+        self.assertEqual(seen["after the close"], {"IpSlots": 0, "Capacity": 0})
+        self.assertEqual(seen["one more"], (503, "Gateway at capacity"))
+        self.assertEqual(seen["leases after it"], {"IpSlots": 0, "Capacity": 0})
+
+    async def test_refused_token_touches_no_durable_object(self):
+        # A token its stateless checks refuse (absent, forged, another deployment's, expired, from the future) spends
+        # no nonce and takes no slot: the forged one carries a real token's nonce, and that token is admitted
+        # afterwards into the one slot. On the Worker no Durable Object was called before that admission: none has
+        # storage yet, and each has once it is admitted (the reading's own control).
+        url = self.start(connections=1, connectionsPerIp=1, connectsPerMinutePerIp=1000)
+        tok = self.token()
+        seen = {
+            "absent": await self.refused(url),
+            "forged": await self.refused(url, tok[:-2] + ("AA" if tok[-2:] != "AA" else "BB")),
+            "another deployment": await self.refused(url, self.token("another")),
+            "expired": await self.refused(url, self.token(now=time.time() - 120)),
+            "future": await self.refused(url, self.token(now=time.time() + 3600)),
+        }
+        if self.backend == "worker":
+            seen["objects before"] = {c: v["objects"] for c, v in self.inst.durable_objects().items()}
+        async with self.open(url, tok) as ws:
+            await ws.send(b"\x0aping")
+            seen["admitted"] = (await ws.recv()).decode()
+        if self.backend == "worker":
+            seen["objects after"] = {c: v["objects"] for c, v in self.inst.durable_objects().items()}
+        self.record(**seen)
+        self.assertEqual(
+            {k: seen[k] for k in ("absent", "forged", "another deployment", "expired", "future", "admitted")},
+            {
+                "absent": (401, "Join token required"),
+                "forged": (401, "Invalid join token"),
+                "another deployment": (403, "Join token for another deployment"),
+                "expired": (401, "Join token expired"),
+                "future": (401, "Invalid join token"),
+                "admitted": "\nping",
+            },
+        )
+        if self.backend == "worker":
+            self.assertEqual(seen["objects before"], {"JoinNonces": 0, "IpSlots": 0, "Capacity": 0})
+            self.assertEqual(seen["objects after"], {"JoinNonces": 1, "IpSlots": 1, "Capacity": 1})
 
     async def test_isolate_id(self):
         # The Worker's own field: every log row, a relay's and a refusal's, names the isolate that wrote it by a random
@@ -2136,6 +2334,330 @@ class WritePiecesTest(unittest.TestCase):
         self.assertEqual(fail["lengths"], [self.MAX, self.MAX])  # the second write failed: none after it
         self.assertEqual(fail["result"], "write failed at 1")
         self.assertEqual((stop["most"], fail["most"]), (1, 1))
+
+
+# handleConnect (src/gateway.js) in Node, with stand-ins for its Cloudflare bindings: cloudflare:sockets and
+# cloudflare:workers by module hooks, the rate binding always admitting, and Durable Objects that log each call (start
+# and end, in ms from the handshake's start), wait the case's delay per object and answer as the case says. argv[1] is
+# the source folder's file URL; stdin holds a JSON list of cases, stdout gets one result per case.
+ADMISSION_DRIVER = r"""
+import { registerHooks } from 'node:module';
+const STUBS = {
+  'cloudflare:sockets': 'export const connect = (...a) => globalThis.stubConnect(...a);',
+  'cloudflare:workers': 'export class DurableObject {}',
+};
+registerHooks({
+  resolve: (s, c, next) => (s in STUBS ? { url: 'stub:' + s, shortCircuit: true } : next(s, c)),
+  load: (u, c, next) =>
+    u.startsWith('stub:') ? { format: 'module', source: STUBS[u.slice(5)], shortCircuit: true } : next(u, c),
+});
+const gateway = await import(process.argv[1] + '/gateway.js');
+const joinToken = await import(process.argv[1] + '/join_token.js');
+const rows = [];
+console.log = (line) => rows.push(JSON.parse(line)); // gateway.js log(): one JSON row per refusal
+const hex = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, '0')).join('');
+const key = joinToken.importKey(hex);
+const DEPLOYMENT = 'admission-order';
+const input = await new Promise((r) => {
+  let d = '';
+  process.stdin.on('data', (c) => (d += c));
+  process.stdin.on('end', () => r(d));
+});
+const out = [];
+for (const c of JSON.parse(input)) {
+  const now = Date.now() / 1000;
+  let token = null;
+  if (c.token === 'expired') token = (await joinToken.issue(key, DEPLOYMENT, 60, now - 120))[0];
+  else if (c.token === 'future') token = (await joinToken.issue(key, DEPLOYMENT, 60, now + 3600))[0];
+  else if (c.token === 'foreign') token = (await joinToken.issue(key, 'another', 60))[0];
+  else if (c.token !== 'none') token = (await joinToken.issue(key, DEPLOYMENT, 60))[0];
+  if (c.token === 'forged') token = token.slice(0, -2) + (token.endsWith('AA') ? 'BB' : 'AA');
+  const log = [], pending = [], held = { ip: new Set(), global: new Set() }, spent = new Set();
+  let t0 = 0;
+  const mark = (obj, method, at) => log.push({ obj, method, at, t: performance.now() - t0 });
+  const call = async (obj, method, answer) => {
+    mark(obj, method, 'start');
+    await new Promise((r) => setTimeout(r, (c.delay || {})[obj] || 0));
+    mark(obj, method, 'end');
+    if (answer === 'throw') throw new Error(obj + ' ' + method + ' failed');
+    return answer;
+  };
+  const leases = (obj) => ({
+    idFromName: (name) => name,
+    get: () => ({
+      acquire: async () => {
+        const a = c[obj] || 'lease';
+        const lease = await call(obj, 'acquire', a === 'lease' ? obj + '-' + log.length : a === 'null' ? null : a);
+        if (lease !== null) held[obj].add(lease);
+        return lease;
+      },
+      release: async (lease) => {
+        await call(obj, 'release');
+        held[obj].delete(lease);
+      },
+      renew: async () => true,
+    }),
+  });
+  const env = {
+    DEPLOYMENT,
+    JOIN_TTL: '60',
+    JOIN_KEY: hex,
+    UPSTREAMS: { pairs: [['127.0.0.1', 14617]] },
+    LIMITS: {
+      connectionsPerIp: 1,
+      connectsPerMinutePerIp: 30,
+      bytesPerSecond: 65536,
+      idleSeconds: 60,
+      connections: 1,
+      isolateQueueBytes: 16 * 1024 * 1024,
+    },
+    ORIGINS: ['https://page.test'],
+    PUBLIC_HOSTS: ['gateway.test'],
+    CONNECTS: { limit: async () => ({ success: true }) },
+    JOIN_NONCES: {
+      idFromName: (name) => name,
+      get: () => ({
+        spend: async (nonce) => {
+          const answer = await call('nonce', 'spend', c.nonce || 'spent');
+          if (answer === 'spent') spent.add(nonce);
+          return answer;
+        },
+      }),
+    },
+    IP_SLOTS: leases('ip'),
+    CAPACITY: leases('global'),
+  };
+  globalThis.stubConnect = () => {
+    mark('socket', 'connect', 'start');
+    return { opened: new Promise((_, reject) => setTimeout(() => reject(new Error('refused')), 0)), close: async () => {} };
+  };
+  const headers = new Headers({
+    Host: 'gateway.test',
+    Origin: 'https://page.test',
+    'CF-Connecting-IP': '203.0.113.7',
+    'Sec-WebSocket-Protocol': token === null ? 'plasma' : 'plasma, plasma.join.' + token,
+  });
+  if (c.upgrade !== false) headers.set('Upgrade', 'websocket');
+  const request = { url: 'https://gateway.test/connect?host=127.0.0.1&port=14617', headers };
+  let status = null, body = null, thrown = null, ms;
+  t0 = performance.now();
+  try {
+    const r = await gateway.handleConnect(request, env, { waitUntil: (p) => pending.push(p) });
+    ms = performance.now() - t0;
+    [status, body] = [r.status, (await r.text()).trim()];
+  } catch (e) {
+    ms = performance.now() - t0;
+    thrown = e.message;
+  }
+  const atAnswer = { ip: held.ip.size, global: held.global.size };
+  await Promise.allSettled(pending);
+  const after = { ip: held.ip.size, global: held.global.size };
+  const refused = rows.splice(0).filter((r) => 'refused' in r).map((r) => r.refused);
+  out.push({ status, body, thrown, ms, log, atAnswer, after, spent: spent.size, refused });
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def admission(cases, src=WORKER / "src"):
+    """Runs ADMISSION_DRIVER on the cases with the gateway.js of `src`; returns its results."""
+    if not NODE:
+        raise RuntimeError("node not found: set PLASMA_NODE or put node on PATH")
+    r = subprocess.run(
+        [NODE, "--input-type=module", "-e", ADMISSION_DRIVER, Path(src).resolve().as_uri()],
+        input=json.dumps(cases),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=WORKER,
+    )
+    if r.returncode != 0:
+        raise RuntimeError("admission driver: " + r.stderr[-2000:])
+    return json.loads(r.stdout)
+
+
+class AdmissionOrderTest(unittest.TestCase):
+    """handleConnect's admission (src/gateway.js, in Node, ADMISSION_DRIVER): the token's stateless checks reach no
+    Durable Object; the nonce spend and the lease chain start together, the chain serial inside (the address's lease,
+    then the global one); the refusal answered is gateway.py's (the spend's before the chain's); every lease a refused
+    or failed admission took is given back, before the answer; a spent nonce stays spent; connect() comes only after
+    admission. A case names the token ("fresh" unless given), the nonce store's answer (nonce: spent, replay, full or
+    throw), each lease object's (ip, global: lease, null or throw), the upgrade header and per-object delays (ms)."""
+
+    def calls(self, result):
+        return [(e["obj"], e["method"], e["at"]) for e in result["log"]]
+
+    def outcome(self, result):
+        return result["thrown"] or (result["status"], result["body"])
+
+    def test_stateless_refusals_reach_no_durable_object(self):
+        kinds = ["none", "forged", "foreign", "expired", "future"]
+        got = admission([{"token": k} for k in kinds])
+        self.assertEqual(
+            [self.outcome(r) for r in got],
+            [
+                (401, "Join token required"),
+                (401, "Invalid join token"),
+                (403, "Join token for another deployment"),
+                (401, "Join token expired"),
+                (401, "Invalid join token"),
+            ],
+        )
+        for kind, r in zip(kinds, got):
+            self.assertEqual(r["log"], [], kind)  # no nonce spend, no lease, no connect
+
+    def test_spend_and_chain_start_together(self):
+        (r,) = admission([{"delay": {"nonce": 30, "ip": 10, "global": 10}}])
+        calls = self.calls(r)
+        self.assertEqual(self.outcome(r), (502, "Shard connection failed"))  # admitted; the stand-in connect fails
+        # both start before either ends; the global lease after the address's
+        self.assertEqual(calls[:2], [("nonce", "spend", "start"), ("ip", "acquire", "start")])
+        self.assertLess(calls.index(("ip", "acquire", "end")), calls.index(("global", "acquire", "start")))
+        # connect() after the spend and both leases, once
+        first_connect = calls.index(("socket", "connect", "start"))
+        for end in [("nonce", "spend", "end"), ("ip", "acquire", "end"), ("global", "acquire", "end")]:
+            self.assertLess(calls.index(end), first_connect, end)
+        self.assertEqual(calls.count(("socket", "connect", "start")), 1)
+        self.assertEqual((r["spent"], r["atAnswer"], r["after"]), (1, {"ip": 1, "global": 1}, {"ip": 0, "global": 0}))
+
+    def test_refused_spend_gives_the_leases_back(self):
+        cases = [
+            {"nonce": "replay"},
+            {"nonce": "full"},
+            # the spend's refusal before the chain's, whatever the chain met
+            {"nonce": "replay", "ip": "null"},
+            {"nonce": "replay", "global": "null"},
+            {"nonce": "replay", "global": "throw"},
+            {"nonce": "full", "ip": "throw"},
+        ]
+        got = admission(cases)
+        want = [(401, "Join token already used"), (503, "Gateway at capacity")]
+        self.assertEqual([self.outcome(r) for r in got], [want[0], want[1], want[0], want[0], want[0], want[1]])
+        for case, r in zip(cases, got):
+            self.assertEqual(r["atAnswer"], {"ip": 0, "global": 0}, case)  # given back before the answer
+            self.assertEqual(r["spent"], 0, case)
+            self.assertNotIn(("socket", "connect", "start"), self.calls(r), case)
+        # free leases: the chain took both and released both
+        self.assertEqual(
+            [c for c in self.calls(got[0]) if c[0] != "nonce"],
+            [
+                ("ip", "acquire", "start"),
+                ("ip", "acquire", "end"),
+                ("global", "acquire", "start"),
+                ("global", "acquire", "end"),
+                ("ip", "release", "start"),
+                ("global", "release", "start"),
+                ("ip", "release", "end"),
+                ("global", "release", "end"),
+            ],
+        )
+
+    def test_failed_spend_gives_the_leases_back(self):
+        got = admission([{"nonce": "throw"}, {"nonce": "throw", "ip": "null"}, {"nonce": "throw", "global": "null"}])
+        for r in got:
+            self.assertEqual(self.outcome(r), "nonce spend failed")  # rethrown: the runtime answers 500
+            self.assertEqual(r["atAnswer"], {"ip": 0, "global": 0})
+            self.assertEqual(r["refused"], [])
+            self.assertNotIn(("socket", "connect", "start"), self.calls(r))
+
+    def test_chain_refusal_keeps_the_nonce_spent(self):
+        address, full = admission([{"ip": "null"}, {"global": "null"}])
+        self.assertEqual(self.outcome(address), (429, "Too many concurrent connections from this address"))
+        self.assertEqual(self.outcome(full), (503, "Gateway at capacity"))
+        self.assertNotIn("global", {c[0] for c in self.calls(address)})  # a refused address lease: no global call
+        self.assertIn(("ip", "release", "end"), self.calls(full))  # the address's lease given back
+        for r in (address, full):
+            self.assertEqual((r["spent"], r["atAnswer"]), (1, {"ip": 0, "global": 0}))
+            self.assertNotIn(("socket", "connect", "start"), self.calls(r))
+
+    def test_chain_failure_keeps_the_nonce_spent(self):
+        address, full = admission([{"ip": "throw"}, {"global": "throw"}])
+        self.assertEqual(self.outcome(address), "ip acquire failed")
+        self.assertEqual(self.outcome(full), "global acquire failed")
+        self.assertNotIn("global", {c[0] for c in self.calls(address)})
+        for r in (address, full):
+            self.assertEqual((r["spent"], r["atAnswer"], r["refused"]), (1, {"ip": 0, "global": 0}, []))
+
+    def test_admitted_without_upgrade(self):
+        (r,) = admission([{"upgrade": False}])
+        self.assertEqual(self.outcome(r), (426, "Upgrade Required"))  # after admission, as before
+        self.assertEqual((r["spent"], r["after"]), (1, {"ip": 0, "global": 0}))
+        self.assertNotIn(("socket", "connect", "start"), self.calls(r))
+
+
+class JoinTokenCheckTest(unittest.TestCase):
+    """join_token.js check(), now verify() then redeem(), against join_token.py Verifier.check on the same tokens in
+    the same order: the same refusals (status and reason), and verify() returns the nonce and expiry check() spends."""
+
+    def test_check_matches_join_token_py(self):
+        if not NODE:
+            self.fail("node not found: set PLASMA_NODE or put node on PATH")
+        secret = secrets.token_bytes(32)
+
+        def signed(payload_json):
+            payload = join_token._b64(payload_json.encode())
+            return f"v1.{payload}.{join_token._b64(join_token._mac(secret, payload))}"
+
+        e = int(time.time()) + 30
+        fresh = join_token.issue(secret, "check-test", 60)[0]
+        tokens = [
+            fresh,
+            fresh,  # replay
+            None,
+            "",
+            "x" * 600,
+            "v1.abc",
+            fresh[:-2] + ("AA" if fresh[-2:] != "AA" else "BB"),
+            join_token.issue(secret, "another", 60)[0],
+            join_token.issue(secret, "check-test", 60, time.time() - 120)[0],
+            join_token.issue(secret, "check-test", 60, time.time() + 3600)[0],
+            signed(f'{{"d":"check-test","e":{e}.0,"n":"fraction"}}'),
+            signed(f'{{"d":"check-test","e":true,"n":"bool"}}'),
+            signed(f'{{"d":"check-test","e":{e},"n":"extra","x":1}}'),
+            signed(f'{{"d":"check-test","e":{e}}}'),
+            signed(f'{{"d":"check-test","e":{e},"n":"crafted"}}'),
+            signed(f'{{"d":"check-test","e":{e},"n":"crafted"}}'),
+        ]
+        verifier = join_token.Verifier(secret, "check-test", 60)
+        want = []
+        for t in tokens:
+            try:
+                verifier.check(t)
+                want.append("ok")
+            except join_token.Refusal as r:
+                want.append([r.status, r.reason])
+        url = (WORKER / "src/join_token.js").as_uri()
+        script = (
+            f"import {{ check, verify, importKey, Refusal }} from {json.dumps(url)};"
+            f"const key = importKey({json.dumps(secret.hex())}); const spent = new Set(); const out = [];"
+            "const input = await new Promise((r) => { let d = ''; process.stdin.on('data', (c) => (d += c));"
+            "process.stdin.on('end', () => r(d)); });"
+            "const run = async (f) => { try { return await f(); } catch (e) {"
+            "if (e instanceof Refusal) return [e.status, e.reason]; throw e; } };"
+            "for (const t of JSON.parse(input)) {"
+            "const checked = await run(async () => { await check(key, 'check-test', 60, t,"
+            "async (n) => !spent.has(n) && !!spent.add(n)); return 'ok'; });"
+            "const verified = await run(() => verify(key, 'check-test', 60, t));"
+            "out.push({ checked, verified }); }"
+            "process.stdout.write(JSON.stringify(out));"
+        )
+        r = subprocess.run(
+            [NODE, "--input-type=module", "-e", script],
+            input=json.dumps(tokens),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=WORKER,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        got = json.loads(r.stdout)
+        self.assertEqual([g["checked"] for g in got], want)
+        for t, w, g in zip(tokens, want, got):
+            if w == "ok" or w == [401, "Join token already used"]:
+                claims = json.loads(join_token._unb64(t.split(".")[1]))
+                self.assertEqual(g["verified"], {"nonce": claims["n"], "expiry": claims["e"]})
+            else:
+                self.assertEqual(g["verified"], w)  # verify() refuses what check() refuses before the replay check
 
 
 class EmitWorkerTest(unittest.TestCase):

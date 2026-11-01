@@ -60,7 +60,9 @@ const KEY_RE = /^[0-9a-f]{64}$/;
 // other number a float, which join_token.py refuses as an expiry; JSON.parse makes 30, 30.0 and 3e1 the same number,
 // so the expiry's source text decides.
 const INTEGER_LITERAL = /^-?(0|[1-9][0-9]*)$/;
-const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+// base64 to base64url and back (the two characters that differ, and the padding join_token.py strips)
+const TO_URL = { '+': '-', '/': '_', '=': '' };
+const FROM_URL = { '-': '+', _: '/' };
 const encoder = new TextEncoder();
 
 export class Refusal extends Error {
@@ -74,41 +76,16 @@ export class Refusal extends Error {
 }
 
 export function b64url(bytes) {
-  let out = '';
-  let i = 0;
-  for (; i + 2 < bytes.length; i += 3) {
-    const v = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
-    out += B64URL[v >> 18] + B64URL[(v >> 12) & 63] + B64URL[(v >> 6) & 63] + B64URL[v & 63];
-  }
-  if (bytes.length - i === 1) {
-    const v = bytes[i] << 16;
-    out += B64URL[v >> 18] + B64URL[(v >> 12) & 63];
-  } else if (bytes.length - i === 2) {
-    const v = (bytes[i] << 16) | (bytes[i + 1] << 8);
-    out += B64URL[v >> 18] + B64URL[(v >> 12) & 63] + B64URL[(v >> 6) & 63];
-  }
-  return out; // unpadded, as join_token.py _b64 (rstrip '=')
+  // unpadded, as join_token.py _b64 (rstrip '=')
+  return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, (c) => TO_URL[c]);
 }
 
 export function unb64url(text) {
   // join_token.py _unb64: urlsafe_b64decode after re-padding. Python refuses a length of 1 mod 4 (binascii.Error) and
-  // ignores the unused low bits of the last character; the callers only pass [A-Za-z0-9_-] (the token pattern).
-  if (text.length % 4 === 1) return null;
-  const out = new Uint8Array(Math.floor((text.length * 3) / 4));
-  let bits = 0,
-    acc = 0,
-    o = 0;
-  for (const c of text) {
-    const v = B64URL.indexOf(c);
-    if (v < 0) return null;
-    acc = (acc << 6) | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out[o++] = (acc >> bits) & 255;
-    }
-  }
-  return out.subarray(0, o);
+  // ignores the unused low bits of the last character, as atob does; the callers only pass [A-Za-z0-9_-] (the token
+  // pattern), and anything else is refused here before atob, which would skip whitespace.
+  if (text.length % 4 === 1 || /[^A-Za-z0-9_-]/.test(text)) return null;
+  return Uint8Array.from(atob(text.replace(/[-_]/g, (c) => FROM_URL[c])), (c) => c.charCodeAt(0));
 }
 
 const keys = new Map();
@@ -144,8 +121,21 @@ export async function issue(key, deployment, ttl, now = Date.now() / 1000) {
 
 export async function check(key, deployment, ttl, token, spend, now = () => Date.now() / 1000) {
   // join_token.py Verifier.check: accepts and spends the token, or throws Refusal. Order: shape, MAC, deployment,
-  // expiry, replay. `spend(nonce, expiry)` is the replay store: true when the nonce was fresh and is now spent; it may
-  // throw a Refusal itself.
+  // expiry (verify), then replay (redeem). `spend(nonce, expiry)` is the replay store: true when the nonce was fresh and
+  // is now spent; it may throw a Refusal itself.
+  await redeem(await verify(key, deployment, ttl, token, now), spend);
+}
+
+export async function redeem(claims, spend) {
+  // The replay step of check: spends the nonce of a token verify() accepted, or throws Refusal. It is the one step
+  // that touches state, so the gateway can run it beside its lease chain (gateway.js handleConnect).
+  if (!(await spend(claims.nonce, claims.expiry))) throw new Refusal(401, 'Join token already used');
+}
+
+export async function verify(key, deployment, ttl, token, now = () => Date.now() / 1000) {
+  // The stateless steps of check, in its order: shape, MAC, deployment, expiry. Returns the token's nonce and expiry
+  // ({ nonce, expiry }) for redeem, or throws the Refusal check throws. Nothing is spent, so a forged, expired or
+  // foreign token reaches no replay store.
   if (token === null || token === undefined) throw new Refusal(401, 'Join token required');
   if (token.length > MAX_TOKEN || !TOKEN_RE.test(token)) throw new Refusal(401, 'Invalid join token');
   const [, payload, mac] = token.split('.');
@@ -189,7 +179,7 @@ export async function check(key, deployment, ttl, token, spend, now = () => Date
   const t = now();
   if (claims.e < t) throw new Refusal(401, 'Join token expired');
   if (claims.e > t + ttl + SKEW) throw new Refusal(401, 'Invalid join token');
-  if (!(await spend(claims.n, claims.e))) throw new Refusal(401, 'Join token already used');
+  return { nonce: claims.n, expiry: claims.e };
 }
 
 export function offeredToken(header) {

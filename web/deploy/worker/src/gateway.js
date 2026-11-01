@@ -41,9 +41,11 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 *==LICENSE==*/
 
 // GET /connect?host=..&port=.. with a WebSocket upgrade: plasma_web/gateway.py (check_and_connect, make_relay)
-// on Workers. A connection is admitted in gateway.py's order, every check before any TCP connection: the client
+// on Workers. A connection is admitted with gateway.py's refusals, every check before any TCP connection: the client
 // address, the connect rate per address, the route and the operator's upstream allowlist, Host, Origin, the join
-// token, the concurrent connections per address, the gateway's global cap. Then the TCP connection to the shard is
+// token, the concurrent connections per address, the gateway's global cap. The token's replay check and the two caps
+// are Durable Object calls; the replay check runs beside the caps' lease chain (handleConnect), and the refusal
+// answered is the one gateway.py's order gives. Then the TCP connection to the shard is
 // opened BEFORE the 101 answer. The native client reports a connection only once its TCP connect has succeeded
 // (pnAcSocket.cpp AsyncSocketConnect, SocketInitConnect) and the browser client reports it on the WebSocket's open
 // (pnAcSocketEmscripten.cpp plws_on_open), so an unreachable shard answers 502 and the client sees a close before
@@ -227,7 +229,7 @@ export function nonceShard(env, nonce) {
 }
 
 async function spendNonce(env, nonce, expiry) {
-  // The replay check of joinToken.check: true when the nonce was fresh and is now spent.
+  // The replay store of joinToken.redeem: true when the nonce was fresh and is now spent.
   const result = await nonceShard(env, nonce).spend(nonce, expiry);
   if (result === 'full') throw new joinToken.Refusal(503, 'Gateway at capacity');
   return result === 'spent';
@@ -300,15 +302,31 @@ export async function handleConnect(request, env, ctx) {
   if (!cfg.hosts.includes(request.headers.get('Host'))) return refuse(request, url, ip, 403, 'Host not allowed');
   if (!cfg.origins.includes(request.headers.get('Origin'))) return refuse(request, url, ip, 403, 'Origin not allowed');
   const protocols = request.headers.get('Sec-WebSocket-Protocol');
+  let claims;
   try {
-    await joinToken.check(cfg.key, cfg.deployment, cfg.ttl, joinToken.offeredToken(protocols), (nonce, expiry) =>
-      spendNonce(env, nonce, expiry),
-    );
+    // The token's stateless checks first: a forged, expired or foreign token reaches no Durable Object.
+    claims = await joinToken.verify(cfg.key, cfg.deployment, cfg.ttl, joinToken.offeredToken(protocols));
   } catch (e) {
     if (e instanceof joinToken.Refusal) return refuse(request, url, ip, e.status, e.reason);
     throw e;
   }
-  const slots = await acquireSlots(env, cfg, key);
+  // Then the nonce spend (JoinNonces) and the lease chain (IpSlots, then Capacity) run together; each is a round trip
+  // to a Durable Object, and gateway.py's order (the replay check, then the leases) decides only which refusal is
+  // answered. A refused or failed spend wins: the chain's leases are released and the spend's refusal is answered, as
+  // when the spend ran first. A spent nonce stays spent when the chain refuses or fails, as before.
+  const [spent, leased] = await Promise.allSettled([
+    joinToken.redeem(claims, (nonce, expiry) => spendNonce(env, nonce, expiry)),
+    acquireSlots(env, cfg, key),
+  ]);
+  if (spent.status === 'rejected') {
+    if (leased.status === 'fulfilled' && typeof leased.value[0] !== 'number') await releaseSlots(leased.value);
+    if (spent.reason instanceof joinToken.Refusal) {
+      return refuse(request, url, ip, spent.reason.status, spent.reason.reason);
+    }
+    throw spent.reason;
+  }
+  if (leased.status === 'rejected') throw leased.reason; // acquireSlots released what it took
+  const slots = leased.value;
   if (typeof slots[0] === 'number') return refuse(request, url, ip, slots[0], slots[1]);
   // From here every path either hands the slots to the relay, which releases them when it ends, or releases them.
   let sock;
