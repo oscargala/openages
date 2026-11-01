@@ -71,6 +71,9 @@ void plDisplayCanvasBacking(int width, int height);
 void plDisplayWatchScale(int32_t* shared);
 int  plDisplayPlayerMode();
 void plDisplayWatchWindow(int32_t* seq, double* fields);
+// The fullscreen layer, plEmscriptenFullscreen.js, which declares an ASYNC main-thread proxy. No suspension,
+// synchronous page call or engine/GPU work is permitted in this call.
+void plFullscreenMode(int width, int height, int windowed, double scale);
 }
 
 // The display's progress lines (its modes, scales and resizes) are a harness build's status lines, through the client
@@ -94,9 +97,6 @@ void IDisplayStatus(const ST::string& line)
 
 // player mode's IResizeNativeDisplayDevice (below)
 void ResizePlayer(int width, int height, bool windowed);
-
-plEmscriptenDisplay::FullscreenHook s_fullscreenHook = nullptr;
-void*                               s_fullscreenUser = nullptr;
 
 // [0] = change sequence (the page adds 1 after writing [1]), [1] = the ratio (float bits).
 alignas(8) int32_t s_scaleShared[2] = {0, 0};
@@ -126,23 +126,16 @@ void PollScale(void*)
 }
 } // namespace
 
-void plEmscriptenDisplay::SetFullscreenHook(FullscreenHook hook, void* user)
-{
-    s_fullscreenHook = hook;
-    s_fullscreenUser = user;
-}
-
 void plEmscriptenDisplay::ResizeNative(int width, int height, bool windowed)
 {
     if (PlayerMode()) {
         ResizePlayer(width, height, windowed);
         return;
     }
-    DISPLAY_STATUS("DISPLAY: IResizeNativeDisplayDevice {}x{} windowed {} (fullscreen hook {})", width, height,
-                   windowed ? 1 : 0, s_fullscreenHook ? "called" : "not registered");
+    DISPLAY_STATUS("DISPLAY: IResizeNativeDisplayDevice {}x{} windowed {} (fullscreen hook called)", width, height,
+                   windowed ? 1 : 0);
     plDisplayCanvasBacking(width, height);
-    if (s_fullscreenHook)
-        s_fullscreenHook(width, height, windowed, s_scale, s_fullscreenUser);
+    plFullscreenMode(width, height, windowed ? 1 : 0, s_scale);
 }
 
 void plEmscriptenDisplay::StartScaleWatch(float initialScale)
@@ -463,11 +456,9 @@ void ResizePlayer(int width, int height, bool windowed)
                    width, height, windowed ? 1 : 0,
                    s_fraction > 0. ? ST::format("{.3f} of the device pixels", s_fraction)
                                    : ST::format("the default ({.3f})", DefaultFraction(w)),
-                   s_fullscreenHook ? (windowed ? "asked to leave fullscreen" : "asked for fullscreen")
-                                    : "not registered");
-    if (s_fullscreenHook)
-        s_fullscreenHook(width, height, windowed, s_scale, s_fullscreenUser);
-    if (s_fullscreenHook && windowed == w.fullscreen)
+                   windowed ? "asked to leave fullscreen" : "asked for fullscreen");
+    plFullscreenMode(width, height, windowed ? 1 : 0, s_scale);
+    if (windowed == w.fullscreen)
         s_holdTicks = 60; // the page's fullscreenchange report, then the resize (at most about a second)
 }
 

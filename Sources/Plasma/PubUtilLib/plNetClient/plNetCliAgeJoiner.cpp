@@ -119,12 +119,6 @@ struct plNCAgeJoiner {
 
 plNCAgeJoiner* plNCAgeJoiner::s_instance = nullptr;
 
-#ifdef PLASMA_TEST_HOOKS
-static void (*s_linkTestHook)(NetCommAge& age) = nullptr; // NCAgeJoinerSetLinkTestHook
-// NCAgeJoinerSetStateRequestTestHook
-static void (*s_stateRequestTestHook)(const NetCommAge& age) = nullptr;
-#endif
-
 /*****************************************************************************
 *
 *   plNCAgeJoiner
@@ -293,8 +287,8 @@ void plNCAgeJoiner::ExecNextOp () {
             }
             else {
 #ifdef PLASMA_TEST_HOOKS
-                if (s_stateRequestTestHook) // NCAgeJoinerSetStateRequestTestHook
-                    s_stateRequestTestHook(age);
+                if (NCAgeJoinerStateRequestTestHook)
+                    NCAgeJoinerStateRequestTestHook(age);
 #endif
                 // Request age player list
                 nc->ISendMembersListRequest();
@@ -368,8 +362,8 @@ bool plNCAgeJoiner::MsgReceive (plMessage * msg) {
         {
             nc->ResetServerTimeOffset();
 #ifdef PLASMA_TEST_HOOKS
-            if (s_linkTestHook) // NCAgeJoinerSetLinkTestHook
-                s_linkTestHook(age);
+            if (NCAgeJoinerLinkTestHook)
+                NCAgeJoinerLinkTestHook(age);
 #endif
             NetCommLinkToAge(
                 age,
@@ -539,19 +533,3 @@ void NCAgeJoinerUpdate (
     ASSERT(joiner);
     joiner->Update();
 }
-
-#ifdef PLASMA_TEST_HOOKS
-//============================================================================
-void NCAgeJoinerSetLinkTestHook(
-    void (*hook)(NetCommAge& age))
-{
-    s_linkTestHook = hook;
-}
-
-//============================================================================
-void NCAgeJoinerSetStateRequestTestHook(
-    void (*hook)(const NetCommAge& age))
-{
-    s_stateRequestTestHook = hook;
-}
-#endif

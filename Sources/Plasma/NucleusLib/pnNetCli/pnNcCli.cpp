@@ -55,8 +55,6 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #ifdef __EMSCRIPTEN__
 #include "hsTimer.h"
 #include "pnNetBase/pnNbProtocol.h"
-
-#include <atomic>
 #endif
 
 #include <algorithm>
@@ -414,14 +412,6 @@ static void BufferedSendData (
  *
  ***/
 
-#ifdef PLASMA_TEST_HOOKS
-// The harness's count fault (NetCliSetTestCountFault): the occurrence-th Game2Cli PropagateBuffer (id 2) carrying
-// class index s_testCountClass reads its VarCount 2 higher, as a server message whose count is 2 above its payload
-static std::atomic<uint32_t> s_testCountClass{0};
-static std::atomic<unsigned> s_testCountOccurrence{0};
-static std::atomic<unsigned> s_testCountSeen{0};
-#endif
-
 //===========================================================================
 static uint64_t DiagOffset(const NetCli* cli)
 {
@@ -621,17 +611,10 @@ static bool DispatchData (NetCli * cli, void * param) {
 
 #ifdef __EMSCRIPTEN__
 #ifdef PLASMA_TEST_HOOKS
-                    if (const uint32_t testClass = s_testCountClass.load()) {
-                        if (NetMsgChannelGetProtocol(cli->channel) == kNetProtocolCli2Game && cli->diagCurr.id == 2 &&
-                            cli->diagCurr.hasFirst && cli->diagCurr.first == testClass &&
-                            s_testCountSeen.fetch_add(1) + 1 == s_testCountOccurrence.load()) {
-                            LogMsg(kLogError, ST::format("[harness] pnNetCli test fault: the count of id 2 class {#x} "
-                                                         "(occurrence {}) at offset {} reads {} for {}",
-                                                         testClass, s_testCountOccurrence.load(),
-                                                         DiagOffset(cli) - sizeof(uint32_t), val + 2, val));
-                            val += 2;
-                            *(uint32_t*)data = hsToLE32(val);
-                        }
+                    if (NetCliTestCountHook && NetMsgChannelGetProtocol(cli->channel) == kNetProtocolCli2Game &&
+                        cli->diagCurr.id == 2 && cli->diagCurr.hasFirst) {
+                        NetCliTestCountHook(cli->diagCurr.first, DiagOffset(cli) - sizeof(uint32_t), val);
+                        *(uint32_t*)data = hsToLE32(val);
                     }
 #endif
                     cli->diagCurr.count = val;
@@ -1179,13 +1162,3 @@ bool NetCliDispatch (
 
     return true;
 }
-
-#if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
-//============================================================================
-void NetCliSetTestCountFault(uint32_t classIndex, unsigned occurrence)
-{
-    s_testCountSeen = 0;
-    s_testCountOccurrence = occurrence ? occurrence : 1;
-    s_testCountClass = classIndex;
-}
-#endif

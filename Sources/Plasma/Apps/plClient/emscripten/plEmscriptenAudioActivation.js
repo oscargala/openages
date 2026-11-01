@@ -42,20 +42,18 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 // The page's audio activation, one rule for both audio outputs: the SDK's OpenAL (plEmscriptenOpenALLifecycle.js) and
 // the opt-in native OpenAL Soft / SDL2 output (plEmscriptenNativeAudio.js) register each AudioContext they create here.
-// An AudioContext created before the page's first user gesture starts suspended, and only a resume() called inside a
-// trusted gesture's handler starts it everywhere: Chromium keeps it suspended after a gesture elsewhere has given the
-// page sticky activation, and Safari takes the call only inside the gesture.
-// The client creates its context while it loads (plClient::StartInit, plgAudioSys::Activate, plAudioSystem::Init,
-// alcCreateContext), before the login dialog, and plays the intro movie once the login holds (plClient::BeginGame,
-// plClient::IPlayIntroMovie). The player's first gesture is in the login dialog (plEmscriptenLogin.js), or in a
-// patcher deployment's launcher dialog before it: page elements, not the canvas. So the listener is the document's,
-// in the capture phase: a trusted gesture anywhere on the page resumes the context inside its own handler, before the
-// intro, and no page handler can stop it on its way. The SDK's own helper also listens on the document (Emscripten
-// 6.0.12 src/lib/libcore.js, $autoResumeAudioContext). The events: the SDK's three, and the touch-screen ones of
-// HTML's activation-triggering input events (touchend, and pointerup for touch and pen), which touchstart is not.
-// The listeners are added when the first live context registers and removed when the last one closes.
-// Each output registers a context with what only it knows: whether the context is held paused on purpose (paused, a
-// gesture must leave it so) and what to do with a refused resume() (failed).
+// A context created before the page's first user gesture starts suspended, and only resume() inside a trusted
+// gesture's handler starts it everywhere (Chromium ignores sticky activation from a gesture elsewhere; Safari takes the
+// call only inside the gesture). The client creates its context while it loads (plClient::StartInit,
+// plgAudioSys::Activate, plAudioSystem::Init, alcCreateContext) and plays the intro once the login holds
+// (plClient::BeginGame, plClient::IPlayIntroMovie); the player's first gesture is in the login dialog
+// (plEmscriptenLogin.js) or a launcher dialog before it, page elements, not the canvas. So the listener is the
+// document's, in the capture phase, as the SDK's own helper's (Emscripten 6.0.12 src/lib/libcore.js,
+// $autoResumeAudioContext): any trusted gesture resumes the context in its own handler, before the intro, and no page
+// handler can stop it. The events: the SDK's three, and the touch ones HTML counts as activation-triggering (touchend;
+// pointerup for touch and pen). The listeners live from the first live context's registration to the last one's close.
+// Each output registers with what only it knows: whether the context is held paused on purpose (paused) and what a
+// refused resume() does (failed).
 addToLibrary({
   $plasmaAudioActivation: {
     contexts: new Map(),

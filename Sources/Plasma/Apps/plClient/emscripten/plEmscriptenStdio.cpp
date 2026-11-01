@@ -44,111 +44,70 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // descriptor read wrapper (-Wl,--wrap=__wasi_fd_read) for four deliberate differences from the native client, kept here
 // so that no engine file changes for them.
 //
-// A larger buffer for the game data. Each refill of a FILE's buffer costs proxied WasmFS backend reads: musl reads the
-// caller's part and the buffer in one two-element readv (musl __stdio_read.c), and WasmFS reads each iovec as its own
-// backend read, a hop to the fetch backend's proxy worker. With musl's 1 KiB BUFSIZ an Age load makes one backend read
-// for about every twenty freads. A FILE opened read-only on an immutable fetch asset (plEmscriptenCwd.cpp) gets a fully
-// buffered 64 KiB buffer before its first I/O (setvbuf). Natively hsUNIXStream::Open and plFileSystem::Open only call
-// fopen; setting it there would change every platform for a cost only the browser has. The bytes each read returns are
-// the same; other files keep musl's buffer.
+// A larger buffer for the game data. musl reads the caller's part and the buffer in one readv (musl __stdio_read.c),
+// and WasmFS makes each iovec a backend read, a hop to the fetch backend's proxy worker: with musl's 1 KiB BUFSIZ, one
+// per twenty freads. A FILE opened read-only on an immutable fetch asset (plEmscriptenCwd.cpp) gets a fully buffered 64
+// KiB buffer before its first I/O (setvbuf); hsUNIXStream::Open and plFileSystem::Open stay as on every platform.
 //
-// Seeks within that buffer. musl's fseek drops the buffer on every call (__fseeko_unlocked, src/stdio/fseek.c:28), so
-// each seek and read refills 64 KiB. libwebm's MkvReader, which plMoviePlayer reads its movie through (IOpenMovie, ILoadAudio), seeks
-// before each of its reads: 165,549 of them for avi/NewPlayerIntro.webm, so 331,098 backend reads and 10 GiB, one hop
-// to the OPFS worker each in patcher mode. The native C libraries keep the buffer when the target lies inside it (macOS
-// libc, FreeBSD's _fseeko, glibc's _IO_file_seekoff), and so do these wrappers for a game-data FILE: a SEEK_SET or
-// SEEK_CUR to a byte the buffer holds moves musl's read position there, and every other seek is musl's. musl has no
-// call that moves the read position back, so the wrappers read musl's FILE through a mirror of the pinned release's
-// layout (src/internal/stdio_impl.h:27-44), which this file compiles only against (PLASMA_EMSCRIPTEN_PINNED_*), and
-// check the mirror against each FILE at fopen; a FILE that fails the check keeps musl's seek. musl's ungetc and
-// ungetwc write the pushed-back bytes into the buffer itself (glibc and BSD keep them apart), so those are wrapped too:
-// a FILE that may hold a byte that is not the file's takes musl's seek until musl has dropped its buffer. Every byte,
-// result, ftell, feof and ferror is musl's own. Like any stdio buffer, this assumes that nothing moves a game-data
-// FILE's descriptor outside stdio: Sources/Plasma uses fileno only for flock, for ftruncate on files opened for
-// writing, and for the immutable-asset check below.
+// Seeks within that buffer. musl's fseek drops the buffer on every call (__fseeko_unlocked, src/stdio/fseek.c:28), and
+// libwebm's MkvReader, which plMoviePlayer reads through (IOpenMovie, ILoadAudio), seeks before each read. As macOS
+// libc, FreeBSD's _fseeko and glibc's _IO_file_seekoff do, a SEEK_SET or SEEK_CUR of a game-data FILE to a byte its
+// buffer holds moves musl's read position there; every other seek is musl's. The wrappers read musl's FILE through a
+// mirror of the pinned release's layout (src/internal/stdio_impl.h:27-44; PLASMA_EMSCRIPTEN_PINNED_*), checked against
+// each FILE at fopen, and a FILE that fails the check keeps musl's seek. musl's ungetc and ungetwc write into the
+// buffer, so a FILE that may hold a pushed-back byte takes musl's seek until musl drops its buffer. Every byte, result,
+// ftell, feof and ferror is musl's; Sources/Plasma moves no game-data FILE's descriptor outside stdio (fileno serves
+// flock, ftruncate of written files and the immutable-asset check).
 //
-// No half-written download. A FILE opened for writing in the patcher-mode install directory whose writes failed
-// (ferror, or fclose's flush: OPFS returns EIO when the origin's quota is exhausted) is removed at fclose and noted
-// for its path (plEmscriptenStorage::NoteWriteFailure), and pfPatcher.cpp fails that download for storage
-// (pfPatcherWorker::IFileThingDownloadCB). Natively the partial file stays, and the next patch of its manifest hashes it
-// and downloads it again (pfPatcher.cpp IHashFile), as it does a missing one; in the browser a full quota is the usual
-// cause, and the partial file would only hold quota the next download needs.
+// No half-written download. A FILE written in the patcher-mode install directory whose writes failed (ferror, or
+// fclose's flush: OPFS returns EIO at a full quota) is removed at fclose and noted for its path
+// (plEmscriptenStorage::NoteWriteFailure), and pfPatcher.cpp fails that download for storage
+// (pfPatcherWorker::IFileThingDownloadCB). Natively the partial file stays until the next patch hashes it
+// (pfPatcher.cpp IHashFile); here it would only hold the quota the next download needs.
 //
-// A block cache under the game-data FILEs. A page-in reads a page's objects through one FILE
-// (plResManager::PageInRoom, plResManager.cpp:1096-1220), seeking to each (ReadObject, :313-353), and musl's fseek
-// drops the buffer, so the same bytes are read again and again: a Neighborhood load makes about 19,400 backend reads
-// for 650 MiB. Natively the OS page cache serves those reads; here each is a hop to the backend's proxy worker. The
-// wrapped __wasi_fd_read, musl's one read call (__stdio_read.c:14; read(2) and readv(2) make it too), serves the
-// descriptor of a game-data FILE from 64 KiB aligned blocks of its file, kept for the FILE's lifetime (its fopen to its
-// fclose) in one process-wide LRU of 16 MiB; any other descriptor's call is the original's. Each result is the one the
-// original computes (readAtOffset, system/lib/wasmfs/syscalls.cpp:184-256): from the descriptor's offset (SEEK_CUR, no
-// backend call: __wasi_fd_seek, syscalls.cpp:688-730), the iovecs filled in order, a zero-length iovec not short
-// (readAtOffset, syscalls.cpp:246), a stop at the first short one, nread the total, and the offset moved to offset +
-// nread (SEEK_SET: readAtOffset, syscalls.cpp:252-254). So every stdio result is musl's own from the same values
-// (__stdio_read, __stdio_read.c:22-31), and so is the window the seeks above rely on.
-//   - Misses. Each maximal run of missing blocks in the call's span is one single-iovec __wasi_fd_pread
-//     (syscalls.cpp:283-289). When the runs outnumber the backend reads the original would make (one per iovec up to
-//     the first short one, readAtOffset's loop, syscalls.cpp:221-251, over the file's size: its EOF if known, else the
-//     bytes this lifetime's reads have shown, so never above the real count), one pread of the whole aligned span
-//     instead: no call makes more backend reads than the original. A pread that comes back short fixes the file's EOF,
-//     and a call at or past it makes no backend read.
-//   - Room before the reads. Least recently used blocks outside the call's span are evicted until the cache's bytes,
-//     the preads' buffers counted, fit in the cap (the buffers: whole blocks, clipped at a known EOF, and one block
-//     more when a run of two blocks or more is split into its blocks, a copy each but the first: dlmalloc's in-place
-//     shrink, try_realloc_chunk, dlmalloc.c:4915-4923). So the cache's bytes never exceed the cap, and since dlmalloc
-//     never returns memory (HAVE_MMAP, dlmalloc.c:8; MORECORE_CANNOT_TRIM, dlmalloc.c:12) the cap is also the cache's
-//     whole rise of the heap.
-//   - The original call, with the original arguments, its result returned as it is, serving, inserting and evicting
-//     nothing: for a call whose iovecs ask more than a quarter of the cap (4 MiB); for one the cap has no room for
-//     because other calls have pinned the blocks they copy out of; for a null buffer with a length (the original's
-//     EINVAL: readAtOffset, syscalls.cpp:225-226); for every call of a poisoned descriptor (below); and after a failed
-//     pread, which inserts nothing and is redone as the original call from the original offset, so no bytes are served
-//     ahead of an error (a short read would change what fread returns: __stdio_read, __stdio_read.c:26). A call whose
-//     iovecs are all zero-length is nread 0 and success, as the original's zero-length backend reads give.
-//   - Locks. A call holds its descriptor's record mutex from its offset to its new offset, preads included, as
-//     readAtOffset holds the open file's lock and the file's (lockedOpenFile, syscalls.cpp:195; lockedFile,
-//     syscalls.cpp:218); the LRU's lock is held for bookkeeping only (look-up, pin, eviction, reservation, insertion),
-//     never across a backend read or a copy; blocks a call copies out of are pinned, and eviction skips them. No FILE
-//     lock is taken: the call comes both under musl's (FLOCK, fread.c:12) and without it.
-//   - Coherence. The cache is as fresh as the backend, which serves a read-only open from a snapshot until a
-//     write-capable open of the same file (`OpenState::open`, opfs_backend.cpp:71-94). So a write-capable fopen in the
-//     install directory (below) poisons each open cached reader of the same WasmFS file (plEmscriptenCwd::FileIdentity:
-//     the file table's File, one per name, so not the path): its blocks are freed and its calls are the original's
-//     until its fclose; a reader opened while such a FILE is open opens poisoned. Writers outside fopen are assumed not
-//     to write a file a game-data FILE has open: main.cpp's package install (open(2): InstallPackageTree,
-//     main.cpp:363-366) runs before the client; Python 3's io (open(2)) writes only debug commands' files
-//     (SaveAvatarToDisk, xAvatarCustomization.py:384; SaveColumns, jlakField.py:765; DumpMarkers, xCheat.py:575), which
-//     those scripts read back through io; Python 2's file and ptStream open through fopen. One divergence is named:
-//     under the page's own OPFS writes (boot.mjs) a snapshot read fails with EIO (_wasmfs_opfs_read_blob,
-//     libwasmfs_opfs.js:371-378), where a call the cache serves succeeds with the snapshot's bytes; no game-data FILE
-//     is open on those files.
+// A block cache under the game-data FILEs. A page-in seeks to each object of one FILE (plResManager::PageInRoom,
+// plResManager.cpp:1096-1220; ReadObject, :313-353), each seek drops musl's buffer, and natively the OS page cache
+// serves the re-reads. The wrapped __wasi_fd_read, musl's one read call (__stdio_read.c:14), serves a game-data FILE's
+// descriptor from 64 KiB aligned blocks of its file, kept from its fopen to its fclose in one process-wide LRU of 16
+// MiB; any other descriptor's call is the original's. Each result is the original's (readAtOffset,
+// system/lib/wasmfs/syscalls.cpp:184-256): from the descriptor's offset (SEEK_CUR: __wasi_fd_seek,
+// syscalls.cpp:688-730), the iovecs filled in order, a zero-length one not short (readAtOffset, syscalls.cpp:246), a
+// stop at the first short one, and the offset moved to offset + nread (readAtOffset, syscalls.cpp:252-254), so every
+// stdio result is musl's from the same values (__stdio_read, __stdio_read.c:22-31).
+//   - Misses: each run of missing blocks is one single-iovec __wasi_fd_pread (syscalls.cpp:283-289); when the runs
+//     outnumber the original's backend reads (readAtOffset's loop, syscalls.cpp:221-251, up to the known EOF or the
+//     bytes seen), one pread of the whole aligned span. A short pread fixes the EOF; a call past it reads nothing.
+//   - Room first: least recently used blocks outside the call's span are evicted until the cache and the preads'
+//     buffers fit the cap (a split run's copies cost one block more: try_realloc_chunk, dlmalloc.c:4915-4923). dlmalloc
+//     never returns memory (HAVE_MMAP, dlmalloc.c:8; MORECORE_CANNOT_TRIM, dlmalloc.c:12), so the cap bounds the heap.
+//   - The original call, untouched: for iovecs over a quarter of the cap, no room beside pinned blocks, a null buffer
+//     with a length (EINVAL: readAtOffset, syscalls.cpp:225-226), a poisoned descriptor, and a failed pread, redone
+//     from the original offset with nothing inserted, so no bytes precede an error (__stdio_read, __stdio_read.c:26).
+//   - Locks: the descriptor's record mutex from its offset to its new offset, as readAtOffset holds lockedOpenFile
+//     (syscalls.cpp:195) and lockedFile (syscalls.cpp:218); the LRU's lock only for bookkeeping, never across a read or
+//     a copy; the blocks a call copies out of are pinned. No FILE lock: calls come with musl's (FLOCK, fread.c:12) and
+//     without it.
+//   - Coherence: the backend serves a read-only open from a snapshot until a write-capable open (`OpenState::open`,
+//     opfs_backend.cpp:71-94), so a write-capable fopen in the install directory poisons the open readers of the same
+//     WasmFS file (plEmscriptenCwd::FileIdentity, not the path) until their fclose: blocks freed, calls the original's.
+//     No other writer has a game-data file open: the package install (open(2): InstallPackageTree, main.cpp:363-366)
+//     runs before the client, Python 3's io writes debug commands' files only (SaveAvatarToDisk,
+//     xAvatarCustomization.py:384; SaveColumns, jlakField.py:765; DumpMarkers, xCheat.py:575), Python 2's file and
+//     ptStream open through fopen. One divergence: under the page's own OPFS writes (boot.mjs) a snapshot read fails
+//     with EIO (_wasmfs_opfs_read_blob, libwasmfs_opfs.js:371-378), where the cache serves the snapshot; no game-data
+//     FILE is open on those files.
 //
-// A harness build (PLASMA_TEST_HOOKS) also counts each game-data FILE's I/O: its seeks, those served in the buffer,
-// its taints, the WasmFS backend reads made under it (the preads and the original calls) and the cache's counts,
-// printed as one "[stdio]" line when the FILE is closed: the bytes served from the cache and in how many calls, the
-// preads (whole-span ones too), the calls passed to the original, the evictions of its blocks, the blocks read again
-// after their eviction, whether it was poisoned, and the cache's peak bytes so far against the cap. The counters never
-// change the I/O; the product build has none of them. Its test seams (plEmscriptenStdio.h) lower the cap and stand in
-// for the pread.
-//
-// With PLASMA_TEST_STDIO_TRACE=1 a harness build also writes the trace of that I/O to stdio-trace.txt in the client's
-// log folder (plEmscriptenStorage::LogFolder), which the harness's exit export hands to the runner (client-files/Log).
-// One line per event, times in ms since the trace opened (its header gives that instant as an epoch time,
-// emscripten_get_now):
-//   O <lifetime> <t> <fd> <mirrored 0|1> <path>       a game-data FILE's fopen (the lifetime ends at its C line)
-//   C <lifetime> <t> <seeks> <in the buffer> <backend reads> <bytes>   its fclose, with the [stdio] line's counts
-//   R <lifetime> <t> <us> <offset> <iovec lengths, comma-separated> <nread or -1> <rc> <backend reads>   a
-//                                           __wasi_fd_read under it: the descriptor's offset before the call (SEEK_CUR,
-//                                           no backend call: __wasi_fd_seek, syscalls.cpp:705), the call's wall time in
-//                                           microseconds, and the backend reads made under it
-//   S <lifetime> <t> <whence> <offset> <target or -1> <rc>   a seek musl handled (not one within the buffer): the
-//                                           descriptor's offset after it, which musl's seek leaves at the target
-//                                           (__fseeko_unlocked, fseek.c:13, :25-28)
-//   W <t> <path> / X <t> <path>             the fopen and fclose of a FILE opened for writing in the install directory
-// The trace FILE is opened with __real_fopen at the first game-data fopen, where the thread holds no FILE lock (musl's
-// fflush of NULL holds the open-file list's lock while it takes each FILE's lock: fflush(), fflush.c:15-20; so opening
-// it under a game-data FILE's lock could deadlock), and it is never closed: main.cpp's fflush(nullptr) before the exit
-// export writes its last buffer. The trace adds no I/O to the game-data FILEs and changes none of their results.
+// A harness build (PLASMA_TEST_HOOKS) counts each game-data FILE's seeks, buffered seeks, taints, backend reads and
+// cache events into one "[stdio]" line at its fclose, changing no I/O; its seams (plEmscriptenStdio.h) lower the cap
+// and stand in for the pread. With PLASMA_TEST_STDIO_TRACE=1 it writes stdio-trace.txt to the log folder
+// (plEmscriptenStorage::LogFolder), one line per event, t in ms since the trace opened (emscripten_get_now): O
+// <lifetime> <t> <fd> <mirrored 0|1> <path> (a game-data fopen); C <lifetime> <t> <seeks> <in the buffer> <backend
+// reads> <bytes> (its fclose); R <lifetime> <t> <us> <offset> <iovec lengths> <nread or -1> <rc> <backend reads> (a
+// __wasi_fd_read, from the offset before it: __wasi_fd_seek, syscalls.cpp:705); S <lifetime> <t> <whence> <offset>
+// <target or -1> <rc> (a seek musl handled, the offset after it: __fseeko_unlocked, fseek.c:13, :25-28); W and X <t>
+// <path> (the fopen and fclose of a FILE written in the install directory). The trace opens with __real_fopen at the
+// first game-data fopen, under no FILE lock (fflush(NULL) takes each FILE's lock under the list's: fflush(),
+// fflush.c:15-20), and stays open: main.cpp's fflush(nullptr) writes its last buffer.
 
 #include <emscripten/version.h>
 #include <stdio_ext.h>

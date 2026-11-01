@@ -72,21 +72,17 @@ void LogStats(double nowMs);
 } // namespace plEmscriptenFrameLoop
 
 // The browser has no present call: the canvas texture drawn on the client thread is presented when the worker's task
-// ends. These two calls end the task from deep inside a tick by suspending it (JSPI), at the places where the native
-// client presents a frame inside one long call. Both do nothing (return at once) off the client thread, outside a tick,
-// or inside a callback that runs while a tick is suspended. Inside a Python frame they suspend as anywhere else, as
-// native presents there: the progress manager's callback draws and presents whatever is on the stack
-// (plClient::IProgressMgrCallbackProc, IDraw, then the pipeline's EndRender, plDXPipeline::EndRender and IFlipSurface),
-// and a Python script's call may be below it. That is legal only because libpython is built without PY_CALL_TRAMPOLINE
-// (JSPI cannot suspend across its JS frame); plClient's CMakeLists.txt refuses a libpython that has it.
+// ends. These two calls end the task from inside a tick by suspending it (JSPI), where the native client presents
+// inside one long call. Off the client thread, outside a tick, or in a callback run while a tick is suspended, they
+// return at once. They suspend inside a Python frame too, as native presents there
+// (plClient::IProgressMgrCallbackProc, IDraw, plDXPipeline::EndRender and IFlipSurface under a script's call), which is
+// legal only because libpython is built without PY_CALL_TRAMPOLINE (JSPI cannot suspend across its JS frame);
+// plClient's CMakeLists.txt refuses one with it.
 //
-// plEmscriptenPresentYield: the frame drawn just before is presented and the caller resumes as soon as the event loop
-// has run what was queued (a MessageChannel message, no timer clamp). For callers that pace their own draws, like the
-// progress manager's draws during a load (plClient::IProgressMgrCallbackProc draws at most at kMaxFrameRate, 60 Hz):
-// native presents there without waiting for the display (EndRender), so the load does not wait either.
-// Returns how long the thread was suspended, in ms, or -1 when the yield was refused (off the client thread, or
-// outside the tick's own stack) and returned at once. The pipeline's build pacing reads each suspension
-// (plWGPUDevice::NoteYield).
+// plEmscriptenPresentYield: the frame drawn just before is presented, and the caller resumes once the event loop has
+// run what was queued (a MessageChannel message, no timer clamp), for callers that pace their own draws, as native's
+// load draws (plClient::IProgressMgrCallbackProc, at most kMaxFrameRate) present without waiting for the display.
+// Returns the suspension in ms (plWGPUDevice::NoteYield paces the pipeline builds by it), or -1 when refused.
 double plEmscriptenPresentYield();
 
 // plEmscriptenFrameYield: as above, but the caller resumes at the next animation frame of the client thread's worker.

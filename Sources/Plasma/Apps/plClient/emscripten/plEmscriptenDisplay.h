@@ -57,41 +57,8 @@ class plDisplayHelper;
 
 namespace plEmscriptenDisplay
 {
-// ---- Fullscreen hook contract (the fullscreen layer implements it) --------------------
-//
-// using FullscreenHook = void (*)(int width, int height, bool windowed,
-//                                 float devicePixelRatio, void* user);
-// void SetFullscreenHook(FullscreenHook hook, void* user = nullptr);
-//
-// Who calls it: plClient::IResizeNativeDisplayDevice (main.cpp), the browser's native-window hook, called by
-// plClient::ResizeDisplayDevice: once at start, from plClientLoader::StartClient with the pipeline's mode, and at the
-// end of every plClient::ResetDisplayDevice: the console's Graphics.Renderer.ResetDevice, the options menu's
-// plClientMsg::kResetGraphicsDevice (plClient::MsgReceive), and a plDisplayScaleChangedMsg with a suggested location
-// (plClient::MsgReceive; the browser never sends one).
-// When: after the pipeline has applied the mode (created the device at start, or reset it), so the canvas backing store
-// already is width x height, and after the page has been posted the new backing size (its CSS fit). Also called for a
-// mode the pipeline found nothing to change for (its early return, plDXPipeline::ResetDisplayDevice):
-// IResizeNativeDisplayDevice is called regardless.
-// Arguments: width, height = the display mode the client asked for, in device pixels
-// (the swap chain's BackBufferWidth/Height when the mode was applied); windowed = false
-// when the client asks for fullscreen (graphics.ini Windowed 0, the options menu);
-// devicePixelRatio = the scale of the last plDisplayScaleChangedMsg; user = as registered.
-// Thread: the client pthread, inside a tick of the frame loop, never during a suspension.
-// The hook returns promptly: it must not block, wait, make a synchronous call to the main thread or suspend. To act on
-// the page it posts to the main thread (a library function proxied asynchronously, as plEmscriptenFullscreen.js's
-// plFullscreenMode is); a fullscreen request needs transient user activation there, so the page applies it at the next
-// user gesture.
-// Returns: nothing; the client reads nothing back (the native hook returns nothing). A fullscreen layer that wants
-// another backing size asks for it as any mode change is asked for (Graphics.Renderer.ResetDevice through plConsoleMsg,
-// or the options menu); the browser's mode list holds the screen size x devicePixelRatio (plEmscriptenDisplayHelper)
-// next to the canvas size.
-// Registration: at most one hook; SetFullscreenHook(nullptr) removes it. Same thread rules
-// as plEmscriptenFrameHooks::Add. No hook registered: nothing is called.
-using FullscreenHook = void (*)(int width, int height, bool windowed, float devicePixelRatio, void* user);
-void SetFullscreenHook(FullscreenHook hook, void* user = nullptr);
-
 // plClient::IResizeNativeDisplayDevice (main.cpp): post the backing size to the page (its
-// CSS fit, Module.plasma.canvasBacking) and call the fullscreen hook.
+// CSS fit, Module.plasma.canvasBacking) and the mode to the fullscreen layer (plFullscreenMode).
 void ResizeNative(int width, int height, bool windowed);
 
 // Starts watching the page's devicePixelRatio (main.cpp, where the first

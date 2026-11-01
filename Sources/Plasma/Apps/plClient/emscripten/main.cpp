@@ -1138,22 +1138,17 @@ static bool LoopStep()
 }
 
 // The client's one shutdown, for every way it ends once the loader has run; returns rc, the program's exit code.
-//
 // Once the loop has run, every exit is the macOS client's: its runLoop (LoopStep is its translation) answers a done
-// client with [NSApp terminate:], whose applicationShouldTerminate runs ShutdownStart, one MainLoop, ShutdownEnd and
-// NetCommShutdown, whatever ended the client. ShutdownStart disables the net at once (plNetClientMgr::IDisableNet), so
-// that MainLoop posts the cancelled transactions' callbacks while the resource manager exists. win32's tail after the
-// loop skips ShutdownStart after App.Quit, and a callback still pending then posts after hsgResMgr::Shutdown into no
-// dispatcher, as an offline player's quit shows (the StartUp SetActivePlayer request never completes there).
-//
-// The steps run in one order, and `end` decides which of the first ones run:
+// client with [NSApp terminate:], whose applicationShouldTerminate runs ShutdownStart (which disables the net at once,
+// plNetClientMgr::IDisableNet, so that MainLoop posts the cancelled transactions' callbacks while the resource manager
+// exists), one MainLoop, ShutdownEnd and NetCommShutdown. (win32 skips ShutdownStart after App.Quit, and a callback
+// still pending then posts after hsgResMgr::Shutdown into no dispatcher, as the StartUp SetActivePlayer request of an
+// offline player's quit does.) `end` decides which of the first steps run:
 //   kLoginEnded  ShutdownStart, ShutdownEnd, NetCommShutdown: wWinMain's needExit (no MainLoop before the loop)
-//   kNotStarted  ShutdownEnd, NetCommShutdown: wWinMain's tail for a client that never looped (its init may have
-//                failed)
+//   kNotStarted  ShutdownEnd, NetCommShutdown: wWinMain's tail for a client that never looped
 //   kLoopEnded   ShutdownStart, one MainLoop, ShutdownEnd, NetCommShutdown: applicationShouldTerminate
-// ShutdownStart writes through the loader's client, which is null when plClientLoader::Run found no resource.dat, so
-// it runs only when a client exists, as on the Mac. The test is safe here because the browser's plClientLoader::Init
-// ran Run on this thread and has returned.
+// ShutdownStart runs only when the loader's client exists (plClientLoader::Run finds no resource.dat otherwise), as on
+// the Mac; plClientLoader::Init ran Run on this thread and has returned.
 static int ClientFinish(ClientEnd end, int rc)
 {
 #ifdef PLASMA_TEST_HOOKS

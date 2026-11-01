@@ -48,35 +48,25 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
  */
 
 /*
- * The JS half of the WasmFS fetch backend, replacing
- * Emscripten 6.0.12's src/lib/libwasmfs_fetch.js (same symbol, so this --js-library
- * definition wins; the C++ half, system/lib/wasmfs/backends/fetch_backend.cpp, is
- * unchanged). The game data is 4 GB of files that the client stats and reads in
- * pieces, which the stock implementation handles badly:
- *  - stat() (getSize) downloads data: the first 64 KiB chunk of a large file, or the
- *    whole file when it is smaller than two chunks. Plasma's ListDir stats every file
- *    it lists (dat/ at start-up: 1,355 files), so listing = downloading.
- *    Here getSize is one HEAD request, cached.
- *  - a read that runs past end of file (every stdio buffer refill at the tail) refetches
- *    the whole of a small file, because the request length is not clamped to the size.
- *  - concurrent reads of one file race on the shared cache entry.
- *  - freeFile leaves `file in cache` true with an undefined entry.
- *  - every fetched byte stays in the JS heap of the proxy worker for good.
- * This version: HEAD for the size; reads clamped to the size and served from aligned
- * chunks of chunkSize bytes; one Range request per run of missing chunks, shared by
- * concurrent readers; an LRU byte cap on the cached chunks (Module.plasma.fetch.cacheBytes,
- * default 64 MiB), with temporary read-local references that survive eviction;
- * a strong HEAD ETag pins each engine file; If-Match and returned ETags prevent
- * mixed-version range reads; changed entries fail until freed/recreated;
- * range headers and payload lengths validated before caching; errors returned as -errno, never thrown (a rejected promise would
- * leave the calling thread blocked forever).
- * The persistent chunk store is off the awaited read path: a validated run resolves its readers when its
- * bytes arrive and queues them for the store (write-behind, bounded by Module.plasma.fetch.writeBehindBytes, default 64 MiB,
- * beyond which a read waits for room); one run's stores take one lock hold, and its lookups read the records without
- * the lock (PlasmaAssetCache getRun); a chunk the store did not hold at session start, and has not stored since, skips
- * the lookup. A read that needs a chunk memory does not hold reads ahead over the file's next chunks
- * (Module.plasma.fetch.readAheadChunks, default 15: 1 MiB windows of 64 KiB chunks), in the same store lookup or Range
- * request.
+ * The JS half of the WasmFS fetch backend, replacing Emscripten 6.0.12's src/lib/libwasmfs_fetch.js (same symbol, so
+ * this --js-library definition wins; the C++ half, system/lib/wasmfs/backends/fetch_backend.cpp, is unchanged). The
+ * client stats and reads 4 GB of game files in pieces, and the stock version: downloads data for a stat (getSize: a
+ * 64 KiB chunk, or a whole small file; Plasma's ListDir stats all 1,355 files of dat/); refetches a whole small file
+ * for a read past its end; races concurrent reads on one cache entry; leaves `file in cache` true after freeFile; and
+ * keeps every fetched byte in the proxy worker's heap. This version:
+ *  - getSize is one HEAD request, cached; a strong HEAD ETag pins each engine file, If-Match and the returned ETags
+ *    refuse mixed-version range reads, and a changed entry fails until it is freed and recreated;
+ *  - reads are clamped to the size and served from aligned chunks of chunkSize bytes, one Range request per run of
+ *    missing chunks, shared by concurrent readers, its headers and payload length checked before caching;
+ *  - the cached chunks have an LRU byte cap (Module.plasma.fetch.cacheBytes, default 64 MiB), and a read's own
+ *    references survive eviction; errors return as -errno, never thrown (a rejected promise would leave the calling
+ *    thread blocked forever);
+ *  - the persistent chunk store is off the awaited read path: a validated run resolves its readers and is queued for
+ *    the store (write-behind, Module.plasma.fetch.writeBehindBytes, default 64 MiB, beyond which a read waits); a
+ *    run's stores take one lock hold, its lookups read without the lock (PlasmaAssetCache getRun), and a chunk the
+ *    store did not hold at session start, nor has stored since, skips the lookup;
+ *  - a read that needs a chunk from outside memory reads ahead over the file's next chunks
+ *    (Module.plasma.fetch.readAheadChunks, default 15: 1 MiB windows of 64 KiB chunks) in the same lookup or request.
  */
 addToLibrary({
   _wasmfs_create_fetch_backend_js__deps: [

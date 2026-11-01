@@ -99,11 +99,9 @@ public:
     static void Shutdown();
 
     /**
-     * Installs the GameMgr receive handler again, as the constructor did. The constructor runs
-     * once, at static initialization, and NetClientDestroy clears the handler (plNetGameLib's
-     * GameDestroy). A client that runs and destroys a net session of its own before the game's,
-     * in the same process, calls this after the destroy, as the browser client's launcher step
-     * does. Without it, every server GameMgr message is dropped.
+     * Installs the GameMgr receive handler again, as the constructor (static initialization) did:
+     * NetClientDestroy clears it (plNetGameLib's GameDestroy), so a client that destroys a net session
+     * of its own before the game's, as the browser's launcher does, calls this after the destroy.
      */
     void InstallRecvHandler();
 };

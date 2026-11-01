@@ -53,75 +53,29 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // response body), so a bug report can quote both. While nothing is wrong it says what the page is doing (STATUS
 // below) until the client's first frame is on the canvas; from then on the client draws its own screens.
 //
-// The page and the client meet in one object, plasma. The page makes it before anything else, fills the page's members,
-// seals it, and only then loads the client script. That script defines the factory createPlasmaClient; the page calls
-// it with the module's arguments, the object among them, and the client reads the object as Module.plasma (its pre-js,
-// Sources/Plasma/Apps/plClient/emscripten/pre.js, fills the client's members). The runtime itself (its memory,
-// environment and libraries) stays inside the factory; of it the page reads only its memory's size when the client
-// exits, for its exit line. The page also keeps the object as globalThis.plasma, read-only, where the test runners read
-// the run's state.
-// Docs/Web/Architecture.md ("The page and the module: plasma") has the same schema for a deployer:
-//   config            page -> client: the client's configuration, one JSON value (a frozen object of plain data), or
-//                     null (only the test harness page on the development server's own data tree). Its keys are the
-//                     deployment's roles (config.mjs clientConfiguration): data, files, fonts, sound, gateway, join,
-//                     serverIniText, name, status, hdPack {base, ages}, assetOrigins. The
-//                     client's environment is made from this value alone (pre.js); the page
-//                     has no other way to set it (the module does not export ENV)
-//   state             {done, exitCode, aborted, cause, capabilityFailure, firstFrame, lines, t0}: the run's state, read
-//                     by the test runners and the tests. aborted is the status line of a fatal error and cause its code;
-//                     firstFrame the time of firstFrame() below (ms after t0)
-//   display           the player display (null on a fixed canvas): the window report the client reads
-//                     (plEmscriptenDisplay.cpp StartWindowWatch, which also takes a non-null display as the player mode),
-//                     setCap and setScale
-//   canvasBacking(w, h)   the client reset its display (plClient::IResizeNativeDisplayDevice): the new backing
-//   setStage(w, h)    a fixed canvas's CSS fit box, null for 1:1 (the player display fills the window)
-//   setFullscreenStage(active, w, h)   the fullscreen layer's page seam (plEmscriptenFullscreen.js)
-//   bootFailure(missing, detail, source)   a browser requirement is missing (the preflight below; the client's WebGPU
-//                     device, plWGPUPipeline.js)
-//   firstFrame()      the canvas has presented the client's first frame (plWGPUPipeline.js, once per run)
-//   storage           client: {login(how)}, the persistent-storage request at the player's login (pre.js)
-//   fetch             the data backend's bounds {cacheBytes, writeBehindBytes, readAheadChunks}
-//                     (plEmscriptenFetchBackend.js); the player page passes none (null: the defaults). The backend runs
-//                     on the client's own worker, which sees only what a pre-js sets there (a test build's)
-//   login             client: the open login dialog (plEmscriptenLogin.js), null while none is open
-//   launcher          client: the open launcher dialog of a patcher deployment (plEmscriptenPatcher.js), null while
-//                     none is open
-//   input             client: the input layer's handle (plEmscriptenInput.js), null until the client attaches its
-//                     input: {ready, status, error, requestPointerLock(), requestFullscreen(), dispose()}
-//   fullscreen        client: the fullscreen layer (input/fullscreen.mjs attachFullscreen, through
-//                     plEmscriptenFullscreen.js), null until the client sets its first display mode; the page's
-//                     fullscreen button goes through it (below)
-//   fullscreenStatus  client: the fullscreen layer's last status, or {ready: false, error} when it failed to attach
-//   audioBackend, audioActivationError
-//                     client: the native-audio build's playback (plEmscriptenNativeAudio.js): its backend's name, and
-//                     why the browser refused to resume its audio context; null in every other build
-//   harness           the test harness page's own member (the seam's module below), never on the player page: the
-//                     client's test variables (env, which only a harness build's pre-js reads), the runner's account
-//                     (credentials, which only a harness build's login takes), the client's file export (files),
-//                     what a harness build's observers publish, and the runtime's own objects for the test runners'
-//                     instruments (runtime) (the private test harness lists them)
+// The page and the client meet in one object, plasma: the page makes it, fills its own members, seals it and only then
+// loads the client script, whose factory (createPlasmaClient) gets it as Module.plasma; the client's pre-js (pre.js)
+// fills the client's members. Of the runtime inside the factory the page reads only the memory size, for its exit
+// line. The page keeps the object as globalThis.plasma, read-only, for the test runners. Docs/Web/Architecture.md
+// ("The page and the module: plasma") describes each member:
+//   page:     config, state {done, exitCode, aborted, cause, capabilityFailure, firstFrame, lines, t0},
+//             display {setCap, setScale}, canvasBacking(w, h), setStage(w, h), setFullscreenStage(active, w, h),
+//             bootFailure(missing, detail, source), firstFrame(), fetch {cacheBytes, writeBehindBytes, readAheadChunks}
+//   client:   storage {login(how)}, login, launcher, input {ready, status, error, requestPointerLock(),
+//             requestFullscreen(), dispose()}, fullscreen, fullscreenStatus, audioBackend, audioActivationError
+//   harness:  the test harness page's own member, never on the player page
 //
-// The test harness seam: boot(harness). The player page passes nothing. The private test harness page
-// (its page and module, never part of a kit) passes an object, and its members are the only way
-// test options reach this module, which reads no test parameter itself. Every function member is optional, runs once,
-// and may be async; ctx is {plasma, report(code, detail), causeError(code, detail), config (the config.mjs module),
-// deployment}:
-//   causes                   the harness page's own cause codes, {CODE: {fatal, text}}, none of them in CAUSES
-//   module                   an object: plasma.harness (above), which the harness page fills
-//   deployment               an object: the harness page's own deployment rules (config.mjs validateConfiguration's
-//                            extension: the test-harness game-code modes), which the deployment document is read with
-//   admit(ctx)               before the deployment document is requested: may refuse (throw ctx.causeError(...))
-//   start(ctx)               once the deployment is known (ctx.deployment; null when the harness runs on the
-//                            development server's own data tree, which only it may): may refuse, may force a browser
-//                            failure (plasma.bootFailure), writes its own profile files. Returns the start options:
-//                            {args (client arguments), canvas {w, h} (a fixed canvas: the client's one display mode,
-//                            instead of the player display), stage {w, h} (its CSS fit box), renderCap (the player
-//                            display's cap), hdPack {base, ages} (a texture-pack directory of its own), hdPackSeed
-//                            (true or false: the texture setting to write first)}
-//   configure(config)        the client's configuration as the page computed it (null without a deployment); returns
-//                            the one the client gets (plasma.config)
-//   output(text, isError)    each line the client prints
-//   beforeClient(ctx)        the last step before the client script loads
+// The test harness seam: boot(harness). The player page passes nothing; a test harness page passes an object, whose
+// members are the only way test options reach this module (Docs/Web/Architecture.md, "Test hooks"). Every function
+// member is optional, runs once and may be async; ctx is {plasma, report(code, detail), causeError(code, detail),
+// config (the config.mjs module), deployment}:
+//   causes, module, deployment   its cause codes {CODE: {fatal, text}}, plasma.harness, its deployment rules
+//   admit(ctx)                   before the deployment document is requested; may refuse
+//   start(ctx)                   once the deployment is known; returns {args, canvas, stage, renderCap, hdPack,
+//                                hdPackSeed}
+//   configure(config)            returns the client's configuration (plasma.config)
+//   output(text, isError)        each line the client prints
+//   beforeClient(ctx)            the last step before the client script loads
 
 // The cause codes. fatal: the run cannot continue; the status line shows text, then the code. Not fatal: the console
 // line alone (the game goes on). The texts are for players: plain words, nothing about how the page works inside.
@@ -184,8 +138,15 @@ export const STATUS = Object.freeze({
   running: 'The game is running.',
   left: 'You have left the game. Reload this page to play again.',
 });
-// The browser requirements the preflight checks (plasma.bootFailure names a missing one by its key).
-export const BROWSER_REQUIREMENTS = Object.freeze(['isolation', 'suspending', 'promising', 'webgpu', 'offscreen']);
+// The browser requirements the preflight checks, by key (plasma.bootFailure names a missing one), with their labels.
+const capabilityLabels = {
+  isolation: 'Shared memory access (cross-origin isolation)',
+  suspending: 'WebAssembly promise integration (Suspending)',
+  promising: 'WebAssembly promise integration (promising)',
+  webgpu: 'WebGPU graphics',
+  offscreen: 'Canvas transfer to a graphics worker (OffscreenCanvas)',
+};
+export const BROWSER_REQUIREMENTS = Object.freeze(Object.keys(capabilityLabels));
 // The browser a user-agent string names, with its major version, as the minimum table of the compatibility box
 // (index.html #compatibility) names browsers: 'Chrome / Chromium', 'Firefox' or 'Safari'; null for any other or one
 // it cannot read. Microsoft Edge (Edg/), Opera (OPR/) and the Chromium browsers that report Chrome's own string (Brave)
@@ -447,24 +408,8 @@ export function boot(harness = null) {
             lim = SS_MAX_SIDE + 'x' + SS_MAX_AREA / SS_MAX_SIDE;
           console.log(
             limited
-              ? '[page] render scale ' +
-                  chosen +
-                  'x falls back to Standard: its backing would be ' +
-                  b.w +
-                  'x' +
-                  b.h +
-                  ', over the ' +
-                  lim +
-                  ' limit (the choice is kept; it returns when the window fits)'
-              : '[page] render scale ' +
-                  chosen +
-                  'x available again: its backing is ' +
-                  b.w +
-                  'x' +
-                  b.h +
-                  ', within the ' +
-                  lim +
-                  ' limit (supersampling resumes)',
+              ? `[page] render scale ${chosen}x falls back to Standard: its backing would be ${b.w}x${b.h}, over the ${lim} limit (the choice is kept; it returns when the window fits)`
+              : `[page] render scale ${chosen}x available again: its backing is ${b.w}x${b.h}, within the ${lim} limit (supersampling resumes)`,
           );
         }
         // A press on a scale is the player's choice (Standard chosen while a saved 2x is limited replaces it); the choice in
@@ -518,25 +463,7 @@ export function boot(harness = null) {
             firstResolve(m);
           }
           console.log(
-            '[page] player window css ' +
-              m.cssW +
-              'x' +
-              m.cssH +
-              ' device ' +
-              devW +
-              'x' +
-              devH +
-              ' dpr ' +
-              dpr +
-              ' fullscreen ' +
-              (m.fullscreen ? 1 : 0) +
-              ' screen ' +
-              m.screenW +
-              'x' +
-              m.screenH +
-              ' cap ' +
-              m.cap +
-              (m.scale > 1 ? ' render scale ' + m.scale : ''),
+            `[page] player window css ${m.cssW}x${m.cssH} device ${devW}x${devH} dpr ${dpr} fullscreen ${m.fullscreen ? 1 : 0} screen ${m.screenW}x${m.screenH} cap ${m.cap}${m.scale > 1 ? ` render scale ${m.scale}` : ''}`,
           );
           logScaleLimit(chosen, updateScaleMenu(chosen, effective, devW, devH), devW, devH);
           for (const fn of display.listeners) fn(m);
@@ -620,19 +547,7 @@ export function boot(harness = null) {
     }
     canvasEl.style.maxWidth = 'none';
     console.log(
-      '[page] canvas backing ' +
-        backing.w +
-        'x' +
-        backing.h +
-        ' css ' +
-        canvasEl.style.width +
-        ' x ' +
-        canvasEl.style.height +
-        (fullscreenBox
-          ? ' (fullscreen ' + box.w + 'x' + box.h + ')'
-          : stageBox
-            ? ' (stage ' + box.w + 'x' + box.h + ')'
-            : ' (1:1)'),
+      `[page] canvas backing ${backing.w}x${backing.h} css ${canvasEl.style.width} x ${canvasEl.style.height}${fullscreenBox ? ` (fullscreen ${box.w}x${box.h})` : stageBox ? ` (stage ${box.w}x${box.h})` : ' (1:1)'}`,
     );
   }
   plasma.canvasBacking = (w, h) => {
@@ -655,13 +570,6 @@ export function boot(harness = null) {
     if (harness && harness.output) harness.output(text, isErr);
   }
   // The preflight: refuse missing browser requirements before loading client code or touching OPFS.
-  const capabilityLabels = {
-    isolation: 'Shared memory access (cross-origin isolation)',
-    suspending: 'WebAssembly promise integration (Suspending)',
-    promising: 'WebAssembly promise integration (promising)',
-    webgpu: 'WebGPU graphics',
-    offscreen: 'Canvas transfer to a graphics worker (OffscreenCanvas)',
-  };
   plasma.bootFailure = (missing, detail = '', source = 'worker') => {
     if (state.capabilityFailure) return; // Retain the first cause across abort/exit callbacks.
     state.capabilityFailure = { missing, detail: String(detail).slice(0, 512), source };
@@ -949,11 +857,7 @@ export function boot(harness = null) {
       if (page.ignored.length) {
         const names = page.ignored.slice(0, 24).map((name) => name.replace(/[^\x21-\x7e]/g, '?').slice(0, 40));
         console.log(
-          '[page] query parameters ignored on a player page (it reads only ' +
-            config.PLAYER_PARAMETERS.join(', ') +
-            '): ' +
-            names.join(', ') +
-            (page.ignored.length > names.length ? ' (+' + (page.ignored.length - names.length) + ')' : ''),
+          `[page] query parameters ignored on a player page (it reads only ${config.PLAYER_PARAMETERS.join(', ')}): ${names.join(', ')}${page.ignored.length > names.length ? ` (+${page.ignored.length - names.length})` : ''}`,
         );
       }
     }

@@ -321,12 +321,9 @@ plPXSimulation::~plPXSimulation()
         world.fScene->release();
     }
     fWorlds.clear();
-    // Pending cache invalidations hold subworld keys in plPXPhysicalControllerCore's static std::set<plKey>
-    // gInvalidCacheWorlds: InvalidateCache adds them (from plPXPhysical::SetGroup), and only Apply (from Advance)
-    // reads and clears them. An entry added after the last Advance would live until the static destructors run at
-    // exit, after plClientLoader::ShutdownEnd's hsgResMgr::Shutdown, and its ~plKey (IDecRef) would then reach a
-    // resource manager that is gone. This destructor runs earlier, from plSimulationMgr::Shutdown in
-    // plClient::Shutdown, so the keys go here, with the worlds. No reader of the set outlives it.
+    // plPXPhysicalControllerCore's static gInvalidCacheWorlds keys, added by InvalidateCache after the last Advance,
+    // would otherwise reach the static destructors, whose ~plKey (IDecRef) runs after hsgResMgr::Shutdown; this
+    // destructor runs before it (plSimulationMgr::Shutdown, from plClient::Shutdown).
     plPXPhysicalControllerCore::ClearInvalidCache();
 
     if (fPxCooking)

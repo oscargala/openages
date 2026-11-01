@@ -141,7 +141,6 @@ elseif(EMSCRIPTEN)
         emscripten/plEmscriptenCwd.cpp
         emscripten/plEmscriptenRuntime.cpp
         emscripten/plEmscriptenInput.cpp
-        emscripten/plEmscriptenFullscreen.cpp
         emscripten/plEmscriptenPatcher.cpp
         emscripten/plEmscriptenDisplay.cpp
         emscripten/plEmscriptenFrameHooks.cpp

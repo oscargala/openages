@@ -337,18 +337,14 @@ bool plEmscriptenCwd::GameDataPath(const char* path)
 // -----------------------------------------------------------------------------
 // getcwd() for a working directory on a WasmFS mount.
 //
-// The client runs with its game folder as the working directory (relative paths "dat", "python", "server.ini"
-// everywhere; Python's sys.path is "./python", "./python/system", ... (PythonInterface::initPython,
-// cyPythonInterface.cpp)). In the browser that folder is a WasmFS fetch-backend mount (/uru). Emscripten 6.0.12's
-// WasmFS getcwd (__syscall_getcwd, system/lib/wasmfs/syscalls.cpp) rebuilds the path by asking each parent for its
-// child's name, and a memory directory does not know the names of directories mounted into it
-// (Directory::Handle::getName in system/lib/wasmfs/file.cpp only searches its own entries, not the mount cache), so
-// getcwd() returns "/" while relative paths still resolve against /uru. Python turns sys.path entries into absolute
-// paths with getcwd() and then finds nothing ("No module named 'encodings'").
-//
-// Compat shim, linked with -Wl,--wrap=getcwd -Wl,--wrap=chdir: chdir() records the absolute, normalized directory it
-// changed to and getcwd() returns it. fchdir() is not wrapped (nothing in the client uses it); after an fchdir the real
-// getcwd() answers again.
+// The client runs in its game folder (relative "dat", "python", "server.ini"; Python's sys.path "./python", ...:
+// PythonInterface::initPython, cyPythonInterface.cpp), here the WasmFS fetch-backend mount /uru. Emscripten 6.0.12's
+// WasmFS getcwd (__syscall_getcwd, system/lib/wasmfs/syscalls.cpp) asks each parent for its child's name, and a memory
+// directory does not know the directories mounted into it (Directory::Handle::getName in system/lib/wasmfs/file.cpp
+// searches its own entries only), so getcwd() returns "/" while relative paths resolve against /uru, and Python's
+// absolute sys.path finds nothing ("No module named 'encodings'"). With -Wl,--wrap=getcwd -Wl,--wrap=chdir, chdir()
+// records the absolute, normalized directory and getcwd() returns it; after an fchdir (not wrapped: the client has
+// none) the real getcwd() answers again.
 
 extern "C" {
 char* __real_getcwd(char* buf, size_t size);

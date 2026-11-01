@@ -219,15 +219,9 @@ void plAvBrainCritter::Activate(plArmatureModBase* avMod)
 
 void plAvBrainCritter::Deactivate()
 {
-    // A brain that was never activated has no armature: fArmature is set only by
-    // plArmatureBrain::Activate, which the armature defers until it has a target and
-    // is finalized (plArmatureModBase::PushBrain/IFinalize), while RemoveTarget
-    // deactivates every brain it holds. Such a brain never announced itself
-    // (plAIBrainCreatedMsg comes from Activate()), so there is nobody to warn. This
-    // happens when a critter is cloned in and removed before its armature is ever
-    // evaluated, e.g. a quab that ahnyQuabs.py respawns from the plAIBrainDestroyedMsg
-    // of another while the client shuts down. plAvBrainHuman::Deactivate guards its
-    // fAvMod in the same way.
+    // RemoveTarget deactivates brains never activated (plArmatureModBase::PushBrain/IFinalize defer
+    // plArmatureBrain::Activate, which sets fArmature and sends plAIBrainCreatedMsg): such a brain has no
+    // armature and nobody to warn, as plAvBrainHuman::Deactivate guards its fAvMod.
     if (fArmature) {
         // Although "destroyed" is in the past tense, this is really a warning message.
         // The brain is about to go away, so save anything you need to and toss it!

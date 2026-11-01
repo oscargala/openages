@@ -61,26 +61,15 @@ if (typeof ENVIRONMENT_IS_PTHREAD !== 'undefined' && ENVIRONMENT_IS_PTHREAD) {
   });
 }
 
-// The page and the module meet in one object, Module.plasma. Its schema is documented in the page's boot.mjs header
-// (the page creates the object, seals it, and passes it to the factory among the module's arguments) and in
-// Docs/Web/Architecture.md ("The page and the module: plasma"). This script, on the page's main thread, fills
-// the client's own members and turns the page's configuration into the client's environment:
-//   config    the configuration the page passes, one JSON value: null, or an object of the keys of CONFIG below.
-//             The client's environment is made from it alone: the environment is not exported (no
-//             EXPORTED_RUNTIME_METHODS=ENV), and the environment installed here replaces whatever the ENV object held,
-//             so a page passes nothing to the client but this value.
-//   storage   {login(how)}: the persistent-storage request when the player starts a login (below).
-//   login     the open login dialog (plEmscriptenLogin.js), null while none is open.
-//   launcher  the open launcher dialog (plEmscriptenPatcher.js), null while none is open.
-//   input     the input layer's handle (plEmscriptenInput.js): {ready, status, error, requestPointerLock,
-//             requestFullscreen, dispose, ...}, null until the client attaches its input.
-//   fullscreen, fullscreenStatus   the fullscreen layer (input/fullscreen.mjs attachFullscreen,
-//             through plEmscriptenFullscreen.js) and its last status, null until the client sets its first display
-//             mode.
-//   audioBackend, audioActivationError   the native-audio build's playback (plEmscriptenNativeAudio.js): the backend's
-//             name and why the browser refused to resume its audio context; null in every other build.
-// A page that made no Module.plasma (one that does not use boot.mjs) gets an empty one: no configuration, a fixed
-// canvas, the login dialog. Nothing here adds a global of its own.
+// The page and the module meet in one object, Module.plasma, which the page creates, seals and passes to the factory
+// (boot.mjs); Docs/Web/Architecture.md ("The page and the module: plasma") describes its members. This script, on the
+// page's main thread, turns the page's config (null, or an object of the keys of CONFIG below) into the client's
+// environment, which replaces whatever ENV held (no EXPORTED_RUNTIME_METHODS=ENV), and fills the client's members:
+// storage {login(how)}, login (plEmscriptenLogin.js), launcher (plEmscriptenPatcher.js), input (plEmscriptenInput.js:
+// {ready, status, error, requestPointerLock, requestFullscreen, dispose, ...}), fullscreen and fullscreenStatus
+// (input/fullscreen.mjs attachFullscreen, through plEmscriptenFullscreen.js), audioBackend and
+// audioActivationError (plEmscriptenNativeAudio.js). A page that made no Module.plasma gets an empty one: no
+// configuration, a fixed canvas, the login dialog. Nothing here adds a global of its own.
 if (typeof document !== 'undefined') {
   // CONFIG: each key of the configuration and the environment variable the client reads it from. A string is passed
   // as it is, null as the empty string (the client's "not set"); hdPack is {base, ages} or null; assetOrigins is an

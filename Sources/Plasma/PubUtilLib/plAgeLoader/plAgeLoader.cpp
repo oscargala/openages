@@ -77,9 +77,6 @@ plAgeLoader* plAgeLoader::fInstance = nullptr;
 #ifdef PLASMA_PIPELINE_WGPU
 void (*plAgeLoader::fAgeDataHook)(const ST::string& ageName) = nullptr;
 #endif
-#ifdef PLASMA_TEST_HOOKS
-void (*plAgeLoader::fLoadAgeTestHook)(const ST::string& ageName) = nullptr;
-#endif
 
 //
 // CONSTRUCT
@@ -206,7 +203,7 @@ tl::expected<tl::monostate, ST::string> plAgeLoader::LoadAge(const ST::string& a
     fAgeName = ageName;
 
 #ifdef PLASMA_TEST_HOOKS
-    // Harness builds only (SetLoadAgeTestHook): the test harness's fixed time can start at this Age's load.
+    // Harness builds only (fLoadAgeTestHook): the test harness's fixed time can start at this Age's load.
     if (fLoadAgeTestHook)
         fLoadAgeTestHook(fAgeName);
 #endif

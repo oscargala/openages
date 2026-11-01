@@ -1859,8 +1859,8 @@ bool plClient::IDraw()
     // The first scene frame after a load: the pipeline builds the load's walks left pending are
     // waited for here, drawing progress frames (IWaitPipelineBuilds), before plRenderMsg.
     // An Age's arrival frame is treated as a load frame too. Its IUpdate sent plAgeLoadedMsg (plNCAgeJoiner's
-    // kNotifyAgeLoaded, plNetCliAgeJoiner.cpp:343-348) and plInitialAgeStateLoadedMsg (plNetClientMgr.cpp:780-784),
-    // whose joiner handler cleared kLoadingInitialAgeState (plNetCliAgeJoiner.cpp:456-465); their handlers can change
+    // kNotifyAgeLoaded, plNetCliAgeJoiner.cpp:337-342) and plInitialAgeStateLoadedMsg (plNetClientMgr.cpp:780-784),
+    // whose joiner handler cleared kLoadingInitialAgeState (plNetCliAgeJoiner.cpp:450-459); their handlers can change
     // what the scene draws with (plGrassShaderMod::ISetupShaders, plGrassShaderMod.cpp:175-179, 221-273). The frame
     // start re-walks the walked drawables (plWGPUPipeline::PrewarmArrival) and the wait covers what that starts, under
     // the transition's opaque plate: that wait registers no progress operation, so its frames draw the plate and no
@@ -1915,8 +1915,8 @@ bool plClient::IDraw()
     // requests are queued by now (plRenderMsg), and their draws are started with the rest, through fPageMgr as
     // IProcessRenderRequests draws them.
     // After a load, while the Age's initial state loads (plNCAgeJoiner::Start sets
-    // kLoadingInitialAgeState, plNetCliAgeJoiner.cpp:198, and clears it before it sends the link-in's
-    // plLinkEffectsTriggerMsg, :465-483), a frame whose walks leave builds pending is not drawn, as a frame whose
+    // kLoadingInitialAgeState, plNetCliAgeJoiner.cpp:192, and clears it before it sends the link-in's
+    // plLinkEffectsTriggerMsg, :459-477), a frame whose walks leave builds pending is not drawn, as a frame whose
     // device is not ready (plDXPipeline::BeginRender returning true): the next IDraw waits for the builds drawing
     // progress frames. Afterwards the frame waits here, blocking, as before.
     if (plWGPUPipeline* wgpuPipe = plWGPUPipeline::ConvertNoRef(fPipeline)) {
@@ -2015,7 +2015,7 @@ void plClient::IWaitPipelineBuilds(plWGPUPipeline* pipe, bool progressOperation)
     // (plClient.cpp:1379-1404) while an operation exists (IDraw, plProgressMgr::IsActive). The wait is one such
     // operation, with no title and no length: plDTProgressMgr draws its glyph only (plDTProgressMgr.cpp:100-108,
     // 201-244), as for the Age joiner's own operation in a release build
-    // (plNCAgeJoiner::ExecNextOp, plNetCliAgeJoiner.cpp:235-239).
+    // (plNCAgeJoiner::ExecNextOp, plNetCliAgeJoiner.cpp:229-233).
     // Nothing else runs meanwhile, as in Metal's wait: no update (the game does not advance), no message pump.
     // progressOperation false: an Age's arrival frame (plClient::IDraw). Its wait registers no operation, so
     // plDTProgressMgr::Draw draws nothing (plDTProgressMgr.cpp:140-141) and the progress frames show the black clear and

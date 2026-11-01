@@ -42,24 +42,18 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 // JS half of plEmscriptenFrameLoop.cpp (runs in the client thread's worker).
 addToLibrary({
-  // Emscripten's main loop with requestAnimationFrame timing (what emscripten_set_main_loop
-  // with fps 0 sets up, including its runtime keepalive), but the iteration calls the tick
-  // through WebAssembly.promising so that the tick may suspend (JSPI). A plain
-  // emscripten_set_main_loop callback is not a promising entry: suspending inside it traps
-  // with "SuspendError: trying to suspend without WebAssembly.promising".
-  // No wasm frame may sit between this JS iteration and the suspended stack: the shadow
-  // stack pointer then stays below the suspended frames while other work runs on the thread.
-  // While a tick is suspended, iterations skip (plFrameLoop_skipped counts them).
+  // Emscripten's main loop with requestAnimationFrame timing (emscripten_set_main_loop with fps 0, its runtime
+  // keepalive included), but each iteration calls the tick through WebAssembly.promising, so that the tick may suspend
+  // (JSPI): a plain main-loop callback is no promising entry, and suspending in it traps ("SuspendError: trying to
+  // suspend without WebAssembly.promising"). No wasm frame sits between this iteration and the suspended stack, so the
+  // shadow stack pointer stays below the suspended frames meanwhile. Iterations skip while a tick is suspended
+  // (plFrameLoop_skipped).
   //
-  // An uncaught exception or trap that ends a tick ends the loop for good: no later tick
-  // runs, so the client (its shutdown above all) is never entered again on the state the
-  // fault left behind. The native client never resumes after a fault either: the Windows
-  // client's unhandled-exception filter (plCustomUnhandledExceptionFilter, installed by
-  // wWinMain in win32/winmain.cpp) reports the crash and returns EXCEPTION_EXECUTE_HANDLER,
-  // so the process ends and its single shutdown at the end of wWinMain runs at most once. A
-  // loop that went on ticking would run MainLoop again after a fault inside ClientFinish(),
-  // and then a second ClientFinish() on the half-destroyed heap. The original exception is
-  // reported once (handleException).
+  // An uncaught exception or trap that ends a tick ends the loop for good, reported once (handleException): the client,
+  // its shutdown above all, never runs again on the state the fault left (ticking on would run MainLoop after a fault
+  // in ClientFinish(), then a second ClientFinish() on the half-destroyed heap). The native client never resumes after
+  // a fault either: plCustomUnhandledExceptionFilter (installed by wWinMain in win32/winmain.cpp) reports the crash and
+  // returns EXCEPTION_EXECUTE_HANDLER, so the process ends and wWinMain's one shutdown runs at most once.
   $plFrameLoopSkipped: 0,
   plFrameLoop_skipped__deps: ['$plFrameLoopSkipped'],
   plFrameLoop_skipped: () => plFrameLoopSkipped,

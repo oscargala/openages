@@ -518,11 +518,8 @@ namespace
                     1,              // First integer is always the length
                     hsG3DDeviceSelector::kCapsNoAA };
 
-    // WebKit on Metal: the default row plus kCapsNoAA, the GeForce FX 5200 row's set, so that
-    // SetFudgeFactors clears every mode's FSAA types. Measured 2026-10-31: on an M1 MacBook, Safari 27.2, Relto at a
-    // fixed pose and clock, the cloud sea draws its triangle-edge network as lines at 4x MSAA and none at
-    // AntiAliasAmount 0; two runs of one build at 4x differ on triangle edges. A Mac mini's Safari, which reports the
-    // same adapter strings, shows no lines at 4x.
+    // WebKit on Metal: the default row plus kCapsNoAA, the GeForce FX 5200 row's set, so that SetFudgeFactors clears
+    // every mode's FSAA types: at 4x MSAA, Safari on an M1 draws the triangle edges of Relto's cloud sea as lines.
     uint32_t dsWebKitOnMetalCapsSet[] = {
         1, // First integer is always the length
         hsG3DDeviceSelector::kCapsNoAA};

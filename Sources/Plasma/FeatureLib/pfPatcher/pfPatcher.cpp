@@ -64,7 +64,6 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <sys/stat.h>
 #include <zlib.h>
 
-#include <atomic>
 #include <cerrno>
 #include <cstdio>
 
@@ -78,22 +77,6 @@ static pfPatcher::WriteFailuresFunc s_writeFailures;
 // arrived complete, is fetched again before its patch fails (pfPatcherWorker::IFileThingDownloadCB). A download that
 // arrived complete (every delivered byte, or every byte of a verified gzip stream, on disk) is kept, as native.
 static constexpr uint32_t           kDownloadRetries = 2;
-// One chunk of a download as the file server delivered it, a Write of pfPatcherStream
-struct pfPatcherDownloadChunk
-{
-    uint32_t index;
-    uint64_t offset; // its first byte's offset in the delivered (compressed) stream
-    uint32_t size;
-};
-#ifdef PLASMA_TEST_HOOKS
-// The harness's test faults (pfPatcher::SetTestDownloadFaults), set before any patcher starts.
-static plFileName        s_testSizeFile;
-static int32_t           s_testSizeDelta = 0;
-static plFileName        s_testDropFile;
-static std::atomic<bool> s_testDropArmed{false};
-static bool              s_testDropEvery = false;
-static bool              s_testDropCorrupt = false; // invert a byte of that payload, not drop it
-#endif
 #endif
 
 template<typename... _Args>
@@ -291,8 +274,8 @@ public:
 #ifdef __EMSCRIPTEN__
         fExpectedSize = file.fFileSize;
 #ifdef PLASMA_TEST_HOOKS
-        if (s_testSizeFile.IsValid() && fFilename == s_testSizeFile)
-            fExpectedSize += s_testSizeDelta;
+        if (pfPatcher::fTestSizeDelta)
+            fExpectedSize += pfPatcher::fTestSizeDelta(fFilename);
 #endif
 #endif
         // ugh. eap removed the compressed flag in his fail manifests
@@ -325,8 +308,6 @@ public:
     {
         fDLStartTime = hsTimer::GetSeconds<float>();
 #ifdef __EMSCRIPTEN__
-        // what this download starts from, for the size line of a mismatch
-        fSizeAtBegin = plFileInfo(fFilename).FileSize();
         fWriteFailuresAtBegin = s_writeFailures ? s_writeFailures(fFilename) : 0;
 #endif
         if (!fOutput)
@@ -345,16 +326,12 @@ public:
     void Close()
     {
 #ifdef __EMSCRIPTEN__
-        // what the inflater produced and consumed, for the size check after Close: plZlibStream::Close deletes the
-        // z_stream (plZlibStream.cpp:77-82). uLong is 32 bits on wasm32, so the counts are kept widened.
-        if (hsCheckBits(fFlags, kFlagZipped) && fZStream) {
-            const z_streamp zstream = static_cast<z_streamp>(fZStream);
-            fInflatedOut = int64_t(uint64_t(zstream->total_out));
-            fInflatedIn = int64_t(uint64_t(zstream->total_in));
-        } else {
+        // what the inflater produced, for the size check after Close: plZlibStream::Close deletes the
+        // z_stream (plZlibStream.cpp:77-82). uLong is 32 bits on wasm32, so the count is kept widened.
+        if (hsCheckBits(fFlags, kFlagZipped) && fZStream)
+            fInflatedOut = int64_t(uint64_t(static_cast<z_streamp>(fZStream)->total_out));
+        else
             fInflatedOut = -1;
-            fInflatedIn = -1;
-        }
 #endif
         if (hsCheckBits(fFlags, kFlagZipped))
             plZlibStream::Close();
@@ -366,34 +343,16 @@ public:
         // tick whatever progress bar we have
         IUpdateProgress(count);
 
-#ifdef __EMSCRIPTEN__
-        // Each Write is one chunk of the file server's (RcvdFileDownloadChunkTrans::Post,
-        // plNglFile.cpp), at this compressed offset
-        const pfPatcherDownloadChunk chunk{fChunks++, fBytesWritten - count, count};
-        fLastChunk = chunk;
-#endif
-
 #if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
-        // the harness's dropped tail: the first attempt's last payload never reaches the file, or every attempt's
-        // or, with s_testDropCorrupt, reaches it with its middle byte inverted
-        std::vector<uint8_t> corrupted;
-        if (s_testDropFile.IsValid() && fFilename == s_testDropFile && fBytesWritten >= fDeliverSize &&
-            (s_testDropEvery || (fAttempt == 0 && s_testDropArmed.exchange(false)))) {
-            if (!s_testDropCorrupt || !count)
-                return count;
-            corrupted.assign((const uint8_t*)buf, (const uint8_t*)buf + count);
-            corrupted[count / 2] ^= 0xFF;
-            buf = corrupted.data();
-        }
+        // the harness's tail fault (pfPatcher::fTestTailFault) may drop the last payload or change its bytes
+        if (pfPatcher::fTestTailFault && fBytesWritten >= fDeliverSize &&
+            !(buf = pfPatcher::fTestTailFault(fFilename, fAttempt, buf, count)))
+            return count;
 #endif
 
         // write the appropriate blargs
         if (hsCheckBits(fFlags, kFlagZipped))
-#ifdef __EMSCRIPTEN__
-            return IWriteZipped(chunk, count, buf);
-#else
             return plZlibStream::Write(count, buf);
-#endif
         else
             return fOutput->Write(count, buf);
     }
@@ -426,28 +385,8 @@ public:
     int64_t  fExpectedSize = -1;
     uint32_t fDeliverSize = 0;          // the bytes the file server sends: the zip size, or the file size
     uint32_t fAttempt = 0;              // 0 for the first download, then 1 per retry
-    int64_t  fSizeAtBegin = -1;         // the file's size before Begin's fopen, -1 when absent
     uint32_t fWriteFailuresAtBegin = 0; // the failed writes of this file before Begin (s_writeFailures)
     int64_t  fInflatedOut = -1;         // a zipped file's inflated bytes (z_stream total_out) at Close, -1 for none
-    int64_t  fInflatedIn = -1;          // the compressed bytes the inflater consumed (total_in) at Close, -1 for none
-
-    // The chunks Write was handed, and the one in which inflate failed
-    uint32_t               fChunks = 0;
-    pfPatcherDownloadChunk fLastChunk{0, 0, 0};
-    pfPatcherDownloadChunk fFailChunk{0, 0, 0};
-    int64_t                fFailIn = -1; // the compressed bytes the inflater had consumed when it failed, -1 for none
-
-    // plZlibStream::Write, noting where inflate failed for the size line
-    uint32_t IWriteZipped(const pfPatcherDownloadChunk& chunk, uint32_t count, const void* buf)
-    {
-        const bool     failedBefore = fErrorOccurred;
-        const uint32_t written = plZlibStream::Write(count, buf);
-        if (!failedBefore && fErrorOccurred) {
-            fFailChunk = chunk;
-            fFailIn = fZStream ? int64_t(uint64_t(static_cast<z_streamp>(fZStream)->total_in)) : -1;
-        }
-        return written;
-    }
 
     // The file's size on disk now, or -1 with the stat errno
     int64_t SizeOnDisk(int& error) const
@@ -494,29 +433,8 @@ public:
     ST::string SizeLine(int64_t onDisk, int error, const ST::string& outcome) const
     {
         const ST::string disk = onDisk >= 0 ? ST::format("{} B", onDisk) : ST::format("absent (errno {})", error);
-        const ST::string before = fSizeAtBegin >= 0 ? ST::format("{} B", fSizeAtBegin) : ST_LITERAL("absent");
-        const ST::string inflated =
-            fInflatedOut >= 0 ? ST::format("inflated {} B from {} of {} delivered B", fInflatedOut, fInflatedIn,
-                                           fBytesWritten)
-                              : ST_LITERAL("no inflate stream");
-        // Where inflate failed (its compressed offset, and the chunk that held it), or the last chunk
-        const ST::string chunks =
-            fFailIn >= 0 ? ST::format("; inflate failed at compressed byte {}, in chunk {} of {} (offset {}, {} B)",
-                                      fFailIn, fFailChunk.index + 1, fChunks, fFailChunk.offset, fFailChunk.size)
-            : fChunks    ? ST::format("; {} chunks, the last at offset {}, {} B", fChunks, fLastChunk.offset,
-                                      fLastChunk.size)
-                         : ST_LITERAL("; no chunk");
-        const ST::string inflate =
-            hsCheckBits(fFlags, kFlagZipped)
-                ? ST::format("error {}, stream end {}, {}{}", fErrorOccurred ? "yes" : "no",
-                             fDecompressedOk ? "yes" : "no", inflated, chunks)
-                : ST_LITERAL("n/a");
-        const uint32_t failures = s_writeFailures ? s_writeFailures(fFilename) : 0;
-        return ST::format(
-            "Size mismatch: '{}' attempt {}: on disk {}, manifest {} B; before the download {}; "
-            "delivered {} of {} B; inflate {}; write failures of the file {} -> {}: {}",
-            fFilename, fAttempt + 1, disk, fExpectedSize, before, fBytesWritten, fDeliverSize, inflate,
-            fWriteFailuresAtBegin, failures, outcome);
+        return ST::format("Size mismatch: '{}' attempt {}: on disk {}, manifest {} B; delivered {} of {} B: {}",
+                          fFilename, fAttempt + 1, disk, fExpectedSize, fBytesWritten, fDeliverSize, outcome);
     }
 #endif
 };
@@ -1062,19 +980,6 @@ void pfPatcher::SetWriteFailures(WriteFailuresFunc cb)
 {
     s_writeFailures = std::move(cb);
 }
-
-#ifdef PLASMA_TEST_HOOKS
-void pfPatcher::SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile,
-                                      bool dropEvery, bool dropCorrupt)
-{
-    s_testDropCorrupt = dropCorrupt;
-    s_testSizeFile = sizeFile.Normalize();
-    s_testSizeDelta = sizeDelta;
-    s_testDropFile = dropFile.Normalize();
-    s_testDropArmed = dropFile.IsValid();
-    s_testDropEvery = dropEvery;
-}
-#endif
 #endif
 
 // ===================================================

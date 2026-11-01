@@ -170,14 +170,14 @@ public:
     static void SetWriteFailures(WriteFailuresFunc cb);
 
 #ifdef PLASMA_TEST_HOOKS
-    /** Harness builds only: test faults in the file downloads of every patcher. The download of sizeFile is checked
-     *  against its manifest size plus sizeDelta; the first download of dropFile (every download of it when
-     *  dropEvery is set) loses the last payload it is handed, or, with dropCorrupt, has that payload's middle byte
-     *  inverted. An empty file name sets no fault.
-     *  \remarks Set it before any patcher starts.
+    /** Harness builds only: test faults in the file downloads of every patcher, null unless the test harness sets them
+     *  before any patcher starts. fTestSizeDelta returns what a file's download is checked against beyond its manifest
+     *  size. fTestTailFault is handed each download's last payload with the file and the attempt (0 for the first), and
+     *  returns it, other bytes of its size to write instead, or null to drop it.
      */
-    static void SetTestDownloadFaults(const plFileName& sizeFile, int32_t sizeDelta, const plFileName& dropFile,
-                                      bool dropEvery = false, bool dropCorrupt = false);
+    static inline int32_t (*fTestSizeDelta)(const plFileName& file) = nullptr;
+    static inline const void* (*fTestTailFault)(const plFileName& file, uint32_t attempt, const void* payload,
+                                                uint32_t count) = nullptr;
 #endif
 #endif
 

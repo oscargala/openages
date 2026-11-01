@@ -52,7 +52,8 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 // EnumValue_hex), fputs(text, fp) replaces fprintf(fp, text) (EnumValue_print: the same output
 // without format interpretation), and nb_long calls CPython 2.3's own PyLong_FromLong as
 // PyPlasma_LongObject_FromLong (pyPy2Compat.h gives the name PyLong_FromLong the `int` of H-uru's
-// glue), so long() of a value is a `long`, as in CWE (EnumValue_long).
+// glue), so long() of a value is a `long`, as in CWE (EnumValue_long). CWE's three bit operators
+// share one body here (pyEnum2Value_bitop), and str returns repr, CWE's two having the same body.
 //
 // Bugs fixed against CWE:
 // - pyEnum2Value_print (CWE EnumValue_print) releases the string it prints. tp_str and tp_repr
@@ -159,14 +160,7 @@ static PyObject* pyEnum2Value_repr(PyObject* self)
 
 static PyObject* pyEnum2Value_str(PyObject* self)
 {
-    pyEnum2Value* obj = (pyEnum2Value*)self;
-    if (obj->name == NULL) {
-        // no name, so return our value
-        return PyString_FromFormat("%s(%ld)", obj->ob_type->tp_name, obj->value);
-    } else {
-        // just return the name
-        return PyString_FromString(obj->name);
-    }
+    return pyEnum2Value_repr(self);
 }
 
 // forward def because the type object isn't defined yet
@@ -190,7 +184,8 @@ static int pyEnum2Value_nonzero(pyEnum2Value* v)
     return v->value != 0;
 }
 
-static PyObject* pyEnum2Value_and(PyObject* v, PyObject* w)
+// An enum value and an int on either side (nb_and, nb_xor, nb_or): op of the two as an int, else NotImplemented.
+static PyObject* pyEnum2Value_bitop(PyObject* v, PyObject* w, long (*op)(long, long))
 {
     pyEnum2Value* obj = NULL;
     long          other = 0;
@@ -212,57 +207,22 @@ static PyObject* pyEnum2Value_and(PyObject* v, PyObject* w)
         Py_INCREF(Py_NotImplemented);
         return Py_NotImplemented;
     }
-    return PyInt_FromLong(obj->value & other);
+    return PyInt_FromLong(op(obj->value, other));
+}
+
+static PyObject* pyEnum2Value_and(PyObject* v, PyObject* w)
+{
+    return pyEnum2Value_bitop(v, w, [](long a, long b) { return a & b; });
 }
 
 static PyObject* pyEnum2Value_xor(PyObject* v, PyObject* w)
 {
-    pyEnum2Value* obj = NULL;
-    long          other = 0;
-    if (IsEnumValue(v)) {
-        obj = (pyEnum2Value*)v;
-        if (!PyInt_Check(w)) {
-            Py_INCREF(Py_NotImplemented);
-            return Py_NotImplemented;
-        }
-        other = PyInt_AsLong(w);
-    } else if (IsEnumValue(w)) {
-        obj = (pyEnum2Value*)w;
-        if (!PyInt_Check(v)) {
-            Py_INCREF(Py_NotImplemented);
-            return Py_NotImplemented;
-        }
-        other = PyInt_AsLong(v);
-    } else {
-        Py_INCREF(Py_NotImplemented);
-        return Py_NotImplemented;
-    }
-    return PyInt_FromLong(obj->value ^ other);
+    return pyEnum2Value_bitop(v, w, [](long a, long b) { return a ^ b; });
 }
 
 static PyObject* pyEnum2Value_or(PyObject* v, PyObject* w)
 {
-    pyEnum2Value* obj = NULL;
-    long          other = 0;
-    if (IsEnumValue(v)) {
-        obj = (pyEnum2Value*)v;
-        if (!PyInt_Check(w)) {
-            Py_INCREF(Py_NotImplemented);
-            return Py_NotImplemented;
-        }
-        other = PyInt_AsLong(w);
-    } else if (IsEnumValue(w)) {
-        obj = (pyEnum2Value*)w;
-        if (!PyInt_Check(v)) {
-            Py_INCREF(Py_NotImplemented);
-            return Py_NotImplemented;
-        }
-        other = PyInt_AsLong(v);
-    } else {
-        Py_INCREF(Py_NotImplemented);
-        return Py_NotImplemented;
-    }
-    return PyInt_FromLong(obj->value | other);
+    return pyEnum2Value_bitop(v, w, [](long a, long b) { return a | b; });
 }
 
 static PyObject* pyEnum2Value_int(pyEnum2Value* v)

@@ -92,7 +92,7 @@ std::vector<plDisplayMode> plEmscriptenDisplayHelper::GetSupportedDisplayModes(
 {
     // The canvas mode first (the device record's default, mode index 0),
     // then the screen in device pixels, the mode a fullscreen canvas has; listed once when
-    // the two are equal. The fullscreen layer (plEmscriptenDisplay.h, the hook contract)
+    // the two are equal. The fullscreen layer (plEmscriptenFullscreen.js, plFullscreenMode)
     // asks for it as any mode change is asked for.
     std::vector<plDisplayMode> modes = {CanvasMode()};
     const plDisplayMode        screen = ScreenMode();

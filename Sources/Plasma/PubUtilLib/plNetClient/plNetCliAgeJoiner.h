@@ -95,13 +95,11 @@ void NCAgeJoinerUpdate (
 // Harness builds only: a function every joiner calls with the Age it is about to join, once the file server's update
 // has succeeded and before NetCommLinkToAge, and which may change it. The test harness's age-instance pin sets it;
 // null otherwise.
-void NCAgeJoinerSetLinkTestHook(
-    void (*hook)(NetCommAge& age));
+inline void (*NCAgeJoinerLinkTestHook)(NetCommAge& age) = nullptr;
 // Harness builds only: a function every joiner calls with the Age it is joining at kRequestAgeState, before it sends
 // the members-list and initial-state requests to the game server (not on an offline link). It may hold the client
 // thread; it changes nothing the joiner sends. The test harness's hide-at-state-request hook sets it; null otherwise.
-void NCAgeJoinerSetStateRequestTestHook(
-    void (*hook)(const NetCommAge& age));
+inline void (*NCAgeJoinerStateRequestTestHook)(const NetCommAge& age) = nullptr;
 #endif
     
 

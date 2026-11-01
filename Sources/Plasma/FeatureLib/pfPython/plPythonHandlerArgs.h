@@ -43,20 +43,12 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #ifndef _plPythonHandlerArgs_h_
 #define _plPythonHandlerArgs_h_
 
-// What plPythonFileMod::MsgReceive hands a script's OnNotify and OnKIMsg handlers: the per-flavour policy of its one
-// builder.
-//
-// The builder is upstream's (plPythonFileMod::MsgReceive, its plNotifyMsg and pfKIMsg branches) on both flavours.
-// Where CWE's MsgReceive gave a py2 script another type than upstream's gives a py3 script, the builder calls one of
-// the three functions below, and on py3 each is upstream's own call. Everywhere else the two builders made the same
-// thing: the numbers CWE made with PyInt_FromLong (the flags, a variable's int, the offer's age and offeree) are
-// upstream's PyLong_FromLong, an `int` on py2 too (pyPy2Compat.h); the book's numbers are PyLong_FromUnsignedLong on
-// both, a `long` on py2; the names CWE made with PyString_FromString (a variable's name, the KI's user name) are
-// upstream's PyUnicode_FromSTString, a `str` on py2 too; floats, keys, scene objects, points and None are the same
-// calls. The KI's value tuples are tuples on both.
-// CWE is plPythonFileMod::MsgReceive in OpenUru CWE-ou-minkata 76ef5e01 (GPLv3), upstream is H-uru's at ebe51e651.
-// Both build OnNotify's events in MsgReceive's plNotifyMsg branch, one case per proEventData type, and OnKIMsg's value
-// in its pfKIMsg branch, one case per KI command.
+// What plPythonFileMod::MsgReceive (its plNotifyMsg and pfKIMsg branches, upstream's on both flavours) hands a script's
+// OnNotify and OnKIMsg handlers. Where CWE's MsgReceive (OpenUru CWE-ou-minkata 76ef5e01, GPLv3) gave a py2 script
+// another type than upstream's (H-uru ebe51e651) gives a py3 script, the builder calls one of the three functions
+// below, each upstream's own call on py3. Every other value is the same type on both: PyInt_FromLong's numbers are
+// PyLong_FromLong's, an `int` on py2 too (pyPy2Compat.h); PyString_FromString's names are PyUnicode_FromSTString's, a
+// `str` on py2 too; PyLong_FromUnsignedLong, floats, keys, scene objects, points, None and the KI's tuples are alike.
 
 #include <string_theory/string>
 

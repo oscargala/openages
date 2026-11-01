@@ -78,8 +78,9 @@ function object(value, keys) {
 // A page served from this host itself (development). Only such a page may take its deployment document from another
 // origin or carry the harness and diagnostic capabilities. The private test harness page runs only
 // on such a page.
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 export function loopbackPage(pageUrl) {
-  return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(pageUrl).hostname);
+  return LOOPBACK_HOSTS.includes(new URL(pageUrl).hostname);
 }
 function endpoint(value, base, websocket = false) {
   if (typeof value !== 'string' || !value || value.length > 2048 || /[\x00-\x20\x7f\\]/.test(value)) fail();
@@ -91,7 +92,7 @@ function endpoint(value, base, websocket = false) {
   }
   const secure = websocket ? 'wss:' : 'https:',
     local = websocket ? 'ws:' : 'http:';
-  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  const loopback = LOOPBACK_HOSTS.includes(u.hostname);
   if (
     (u.protocol !== secure && !(u.protocol === local && loopback && new URL(base).protocol === 'http:')) ||
     u.username ||

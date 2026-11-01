@@ -76,9 +76,6 @@ private:
     };
     
     static plAgeLoader* fInstance;
-#ifdef PLASMA_TEST_HOOKS
-    static void (*fLoadAgeTestHook)(const ST::string& ageName); // SetLoadAgeTestHook
-#endif
 
     uint32_t  fFlags;
     plFileNameVec fPendingAgeFniFiles;        // list of age .fni files to be parsed
@@ -112,7 +109,7 @@ public:
 #ifdef PLASMA_TEST_HOOKS
     // Harness builds only: a function LoadAge calls first, with the Age's name, before plAgeBeginLoadingMsg and any
     // page load. The test harness's fixed time at an Age's load sets it; null otherwise.
-    static void SetLoadAgeTestHook(void (*hook)(const ST::string& ageName)) { fLoadAgeTestHook = hook; }
+    static inline void (*fLoadAgeTestHook)(const ST::string& ageName) = nullptr;
 #endif
 
     void Init();

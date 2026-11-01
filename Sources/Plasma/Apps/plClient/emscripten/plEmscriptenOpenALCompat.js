@@ -62,25 +62,19 @@ addToLibrary({
     };
   },
 
-  // libopenal.js implements AL_NONE with a large panner reference distance, but
-  // alSource*(AL_REFERENCE_DISTANCE) overwrites it. Reapply the original backend's
-  // global mapping after a validated reference- or max-distance change.
+  // libopenal.js implements AL_NONE with a large panner reference distance, which alSource*(AL_REFERENCE_DISTANCE)
+  // overwrites: the original backend's global mapping is reapplied after a validated reference- or max-distance change.
   //
-  // AL_MAX_DISTANCE 0 is a valid OpenAL value (range [0, +inf]; plDSoundBuffer::SetMaxDistance passes a
-  // sound's integer max falloff, 0 for some Cleft sounds), but libopenal.js copies it to PannerNode.maxDistance, which
-  // throws a RangeError for any value <= 0: at alSource*(AL_MAX_DISTANCE) when the source has a panner, or later in
-  // updateSourceGlobal when initSourcePanner creates one (alSourceUnqueueBuffers reaches it, for example).
-  // The exception escapes a call proxied from the client thread and ends the session. The AL value stays 0 (alGetSource
-  // returns it); the panner gets the smallest positive float instead, which the 'inverse' panner below never reads.
+  // AL_MAX_DISTANCE 0 is valid OpenAL (plDSoundBuffer::SetMaxDistance passes a sound's max falloff, 0 for some Cleft
+  // sounds), but PannerNode.maxDistance throws a RangeError for it, at alSource*(AL_MAX_DISTANCE) or later in
+  // updateSourceGlobal (initSourcePanner, from alSourceUnqueueBuffers for one), and the exception ends the session. The
+  // AL value stays 0; the panner gets FLT_MIN, which the 'inverse' panner below never reads.
   //
-  // The native client's OpenAL Soft 1.24.3 applies no distance attenuation to an inverse-model source
-  // whose reference distance is 0, nor, under AL_INVERSE_DISTANCE_CLAMPED (plAudioSystem::Init), to one whose max
-  // distance is below its reference distance (CalcAttnSourceParams in OpenAL Soft's alc/alu.cpp: the clamped case
-  // breaks out when MaxDistance < RefDistance, the inverse formula runs only when RefDistance > 0). The Web Audio
-  // 'inverse' panner libopenal.js maps
-  // both models to returns 0 for refDistance 0 (silence) and attenuates past refDistance whatever maxDistance is. The
-  // game's 2D mono sounds carry min/max falloff 0/0 (Cleft, GUI books) or 10/5 (VeeTsah), so those cases decide their
-  // audibility. They get the setting libopenal.js already uses for AL_NONE: 'inverse' with refDistance FLT_MAX, gain 1.
+  // OpenAL Soft 1.24.3, the native client's, does not attenuate an inverse-model source whose reference distance is 0,
+  // nor, under AL_INVERSE_DISTANCE_CLAMPED (plAudioSystem::Init), one whose max distance is below its reference
+  // distance (CalcAttnSourceParams, OpenAL Soft's alc/alu.cpp); the Web Audio 'inverse' panner silences the first and
+  // attenuates the second. Those are the game's 2D mono sounds (min/max falloff 0/0: Cleft, GUI books; 10/5: VeeTsah),
+  // so they get libopenal.js's AL_NONE setting: 'inverse' with refDistance FLT_MAX, gain 1.
   $plasmaOpenALDistanceCompat__deps: ['$AL'],
   $plasmaOpenALDistanceCompat__postset: 'if (!ENVIRONMENT_IS_PTHREAD) plasmaOpenALDistanceCompat();',
   $plasmaOpenALDistanceCompat: () => {
