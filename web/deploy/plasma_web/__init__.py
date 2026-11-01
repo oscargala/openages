@@ -71,5 +71,6 @@ ROOT = Path(__file__).resolve().parents[3]  # the checkout (web/deploy/plasma_we
 PAGE_DIR = ROOT / "Sources/Plasma/Apps/plClient/emscripten/shell"  # the player page: index.html, boot.mjs
 CONFIG_MJS = PAGE_DIR / "config.mjs"  # the page's runtime configuration module
 INPUT_MODULES = ROOT / "Sources/Plasma/Apps/plClient/emscripten/input"  # the page's input modules
+INPUT_MODULE_FILES = ("capture.mjs", "transport.mjs", "fullscreen.mjs")  # the files of INPUT_MODULES the page loads
 FONTS_DIR = ROOT / "web/deploy/fonts"  # the free substitute fonts and their licences
 TEST_HOOKS_DIR = ROOT / "testhooks"  # the test overlay, which no kit may carry

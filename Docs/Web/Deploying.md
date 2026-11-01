@@ -374,9 +374,8 @@ writes into an empty folder:
 - `LICENSE.txt`, `COPYING.txt`, `THIRD_PARTY_NOTICES.md` and `source.json`.
 
 Beside the folder it writes `<out folder>.publish-report.json`: every kit file's
-size, the files over 25 MiB, which roots the page expects next to it, and the
-size classes of the data tree. The kit carries no game files, no game code and
-no HD packs. Test deployments, and the test game-code modes, are refused.
+size, the files over 25 MiB and which roots the page expects next to it. The
+kit carries no game files, no game code and no HD packs. Test deployments, and the test game-code modes, are refused.
 
 ### What a host of the trees must serve
 

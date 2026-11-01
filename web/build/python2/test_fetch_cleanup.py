@@ -73,8 +73,9 @@ class FetchCleanupTests(unittest.TestCase):
         deps.mkdir()
         shim.mkdir()
         real = shutil.which("git")
-        # "fail": the download fails at once; "wait": it hangs, as a stalled download does, until stopped
-        action = "exit 1" if mode == "fail" else f'touch "{tmp}/waiting"; exec sleep 60'
+        # "fail": the download fails at once; "wait": it hangs, as a stalled download does, until stopped (longer than
+        # the wait below, so a stop that does not reach the script fails as such)
+        action = "exit 1" if mode == "fail" else f'touch "{tmp}/waiting"; exec sleep 600'
         (shim / "git").write_text(
             '#!/bin/sh\nfor a in "$@"; do [ "$a" = fetch ] && { ' + action + f'; }}; done\nexec "{real}" "$@"\n'
         )
@@ -93,6 +94,10 @@ class FetchCleanupTests(unittest.TestCase):
             stderr=subprocess.STDOUT,
             text=True,
             start_new_session=True,
+            # SIGINT reaches the script as a terminal's Ctrl-C does. A runner started as a background job of a
+            # non-interactive shell (run.py under `&`) has SIGINT ignored, its children inherit that, and bash cannot
+            # trap a signal ignored on entry (build.sh's `trap 'exit 130' INT`): the stop would not reach it.
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
         )
         self.addCleanup(lambda: p.poll() is None and os.killpg(p.pid, signal.SIGKILL))
         if stop is not None:
@@ -102,7 +107,11 @@ class FetchCleanupTests(unittest.TestCase):
             self.assertTrue((tmp / "waiting").exists(), "the stand-in download never started")
             self.assertEqual(len(list(deps.glob(".cypython-fetch.*"))), 1)  # the folder exists while it runs
             os.killpg(p.pid, stop)  # as Ctrl-C or kill reaches the group
-        out, _ = p.communicate(timeout=60)
+        try:
+            out, _ = p.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            self.fail(f"build.sh fetch still runs 60 s after the {'stop' if stop else 'start'}: {p.communicate()[0]}")
         return p.returncode, out, sorted(x.name for x in deps.iterdir())
 
     def test_failed_download(self):

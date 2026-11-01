@@ -121,7 +121,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from plasma_web import CONFIG_MJS, INPUT_MODULES, PAGE_DIR
+from plasma_web import CONFIG_MJS, INPUT_MODULE_FILES, INPUT_MODULES, PAGE_DIR
 from plasma_web import client_limits  # the per-client rate the gateway counts its connects with; standard library only
 from plasma_web import deployment as deployment_file
 from plasma_web import manifest  # the .fetch-manifest writer
@@ -381,7 +381,7 @@ class Handler(BaseHTTPRequestHandler):
                 return os.path.join(cfg.build_dir, rest[0]), None
             return None, None
         if head == "input":
-            if len(rest) == 1 and rest[0] in ("capture.mjs", "transport.mjs", "fullscreen.mjs"):
+            if len(rest) == 1 and rest[0] in INPUT_MODULE_FILES:
                 return os.path.join(INPUT_MODULES, rest[0]), None
             return None, None
         if head == "runtime":

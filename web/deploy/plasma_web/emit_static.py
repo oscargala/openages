@@ -78,7 +78,7 @@ out/
                                                     is refused unless this checkout is at its commit with every
                                                     change committed: the page files must be that commit's too
 and, next to <out dir> (not inside the kit), <out dir>.publish-report.json: every kit file's size against the
-25 MiB per-file limit of Pages, and the size classes of the deployment's game trees.
+25 MiB per-file limit of Pages.
 
 The page document is the same derivation server.py --deployment serves (deployment.py public_document); the page
 fetches it from its own origin, no server-side templating. Game data and sound are not copied: they come through the
@@ -99,7 +99,7 @@ import re
 import shutil
 from pathlib import Path
 
-from plasma_web import CONFIG_MJS, INPUT_MODULES, PAGE_DIR, ROOT, TEST_HOOKS_DIR
+from plasma_web import CONFIG_MJS, INPUT_MODULE_FILES, INPUT_MODULES, PAGE_DIR, ROOT, TEST_HOOKS_DIR
 from plasma_web import deployment as deployment_file
 from plasma_web import manifest  # the .fetch-manifest writer
 from plasma_web import provenance
@@ -151,11 +151,8 @@ PAGE_FILES = {
     "index.html": PAGE_DIR / "index.html",
     "boot.mjs": PAGE_DIR / "boot.mjs",
     "runtime/config.mjs": CONFIG_MJS,
-    "input/capture.mjs": INPUT_MODULES / "capture.mjs",
-    "input/transport.mjs": INPUT_MODULES / "transport.mjs",
-    "input/fullscreen.mjs": INPUT_MODULES / "fullscreen.mjs",
+    **{"input/" + name: INPUT_MODULES / name for name in INPUT_MODULE_FILES},
 }
-TREES = ["dat", "sfx", "python", "SDL", "avi", "resource.dat"]
 # The test-hook overlay (TEST_HOOKS_DIR, testhooks/: the private test harness, its page among it) never
 # reaches a kit.
 
@@ -225,25 +222,6 @@ def emit_provenance(d, out, source):
         )
     )
     (out / "source.json").write_text(json.dumps(source, indent=1) + "\n")
-
-
-def size_classes(root):
-    out = {}
-    for top in TREES:
-        p = Path(root) / top
-        files = [p] if p.is_file() else [f for f in p.rglob("*") if f.is_file()] if p.is_dir() else []
-        sizes = [(f.stat().st_size, str(f.relative_to(root))) for f in files]
-        out[top] = {
-            "files": len(sizes),
-            "bytes": sum(s for s, _ in sizes),
-            "under_1MiB": sum(1 for s, _ in sizes if s < 1 << 20),
-            "1_to_25MiB": sum(1 for s, _ in sizes if 1 << 20 <= s <= PAGES_FILE_LIMIT),
-            "over_25MiB": sorted(
-                [{"path": n, "bytes": s} for s, n in sizes if s > PAGES_FILE_LIMIT], key=lambda x: -x["bytes"]
-            ),
-            "largest": max(sizes, default=(0, None))[::-1],
-        }
-    return out
 
 
 def main():
@@ -364,7 +342,6 @@ def main():
         "pages_file_limit": PAGES_FILE_LIMIT,
         "kit_over_limit": sorted(k for k, v in kit.items() if v > PAGES_FILE_LIMIT),
         "roots_served_next_to_the_page": same_origin,
-        "game_tree_size_classes": size_classes(d.data_root) if d.data_root else None,
         "note": "Game trees are not part of the kit; a shard's game files reach the client through the original "
         "patcher (data.files patcher), cached per shard in the browser.",
     }

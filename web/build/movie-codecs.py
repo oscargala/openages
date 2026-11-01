@@ -58,6 +58,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 
 SOURCES = {
@@ -75,15 +76,16 @@ SOURCES = {
 ABI = "-pthread -fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
 LOCK = Path(__file__).resolve().parent / "sources.lock"
 FLAGS = "-O2 " + ABI
+sys.path.insert(0, str(LOCK.parent / "notices"))
+from notices import read_lock  # noqa: E402  (the one sources.lock parser)
 
 
 def lock_record(name):
     """The fields of the sources.lock record <name>."""
-    for line in LOCK.read_text().splitlines():
-        fields = line.split()
-        if fields and fields[0] == name:
-            return dict(field.split("=", 1) for field in fields[1:])
-    raise RuntimeError("No sources.lock record for " + name)
+    record = read_lock(LOCK).get(name)
+    if record is None:
+        raise RuntimeError("No sources.lock record for " + name)
+    return record
 
 
 def lock_sha256(name, archive):
