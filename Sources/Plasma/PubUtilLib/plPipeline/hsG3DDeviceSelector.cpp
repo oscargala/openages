@@ -518,6 +518,15 @@ namespace
                     1,              // First integer is always the length
                     hsG3DDeviceSelector::kCapsNoAA };
 
+    // WebKit on Metal: the default row plus kCapsNoAA, the GeForce FX 5200 row's set, so that
+    // SetFudgeFactors clears every mode's FSAA types. Measured 2026-10-31: on an M1 MacBook, Safari 27.2, Relto at a
+    // fixed pose and clock, the cloud sea draws its triangle-edge network as lines at 4x MSAA and none at
+    // AntiAliasAmount 0; two runs of one build at 4x differ on triangle edges. A Mac mini's Safari, which reports the
+    // same adapter strings, shows no lines at 4x.
+    uint32_t dsWebKitOnMetalCapsSet[] = {
+        1, // First integer is always the length
+        hsG3DDeviceSelector::kCapsNoAA};
+
     uint32_t  dsS3GenerCapsClr[] = {
                     4,              // First integer is always the length
                     hsG3DDeviceSelector::kCapsCompressTextures,
@@ -545,6 +554,7 @@ namespace
         { hsG3DDeviceRecord::kNVidiaGeForceFXChipset, dsGeForceFXCapsSet,  nullptr,            0,          0,              0,            &dsDefaultFogVals },
         { hsG3DDeviceRecord::kIntelI810Chipset,       nullptr,             dsDefaultCapsClr,   4.5f,       1,              -0.5f,        &dsi810FogVals },
         { hsG3DDeviceRecord::kATIR8X00Chipset,        dsATIR8X00CapsSet,   dsATIR8X00CapsClr,  0,          0,              0,            &dsRadeonFogVals  },
+        {hsG3DDeviceRecord::kWebKitOnMetalChipset, dsWebKitOnMetalCapsSet, dsDefaultCapsClr, 0, 0, 0, &dsDefaultFogVals},
     };
 
 };

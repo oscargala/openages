@@ -263,7 +263,11 @@ plWGPUPipeline::plWGPUPipeline(hsDisplayHndl display, hsWindowHndl window, const
     fSettings.fMaxAnisotropicSamples = (uint8_t)std::min(fInitialPipeParams.AnisotropicLevel, 16);
 
     fDevice.SetMaxAnsiotropy(fInitialPipeParams.AnisotropicLevel);
-    // The selected mode's FSAA types are what both AA searches read (DX fCurrentMode->fFSAATypes).
+    // The selected mode's FSAA types are what both AA searches read (SetMSAASampleCount, ResetDisplayDevice). DX's
+    // searches read fCurrentMode->fFSAATypes, the D3D enumeration's modes, which ISetCurrentRenderer
+    // copies (plDXPipeline.cpp:1165) and ISetCurrentMode keeps (plDXPipeline.cpp:1182), and which the fudge factors
+    // never touch; this list stands in for both, so a fudge row's FSAA clear (kCapsNoAA,
+    // plWGPUEnumerate::Enumerate) reaches the device here and not in D3D9.
     const hsG3DDeviceMode* devModeRec = devMode->GetMode();
     fDevice.fFSAATypes.clear();
     for (size_t i = 0; i < devModeRec->GetNumFSAATypes(); i++)
@@ -1411,7 +1415,7 @@ void plWGPUPipeline::PrewarmRoom(plSceneNode* node, bool afterAgeSettings, const
     else
         fPrewarmHeldRooms.erase(node->GetKey()->GetUoid());
     // A page of an Age load whose .fni has not run (plClient::IRoomLoaded): the .fni sets the Age's default fog at
-    // plAgeLoaded2Msg, after the Age's last page (plAgeLoaderPaging.cpp:124-128, plNetCliAgeJoiner.cpp:413-416,
+    // plAgeLoaded2Msg, after the Age's last page (plAgeLoaderPaging.cpp:124-128, plNetCliAgeJoiner.cpp:419-422,
     // plAgeLoader::ExecPendingAgeFniFiles, plAgeLoader.cpp:422-430), so a walk now would build the room's pipelines
     // for the fog in force before it, which the Age never draws with. The room waits for PrewarmAgeSettings.
     if (afterAgeSettings) {

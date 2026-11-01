@@ -286,6 +286,12 @@ public:
     // re-acquire, so the answer must not change within a run.
     virtual bool AdmitFixedPrograms(const char* vendor, const char* architecture) { return false; }
 
+    // Asked by plWGPUEnumerate::Enumerate for every adapter, at every Enumerate: 1 takes the WebKit-on-Metal fudge row
+    // (hsG3DDeviceRecord::kWebKitOnMetalChipset, kCapsNoAA: every mode's FSAA types cleared), 0 the default row, -1
+    // keeps the product's choice (the WebKit row for adapter vendor and architecture "apple"). The answer must not
+    // change within a run.
+    virtual int FudgeWebKitOnMetal(const char* vendor, const char* architecture) { return -1; }
+
     static plWGPUPipelineObserver* Get() { return fObserver; }
     static void                    Set(plWGPUPipelineObserver* observer) { fObserver = observer; }
 

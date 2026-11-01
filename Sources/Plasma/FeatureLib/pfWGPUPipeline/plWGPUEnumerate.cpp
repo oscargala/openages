@@ -82,6 +82,7 @@ struct State
     bool         failed = false;
     ST::string   adapterDesc;
     ST::string   adapterVendor;
+    ST::string   adapterArchitecture;      // with adapterVendor, the fudge factors' key (plWGPUEnumerate::Enumerate)
     bool         specialisedFixed = false; // plWGPUEnumerate::SpecialisedFixedPrograms
 
     unsigned long errors = 0;
@@ -190,9 +191,10 @@ void OnAdapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringV
     WGPUAdapterInfo info = WGPU_ADAPTER_INFO_INIT;
     wgpuAdapterGetInfo(adapter, &info);
     s.adapterVendor = ST::string::from_utf8(View(info.vendor).c_str());
+    s.adapterArchitecture = ST::string::from_utf8(View(info.architecture).c_str());
     s.adapterDesc = ST::string::from_utf8(View(info.description).c_str());
     if (s.adapterDesc.empty())
-        s.adapterDesc = ST::string::from_utf8(View(info.architecture).c_str());
+        s.adapterDesc = s.adapterArchitecture;
     plWGPULog("ADAPTER after {.1f} ms: vendor '{}' architecture '{}' description '{}' backend {}",
               Now() - s.t0, View(info.vendor), View(info.architecture), View(info.description), int(info.backendType));
     // The specialised fixed-function programs run only where they were measured to draw what the uber shader draws:
@@ -413,9 +415,15 @@ void plWGPUEnumerate::Enumerate(std::vector<hsG3DDeviceRecord>& records, hsDispl
     // Every mode lists the multisample types 2..16 the device takes
     // (hsGDirect3DTnLEnumerate::IFindFSAATypes, ITryDirect3DTnLDevice): a WebGPU render attachment
     // takes a sample count of 1 or 4, so the list is {4}, on the fallback mode too. The default
-    // settings read it (plClient::IDetectAudioVideoSettings), and both "closest <=" AA searches
-    // search it (plWGPUPipeline::ResetDisplayDevice, plWGPUDevice::SetMSAASampleCount; in DX
-    // plDXPipeline::ICreateDevice and ResetDisplayDevice).
+    // settings read it (plClient::IDetectAudioVideoSettings), and so do both "closest <=" AA searches
+    // (plWGPUPipeline::ResetDisplayDevice, plWGPUDevice::SetMSAASampleCount), through the selected mode's
+    // copy (the plWGPUPipeline constructor). In DX the searches in ICreateDevice (plDXPipeline.cpp:1310-1319),
+    // IResetToDefaults (plDXPipeline.cpp:1864-1874) and ResetDisplayDevice (plDXPipeline.cpp:2023-2037), and
+    // GetMaxAntiAlias (plDXPipeline.cpp:2111-2132), read another list: the D3D enumeration's modes, which
+    // ISetCurrentRenderer copies (plDXPipeline.cpp:1165) and ISetCurrentMode keeps (plDXPipeline.cpp:1182), and
+    // which the fudge factors never touch.
+    // This one list stands in for both, so a fudge row's FSAA clear (SetFudgeFactors, kCapsNoAA) reaches
+    // the device here, and in D3D9 only the device record and the default settings.
     plDisplayHelper* displayHelper = plDisplayHelper::GetInstance();
     for (const auto& mode : displayHelper->GetSupportedDisplayModes(display)) {
         hsG3DDeviceMode& devMode = devRec.GetModes().emplace_back(mode.Width, mode.Height, mode.ColorDepth);
@@ -431,10 +439,33 @@ void plWGPUEnumerate::Enumerate(std::vector<hsG3DDeviceRecord>& records, hsDispl
     // The default mode is the page's canvas (the screen mode follows it).
     devRec.SetDefaultModeIndex(0);
 
-    // The D3D9 client's default chipset tweaks (hsGDirect3DTnLEnumerate::IFudgeDirectXDevice, as
-    // plGLEnumerate.cpp's fillDeviceRecord): LOD bias, Z bias and fog ratings, and
-    // kCapsDoesSmallTextures cleared.
-    devRec.SetFudgeFactors(hsG3DDeviceRecord::kDefaultChipset);
+    // The D3D9 client's chipset tweaks (hsGDirect3DTnLEnumerate::IFudgeDirectXDevice, which TryDirect3DTnLDriver
+    // calls once ITryDirect3DTnLDevice has listed the modes and their FSAA types, plDXEnumerate.cpp:718-719; as
+    // plGLEnumerate.cpp's fillDeviceRecord), keyed as IFudgeDirectXDevice keys them, only on what the adapter
+    // reports (plDXEnumerate.cpp:637-685). WebKit on Metal, adapter vendor and architecture "apple" (the identity the FIXED
+    // PROGRAMS rule names in OnAdapter), takes its own row: the default row plus kCapsNoAA, the set IFudgeDirectXDevice
+    // gives the GeForce FX 5200 (plDXEnumerate.cpp:676-679; hsG3DDeviceSelector.cpp's CFT), which clears every mode's FSAA types.
+    // Every other adapter takes the default row: LOD bias, Z bias and fog ratings, and kCapsDoesSmallTextures
+    // cleared. Decided at every Enumerate (plClient::IDetectAudioVideoSettings and InitPipeline alike) and logged
+    // with IFudgeDirectXDevice's text (plDXEnumerate.cpp:678, 684).
+    bool        webKitOnMetal = s.adapterVendor == ST_LITERAL("apple") && s.adapterArchitecture == ST_LITERAL("apple");
+    const char* fudgedBy = "";
+#ifdef PLASMA_TEST_HOOKS
+    // A harness build may take either row on any adapter (the observer's switch), to keep measuring 4x on WebKit.
+    if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get()) {
+        const int forced = observer->FudgeWebKitOnMetal(s.adapterVendor.c_str(), s.adapterArchitecture.c_str());
+        if (forced >= 0) {
+            webKitOnMetal = forced != 0;
+            fudgedBy = forced ? " by PLASMA_TEST_WEBKIT_FUDGE=1" : " by PLASMA_TEST_WEBKIT_FUDGE=0";
+        }
+    }
+#endif
+    devRec.SetFudgeFactors(webKitOnMetal ? hsG3DDeviceRecord::kWebKitOnMetalChipset
+                                         : hsG3DDeviceRecord::kDefaultChipset);
+    plWGPULog("FUDGE FACTORS: {}{} (adapter vendor '{}' architecture '{}')",
+              webKitOnMetal ? "== Using fudge factors for WebKit on Metal == (kCapsNoAA: FSAA types cleared)"
+                            : "== Using default fudge factors ==",
+              fudgedBy, s.adapterVendor, s.adapterArchitecture);
     records.emplace_back(devRec);
 }
 

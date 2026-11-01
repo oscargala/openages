@@ -136,7 +136,8 @@ public:
         kATIRadeonChipset,
         kATIR8X00Chipset,
         kMatroxParhelia,
-        kNVidiaGeForceFXChipset
+        kNVidiaGeForceFXChipset,
+        kWebKitOnMetalChipset // plWGPUEnumerate::Enumerate: adapter vendor and architecture "apple"
     };
 
 protected:
