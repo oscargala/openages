@@ -1193,9 +1193,11 @@ bool plWGPUPipeline::ISkipBumpMap(hsGMaterial* newMat, uint32_t& layer, const pl
     // plDXPipeline::ISkipBumpMap
     if (newMat && currSpan) {
         if (newMat->GetLayer(layer) && (newMat->GetLayer(layer)->GetMiscFlags() & hsGMatState::kMiscBumpChans) && (!currSpan->GetNumLights(false) || IsDebugFlagSet(plPipeDbg::kFlagNoBump))) {
+#ifdef PLASMA_TEST_HOOKS
             plWGPUPipeline* self = const_cast<plWGPUPipeline*>(this);
             if (!fPrewarmWalk && newMat->GetKey() && self->fBumpLogged.insert("skip " + newMat->GetKey()->GetUoid().StringIze()).second)
                 plWGPULog("bump skipped (span has no lights): {} layer {}", newMat->GetKey()->GetUoid().StringIze(), layer);
+#endif
             layer += 4;
             if (layer >= newMat->GetNumLayers())
                 return true;

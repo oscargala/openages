@@ -417,12 +417,8 @@ void plWGPUPipeline::IDrawBlurQuad()
 void plWGPUPipeline::IReleaseBlurVBuffers()
 {
     // plDXPipeline::IReleaseBlurVBuffers
-    for (int i = 0; i < kMaxRenderTargetNext; i++) {
-        if (fBlurVBuffers[i]) {
-            wgpuBufferRelease(fBlurVBuffers[i]);
-            fBlurVBuffers[i] = nullptr;
-        }
-    }
+    for (int i = 0; i < kMaxRenderTargetNext; i++)
+        plWGPURelease(fBlurVBuffers[i]);
     fBlurQuad = nullptr;
 }
 
@@ -605,8 +601,8 @@ void plWGPUPipeline::IRenderShadowCasterSpan(plShadowSlave* slave, plDrawableSpa
     if (fPrewarmWalk) {
         plWGPUPrewarmTriListFunc prewarm(this, walkVertexFormat, walkTris);
         prewarm.RenderPrims();
-        fPrewarmTally.spans++;
-        fPrewarmTally.requests += prewarm.fRequests;
+        WGPU_TEST_HOOK(fPrewarmTally.spans++);
+        WGPU_TEST_HOOK(fPrewarmTally.requests += prewarm.fRequests);
         fPrewarmTally.started += prewarm.fStarted;
     } else {
         plWGPURenderTriListFunc render(this, vRef, iRef, iRef->fOffset, vStart, vLength, iStart, iLength / 3);
@@ -997,6 +993,7 @@ void plWGPUPipeline::IMakeRenderTargetPools()
             }
         }
     }
+#ifdef PLASMA_TEST_HOOKS
     plWGPULog("shadow render target pools: 32x32 {} 64x64 {} 128x128 {} 256x256 {} 512x512 {}; render targets {} ({.1f} MiB)",
               fRenderTargetPool32.size() ? fRenderTargetPool32.size() - 1 : 0,
               fRenderTargetPool64.size() ? fRenderTargetPool64.size() - 1 : 0,
@@ -1004,6 +1001,7 @@ void plWGPUPipeline::IMakeRenderTargetPools()
               fRenderTargetPool256.size() ? fRenderTargetPool256.size() - 1 : 0,
               fRenderTargetPool512.size() ? fRenderTargetPool512.size() - 1 : 0,
               fRenderTargetStats.made, double(fRenderTargetStats.bytes) / (1024. * 1024.));
+#endif
 }
 
 void plWGPUPipeline::IResetRenderTargetPools()

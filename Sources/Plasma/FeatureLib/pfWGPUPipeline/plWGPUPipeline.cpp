@@ -239,12 +239,10 @@ plWGPUPipeline::plWGPUPipeline(hsDisplayHndl display, hsWindowHndl window, const
     // WebGPU is always PS3 capable (as in plMetalPipeline::plMetalPipeline)
     plQuality::SetCapability(plQuality::kPS_3);
 
-    // plDXPipeline::ISetCaps: every D3D9-class device reports D3DPRASTERCAPS_FOGTABLE, so table
-    // (pixel) fog is available. kCapsZBias (D3DPRASTERCAPS_DEPTHBIAS) is cleared by IRestrictCaps
-    // unless the device record has kCapsZBias, which the WebGPU record does not set. fMaxNumLights
-    // is min(MaxActiveLights, kD3DMaxTotalLights) = 8.
-    // Unconditional non-power-of-two textures: a device without D3DPTEXTURECAPS_POW2 has
-    // kCapsNpotTextures, and WebGPU textures have no size restriction.
+    // plDXPipeline::ISetCaps: every D3D9-class device reports D3DPRASTERCAPS_FOGTABLE, so table (pixel) fog is
+    // available; kCapsZBias (D3DPRASTERCAPS_DEPTHBIAS) is cleared by IRestrictCaps unless the device record has it,
+    // which the WebGPU record does not; fMaxNumLights is min(MaxActiveLights, kD3DMaxTotalLights) = 8.
+    // kCapsNpotTextures, as a device without D3DPTEXTURECAPS_POW2 has it: WebGPU textures have no size restriction.
     fSettings.fD3DCaps = kCapsLinearFog | kCapsExpFog | kCapsExp2Fog | kCapsPixelFog | kCapsNpotTextures;
 
     // plDXPipeline::IRestrictCaps, the tweaks and caps the span path reads.
@@ -290,13 +288,11 @@ plWGPUPipeline::~plWGPUPipeline()
 {
     // A device loss from here on is not one to recover from.
     plWGPUEnumerate::SetShuttingDown();
-    // As plDXPipeline::~plDXPipeline: release every device object before the pipeline goes.
-    // IReleaseDeviceObjects unlinks each device ref from the pipeline's lists (textures, vertex
-    // and index buffers, render targets, text fonts, shaders, lights) and deletes the plate
-    // manager (its geometry with it). The plBitmaps, render targets and fonts that own these
-    // refs outlive the pipeline (plClient::Shutdown deletes fPipeline before the pages and
-    // their objects go); without this, each ref's destructor would unlink itself through a list
-    // head inside the freed pipeline. plMetalPipeline::~plMetalPipeline releases only the plate
+    // As plDXPipeline::~plDXPipeline: release every device object before the pipeline goes. IReleaseDeviceObjects
+    // unlinks each device ref from the pipeline's lists (textures, vertex and index buffers, render targets, text
+    // fonts, shaders, lights) and deletes the plate manager; the plBitmaps, render targets and fonts that own the refs
+    // outlive the pipeline (plClient::Shutdown deletes fPipeline before the pages), and each ref's destructor would
+    // otherwise unlink itself through a freed list head. plMetalPipeline::~plMetalPipeline releases only the plate
     // geometry.
     IReleaseDeviceObjects();
     // Then the readbacks the pipeline and its device still own (a capture or harness readback whose map is in
@@ -468,6 +464,7 @@ void plWGPUPipeline::ClearRenderTarget(const hsColorRGBA* col, const float* dept
         float       clearDepth = depth ? *depth : fView.GetClearDepth();
         const float clearColor[4] = {IQuantizeD3DColor(c.r), IQuantizeD3DColor(c.g), IQuantizeD3DColor(c.b), IQuantizeD3DColor(c.a)};
 
+#ifdef PLASMA_TEST_HOOKS
         // The clear values, logged once per distinct value (render requests alternate
         // depth-only and colour clears every frame)
         static std::set<std::array<float, 6>> sLogged;
@@ -480,6 +477,7 @@ void plWGPUPipeline::ClearRenderTarget(const hsColorRGBA* col, const float* dept
                       uint32_t(clearColor[1] * 255.f + .5f), uint32_t(clearColor[2] * 255.f + .5f), clearDepth,
                       (fView.fRenderState & kRenderClearColor) ? " TARGET" : "", (fView.fRenderState & kRenderClearDepth) ? " ZBUFFER" : "");
         }
+#endif
 
         fDevice.Clear(fView.fRenderState & kRenderClearColor, clearColor, fView.fRenderState & kRenderClearDepth, clearDepth);
     }
@@ -581,8 +579,10 @@ WGPUTexture plWGPUPipeline::IMakeRenderTargetTexture(plRenderTarget* owner, WGPU
     desc.mipLevelCount = 1;
     desc.sampleCount = 1;
     WGPUTexture texture = wgpuDeviceCreateTexture(fDevice.fWGPUDevice, &desc);
+#ifdef PLASMA_TEST_HOOKS
     if (texture)
         fRenderTargetStats.bytes += uint64_t(desc.size.width) * desc.size.height * layers * 4;
+#endif
     return texture;
 }
 
@@ -691,7 +691,7 @@ hsGDeviceRef* plWGPUPipeline::MakeRenderTargetRef(plRenderTarget* owner)
         depthSurface = wgpuDeviceCreateTexture(fDevice.fWGPUDevice, &desc);
         if (!depthSurface)
             return nullptr;
-        fRenderTargetStats.bytes += uint64_t(owner->GetWidth()) * owner->GetHeight() * 4;
+        WGPU_TEST_HOOK(fRenderTargetStats.bytes += uint64_t(owner->GetWidth()) * owner->GetHeight() * 4);
     }
 
     auto newRef = [this](plRenderTarget* rt) {
@@ -729,8 +729,7 @@ hsGDeviceRef* plWGPUPipeline::MakeRenderTargetRef(plRenderTarget* owner)
 
             IRenderTargetSetTexture(ref, owner, texture, surfFormat, depthSurface, depthFormat);
         } else {
-            if (depthSurface)
-                wgpuTextureRelease(depthSurface);
+            plWGPURelease(depthSurface);
             ref->UnRef();
             ref = nullptr;
         }
@@ -746,8 +745,7 @@ hsGDeviceRef* plWGPUPipeline::MakeRenderTargetRef(plRenderTarget* owner)
         if (texture) {
             IRenderTargetSetTexture(ref, owner, texture, surfFormat, depthSurface, depthFormat);
         } else {
-            if (depthSurface)
-                wgpuTextureRelease(depthSurface);
+            plWGPURelease(depthSurface);
             ref->UnRef();
             ref = nullptr;
         }
@@ -762,13 +760,12 @@ hsGDeviceRef* plWGPUPipeline::MakeRenderTargetRef(plRenderTarget* owner)
         if (texture) {
             IRenderTargetSetTexture(ref, owner, texture, surfFormat, depthSurface, depthFormat);
         } else {
-            if (depthSurface)
-                wgpuTextureRelease(depthSurface);
+            plWGPURelease(depthSurface);
             ref->UnRef();
             ref = nullptr;
         }
-    } else if (depthSurface) {
-        wgpuTextureRelease(depthSurface);
+    } else {
+        plWGPURelease(depthSurface);
     }
 
     // Keep it in a linked list for ready destruction.
@@ -786,7 +783,7 @@ hsGDeviceRef* plWGPUPipeline::MakeRenderTargetRef(plRenderTarget* owner)
     // Mark as not dirty.
     if (ref != nullptr) {
         ref->SetDirty(false);
-        fRenderTargetStats.made++;
+        WGPU_TEST_HOOK(fRenderTargetStats.made++);
     }
 
     return ref;
@@ -860,8 +857,7 @@ hsGDeviceRef* plWGPUPipeline::SharedRenderTargetRef(plRenderTarget* share, plRen
             }
             IRenderTargetSetTexture(ref, owner, texture, surfFormat, depthSurface, depthFormat);
         } else {
-            if (depthSurface)
-                wgpuTextureRelease(depthSurface);
+            plWGPURelease(depthSurface);
             ref->UnRef();
             ref = nullptr;
         }
@@ -875,13 +871,12 @@ hsGDeviceRef* plWGPUPipeline::SharedRenderTargetRef(plRenderTarget* share, plRen
         if (texture) {
             IRenderTargetSetTexture(ref, owner, texture, surfFormat, depthSurface, depthFormat);
         } else {
-            if (depthSurface)
-                wgpuTextureRelease(depthSurface);
+            plWGPURelease(depthSurface);
             ref->UnRef();
             ref = nullptr;
         }
-    } else if (depthSurface) {
-        wgpuTextureRelease(depthSurface);
+    } else {
+        plWGPURelease(depthSurface);
     }
 
     if (owner->GetDeviceRef() != ref) {
@@ -897,7 +892,7 @@ hsGDeviceRef* plWGPUPipeline::SharedRenderTargetRef(plRenderTarget* share, plRen
 
     if (ref != nullptr) {
         ref->SetDirty(false);
-        fRenderTargetStats.made++;
+        WGPU_TEST_HOOK(fRenderTargetStats.made++);
     }
 
     return ref;
@@ -1311,27 +1306,29 @@ void plWGPUPipeline::LoadResources()
 
 // MARK: - Pipelines built ahead of their first draw
 
-// On WebGPU a render pipeline is a shader compile in the browser's GPU process. Created at the draw that first needs
-// it (PipelineState), a new Age's pipelines compile one after another in the first frame that draws it; a cold
-// browser shader cache turns that into seconds of frozen arrival. D3D9 has no pipeline objects (its shader objects
-// are made at first use, plDXPipeline::ISetShaders, plDXVertexShader::GetShader); upstream Metal builds
-// asynchronously and waits at the draw (plMetalDevice::PipelineState, plMetalDevice.cpp:1138-1180), and its prewarm
-// entry (PrewarmPipelineStateFor, plMetalDevice.cpp:1183) is reached only from
-// plMetalPipelineState::PrewarmRenderPipelineState, which nothing calls. These are this port's callers:
-// - PrewarmRoom, from plClient::IRoomLoaded: a loaded room's drawables go through the draw's own material code
-//   (RenderSpans: ISetupTransforms, ILoopOverLayers, IHandleMaterial, ISetFogParameters, ISetShaders) with a render
-//   functor that draws nothing (plWGPUPrewarmTriListFunc), and the device starts their pipelines' builds, which
-//   compile in parallel while the load goes on. Everything the walk writes is restored after it.
-// - The frame start (IPrewarmFrameStart, at every primary BeginRender and before a scene frame): when the device,
-//   the main target or the default fog changed since the drawables were walked (an Age's .fni sets its fog at
-//   plAgeLoaded2Msg, after its rooms loaded), the walked drawables are walked again; rooms PrewarmRoom could not walk
-//   are walked there.
-// - PrewarmBeforeScene, from plClient::IDraw before the scene frame's BeginRender: this frame's render-target passes
-//   (the shadow maps with their blur, the clothing composites) and render requests (IPrewarmRequests: each as
-//   plRenderRequest::Render draws it, under its own target and view: an environment map's faces, a waveset's bump
-//   composite, a GUI dialog), then the wait for every build in flight, before the canvas texture is acquired.
-//   Progress frames (plClient::IDrawProgress) draw no scene and do not wait, so the builds compile through the load
-//   and the arrival frame waits only for what is left.
+// On WebGPU a render pipeline is a shader compile in the browser's GPU process; built at its first draw
+// (PipelineState), a new Age's pipelines compile one after another in its first frame, seconds of frozen arrival with
+// a cold shader cache. D3D9 has no pipeline objects (plDXPipeline::ISetShaders, plDXVertexShader::GetShader make its
+// shaders at first use); upstream Metal builds asynchronously and waits at the draw (plMetalDevice::PipelineState,
+// plMetalDevice.cpp:1138-1180), and its prewarm entry (PrewarmPipelineStateFor, plMetalDevice.cpp:1183) is reached only
+// from plMetalPipelineState::PrewarmRenderPipelineState, which nothing calls. fPrewarmWalk is set while a walk runs:
+// the steps that draw, count, log or touch textures are skipped, and everything the walk writes is restored after it.
+// - PrewarmRoom (plClient::IRoomLoaded): a loaded room's drawables go through RenderSpans' material code
+//   (ISetupTransforms, ILoopOverLayers, IHandleMaterial, ISetFogParameters, ISetShaders) with a render functor that
+//   draws nothing (plWGPUPrewarmTriListFunc), and the device starts each draw's pipeline
+//   (plWGPUDevice::PrewarmFixedFunction, PrewarmShader), compiling while the load goes on. A drawable is walked once
+//   per device generation, main target and default-fog signature (by Uoid), with its shadow-receive pass
+//   (IRenderShadowsOntoSpan) in a view that draws it (never a held room's drawable).
+// - The frame start (IPrewarmFrameStart, at every primary BeginRender): when the device, the main target or the
+//   default fog changed (an Age's .fni sets its fog at plAgeLoaded2Msg, after its rooms loaded), the walked drawables
+//   are walked again, and so are the rooms PrewarmRoom could not walk, the drawables that join a walked room later (a
+//   cluster group's, plClusterGroup::UnPack; a clone) and those whose spans change (an avatar's clothing). An Age's
+//   rooms are kept until its .fni has run.
+// - PrewarmBeforeScene (plClient::IDraw, before the scene frame's BeginRender): this frame's shadow maps with their
+//   blur and clothing composites (IPrewarmTargets: IRenderShadowCaster, IPreprocessAvatarTextures) and its render
+//   requests (IPrewarmRequests, as plRenderRequest::Render draws them), then the wait for every build in flight
+//   (plWGPUDevice::DrainPipelineBuilds), before the canvas texture is acquired. Progress frames
+//   (plClient::IDrawProgress) do not wait, so the arrival frame waits only for what is left.
 
 bool plWGPUPipeline::PrewarmUoidLess::operator()(const plUoid& a, const plUoid& b) const
 {
@@ -1413,8 +1410,8 @@ void plWGPUPipeline::PrewarmRoom(plSceneNode* node, bool afterAgeSettings, const
     else
         fPrewarmHeldRooms.erase(node->GetKey()->GetUoid());
     // A page of an Age load whose .fni has not run (plClient::IRoomLoaded): the .fni sets the Age's default fog at
-    // plAgeLoaded2Msg, after the Age's last page (plAgeLoaderPaging.cpp:124-128, plNetCliAgeJoiner.cpp:419-422,
-    // plAgeLoader::ExecPendingAgeFniFiles, plAgeLoader.cpp:422-430), so a walk now would build the room's pipelines
+    // plAgeLoaded2Msg, after the Age's last page (plAgeLoaderPaging.cpp:124-128, plNetCliAgeJoiner.cpp:413-416,
+    // plAgeLoader::ExecPendingAgeFniFiles, plAgeLoader.cpp:419-427), so a walk now would build the room's pipelines
     // for the fog in force before it, which the Age never draws with. The room waits for PrewarmAgeSettings.
     if (afterAgeSettings) {
         fPrewarmDeferredRooms.push_back(node->GetKey()->GetUoid());
@@ -2005,10 +2002,10 @@ void plWGPUPipeline::IPrewarmTargets()
     // clothing composites (IPreprocessAvatarTextures), then the outfits' drawables as the frame's draws after the
     // compose see them (IPrewarmOutfits, whose stand-ins stay for IPrewarmRequests). They run under the walk with the
     // live device state, as the frame will: between here and IPreprocessShadows the frame's BeginRender sets only
-    // ZENABLE TRUE, which nothing in the port ever sets FALSE. Every slave and outfit is walked every scene frame, and the device's record lookup
-    // (PrewarmPipelineStateFor) is the only deduplication: a cast pass's key takes state the cast does not set
-    // (BLENDOP, kMiscTwoSided, the bound pixel shader) and per-span state (format, matrices, handedness), and a
-    // caster's spans are collected again each frame.
+    // ZENABLE TRUE, which the port never sets FALSE. Every slave and outfit is walked every scene frame; the device's
+    // record lookup (PrewarmPipelineStateFor) is the only deduplication, since a cast pass's key takes state the cast
+    // does not set (BLENDOP, kMiscTwoSided, the bound pixel shader) and per-span state (format, matrices, handedness),
+    // and a caster's spans are collected again each frame.
     if (fShadows.empty() && fClothingOutfits.empty())
         return;
 #ifdef PLASMA_TEST_HOOKS
@@ -2284,7 +2281,9 @@ bool plWGPUPipeline::IPrewarmSpanFormat(plDrawableSpans* drawable, const plIcicl
         numTris = 1;
     else
         return false;
+#ifdef PLASMA_TEST_HOOKS
     uint32_t* unfilled = nullptr;
+#endif
     if (group->VertexReady(span.fVBufferIdx)) {
         plWGPUVertexBufferRef* vRef = (plWGPUVertexBufferRef*)group->GetVertexBufferRef(span.fVBufferIdx);
         if (!vRef->GetBuffer()) {
@@ -2294,17 +2293,21 @@ bool plWGPUPipeline::IPrewarmSpanFormat(plDrawableSpans* drawable, const plIcicl
             if (!particleRule &&
                 (group->GetVertBufferEnd(span.fVBufferIdx) - group->GetVertBufferStart(span.fVBufferIdx)) * vRef->fVertexSize == 0)
                 return false;
+#ifdef PLASMA_TEST_HOOKS
             unfilled = (span.fTypeMask & plSpan::kParticleSpan) ? &fPrewarmTally.unfilledParticle
                        : vRef->Skinned()                        ? &fPrewarmTally.unfilledSkinned
                                                                 : &fPrewarmTally.unfilledOther;
+#endif
         }
         vertexFormat = vRef->fFormat;
     } else
         vertexFormat = plWGPUDevice::VertexBufferFormat(group->GetVertexFormat());
     if (group->IndexReady(span.fIBufferIdx) && !((plWGPUIndexBufferRef*)group->GetIndexBufferRef(span.fIBufferIdx))->GetBuffer())
         return false;
+#ifdef PLASMA_TEST_HOOKS
     if (unfilled)
         (*unfilled)++;
+#endif
     return true;
 }
 
@@ -2367,10 +2370,10 @@ void plWGPUPipeline::IPrewarmDrawable(plDrawableSpans* drawable, const std::vect
 
         ISetupTransforms(drawable, ice, lastL2W);
 
-        fPrewarmTally.spans++;
+        WGPU_TEST_HOOK(fPrewarmTally.spans++);
         plWGPUPrewarmTriListFunc prewarm(this, vertexFormat, numTris);
         ILoopOverLayers(prewarm, material, ice);
-        fPrewarmTally.requests += prewarm.fRequests;
+        WGPU_TEST_HOOK(fPrewarmTally.requests += prewarm.fRequests);
         fPrewarmTally.started += prewarm.fStarted;
     }
     fPrewarmHeldDrawable = false;
@@ -2422,6 +2425,7 @@ bool plWGPUPipeline::SetGamma(float eR, float eG, float eB)
     // fD3DDevice->SetGammaRamp(0, D3DSGR_NO_CALIBRATION, &ramp)
     fDevice.SetGammaTable(fGammaRamp);
     fGammaRampSet = true;
+#ifdef PLASMA_TEST_HOOKS
     fDisplayStats.gammaSets++;
     {
         plChecksum sha(plChecksum::Type::kSHA256, sizeof(fGammaRamp), reinterpret_cast<const uint8_t*>(fGammaRamp));
@@ -2429,6 +2433,7 @@ bool plWGPUPipeline::SetGamma(float eR, float eG, float eB)
                   1.f / eG, 1.f / eB, ramp[0][64], ramp[0][128], ramp[0][255], sha.GetAsHexString(),
                   fDisplayStats.gammaSets);
     }
+#endif
 
     return true;
 }
@@ -2446,12 +2451,14 @@ bool plWGPUPipeline::SetGamma(const uint16_t* const tabR, const uint16_t* const 
     // fD3DDevice->SetGammaRamp(0, D3DSGR_NO_CALIBRATION, &ramp)
     fDevice.SetGammaTable(fGammaRamp);
     fGammaRampSet = true;
+#ifdef PLASMA_TEST_HOOKS
     fDisplayStats.gammaSets++;
     {
         plChecksum sha(plChecksum::Type::kSHA256, sizeof(fGammaRamp), reinterpret_cast<const uint8_t*>(fGammaRamp));
         plWGPULog("SetGamma(tables): ramp r[64] {} r[128] {} r[255] {} sha256 {} (set {})", fGammaRamp[0][64],
                   fGammaRamp[0][128], fGammaRamp[0][255], sha.GetAsHexString(), fDisplayStats.gammaSets);
     }
+#endif
 
     return true;
 }
@@ -3433,8 +3440,10 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
             break;
         WGPU_TEST_HOOK(passIndex++);
 
+#ifdef PLASMA_TEST_HOOKS
         // Set for the prewarm's walk of a pass the opacity test below skips this frame.
         bool opacityAnimated = false;
+#endif
         if ((fLayerState[0].fBlendFlags & hsGMatState::kBlendAlpha) && (material->GetLayer(iCurrMat)->GetOpacity() <= 0) && (fCurrLightingMethod != plSpan::kLiteVtxPreshaded)) // This opt isn't good for particles, since their
                                                                                                                                                                                 // material opacity is undefined/unused... -mcn
         {
@@ -3461,7 +3470,7 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
 #endif
                 continue;
             }
-            opacityAnimated = true;
+            WGPU_TEST_HOOK(opacityAnimated = true);
         }
 
         ISetFogParameters(&span, material->GetLayer(iCurrMat));
@@ -3477,6 +3486,7 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
             IRestoreSpanLights();
 
         // Do the regular draw.
+#ifdef PLASMA_TEST_HOOKS
         if (opacityAnimated) {
             const size_t inFlight = fDevice.PipelineBuildsPending();
             render.RenderPrims();
@@ -3485,6 +3495,9 @@ bool plWGPUPipeline::ILoopOverLayers(const plWGPURenderPrimFunc& render, hsGMate
         } else {
             render.RenderPrims();
         }
+#else
+        render.RenderPrims();
+#endif
 
         // Take care of projections that get applied to each pass (not in the prewarm's walk).
         if (!fPrewarmWalk && !fLights.fProjEach.empty() && !(fView.fRenderState & kRenderNoProjection)) {
@@ -3679,8 +3692,8 @@ void plWGPUPipeline::IRenderShadowsOntoSpan(const plWGPURenderPrimFunc& render, 
         // Never for a held room's drawables (PrewarmRoom), in any view. C++ sets their slave bits only under the
         // dialog's lit request (EnableLightsOnRenderRequest, plPostEffectMod.cpp:113): ICheckLighting by light group
         // (pl3DPipeline.h:1607-1616) or by harvest (:1807), live from IPreprocessShadows (plDXPipeline.cpp:2972) to
-        // IClearShadowSlaves (:3097). No held span received a shadow on the measured routes, so the walk built only
-        // unused passes; if a bit is set, the draw creates the pipeline (wgpuDeviceCreateRenderPipeline, at the draw).
+        // IClearShadowSlaves (:3097). Their receive passes are left to the draw: if a bit is set, the draw creates the
+        // pipeline (wgpuDeviceCreateRenderPipeline, at the draw).
         if (fPrewarmHeldDrawable)
             return;
         ISetupShadowRcvTextureStages(mat);
