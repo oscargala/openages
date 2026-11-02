@@ -75,9 +75,11 @@ void StartScaleWatch(float initialScale);
 // pipeline's reset, then plClient::ResizeDisplayDevice, i.e. IResizeWindow's mouse resolution and GUI aspect ratio and
 // the native-window hook) with the window's size in device pixels x the render scale, windowed unless the page is
 // fullscreen. The render scale is a fraction of the device pixels: by default min(devicePixelRatio, cap) /
-// devicePixelRatio; the game's display modes (GetSupportedDisplayModes, the options menu's resolution list) are
-// window-relative choices of it. With canvas=WxH (the test harness's runs) none of this runs: the display is the fixed
-// canvas.
+// devicePixelRatio, or the page's supersampling (the player's choice on the page, a whole multiple of the device
+// pixels). Without supersampling the game's display modes (GetSupportedDisplayModes, the options menu's resolution
+// list) are window-relative choices of it; while supersampling is on, the page's choice stands whatever mode the game
+// sets (its size still goes to graphics.ini as the scripts write it). With canvas=WxH (the test harness's runs) none of
+// this runs: the display is the fixed canvas.
 bool PlayerMode();
 
 // The display helper main.cpp installs (WinInit): in player mode the window-relative one

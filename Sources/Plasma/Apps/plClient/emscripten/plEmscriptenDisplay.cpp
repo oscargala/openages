@@ -267,7 +267,8 @@ struct Mode
 // The screen in device pixels; with supersampling, times the render scale, as a supersampled desktop reports
 // its framebuffer (macOS's scaled HiDPI modes). The scripts' windowed resolution list keeps only modes smaller
 // than the desktop (xOptionsMenu.py GetVideoResList, in this repository's scripts and in MOULa's), so the current
-// supersampled size stays on the list and choosing it keeps the render scale (ModeFraction).
+// supersampled size stays on the list. While supersampling is on, every mode the game chooses keeps the render scale
+// (ModeFraction), as a native mode change never changes the platform's display scale.
 plDisplayMode DesktopMode(const Window& w)
 {
     const double k = w.renderScale > 1. ? w.renderScale : 1.;
@@ -334,8 +335,14 @@ double IniFraction(const Window& w, int width, int height)
 
 // A mode the game asked for (the options menu, the console): the listed scale it is, else its width over the window's
 // (MOULa's GetVideoResList lists a mode of the desktop's height as height - 75, so the width carries the choice).
+// With supersampling on, the page's render scale stands, as at start-up (IniFraction): the game's mode, often
+// graphics.ini's own size, which the options menu writes back on Resume URU (xOptionsMenu.py WriteVideoControls), does
+// not undo the player's choice. Natively a mode change sizes the window and never changes the platform's display scale
+// (Mac-Cocoa/main.mm IResizeNativeDisplayDevice); the mode's size still goes to graphics.ini as the scripts write it.
 double ModeFraction(const Window& w, int width, int height)
 {
+    if (w.renderScale > 1.)
+        return 0.;
     for (const Mode& m : WindowModes(w))
         if (m.width == width && m.height == height)
             return m.fraction == DefaultFraction(w) ? 0. : m.fraction;
@@ -376,8 +383,9 @@ void PollWindow(void*)
     const Window& w = s_win;
     if (w.devW <= 0. || w.devH <= 0.)
         return;
-    // A change of the page's render scale is the player's newest choice: it replaces a resolution
-    // the game chose earlier in the session (the options menu, the console), as a game choice replaces the page's.
+    // A change of the page's render scale is the player's newest choice: it replaces a resolution the game chose earlier
+    // in the session (the options menu, the console). A game choice made while supersampling is on leaves the page's
+    // choice in place (ModeFraction).
     if (w.renderScale != s_renderScaleSeen) {
         if (s_renderScaleSeen != 0. && s_fraction > 0.) {
             DISPLAY_STATUS(
@@ -449,13 +457,15 @@ void ResizePlayer(int width, int height, bool windowed)
                             : ST::format("the default ({.3f})", DefaultFraction(w)));
         return;
     }
-    // A mode the game chose: its size is a render scale of this window; its windowed flag is the game's
+    // A mode the game chose: its size is a render scale of this window (while supersampling is on, the page's render
+    // scale stands: ModeFraction, and PollWindow then resets the display to it); its windowed flag is the game's
     // fullscreen toggle, which the fullscreen layer applies (a request waits for the next user gesture).
     s_fraction = ModeFraction(w, width, height);
     DISPLAY_STATUS("DISPLAY PLAYER: game mode {}x{} windowed {} -> render scale {}; fullscreen layer {}",
                    width, height, windowed ? 1 : 0,
                    s_fraction > 0. ? ST::format("{.3f} of the device pixels", s_fraction)
-                                   : ST::format("the default ({.3f})", DefaultFraction(w)),
+                                   : ST::format("the default ({.3f}{})", DefaultFraction(w),
+                                                w.renderScale > 1. ? ", the page's supersampling" : ""),
                    windowed ? "asked to leave fullscreen" : "asked for fullscreen");
     plFullscreenMode(width, height, windowed ? 1 : 0, s_scale);
     if (windowed == w.fullscreen)
