@@ -56,6 +56,7 @@ set(pfWGPUPipeline_SOURCES
     plWGPUPipelineShadows.cpp
     plWGPUPipelineState.cpp
     plWGPUPlateManager.cpp
+    plWGPUSampleCountSwitch.cpp
     plWGPUShader.cpp
     plWGPUTextFont.cpp
     plWGPUTextureFormat.cpp
@@ -77,6 +78,7 @@ set(pfWGPUPipeline_HEADERS
     plWGPUPipelineObserver.h
     plWGPUPipelineState.h
     plWGPUPlateManager.h
+    plWGPUSampleCountSwitch.h
     plWGPUSettings.h
     plWGPUShader.h
     plWGPUTextFont.h

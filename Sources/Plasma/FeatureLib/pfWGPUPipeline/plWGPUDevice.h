@@ -72,6 +72,7 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include "plWGPUD3DDevice.h"
 #include "plWGPUDeviceRef.h"
 #include "plWGPUFixedFragment.h"
+#include "plWGPUSampleCountSwitch.h"
 
 class plWGPUPipeline;
 class plRenderTarget;
@@ -207,7 +208,23 @@ public:
     void Clear(bool shouldClearColor, const float clearColor[4], bool shouldClearDepth, float clearDepth);
 
     void SetMaxAnsiotropy(uint8_t maxAnsiotropy);
+    /// The count drawn with from now on (the device's creation, the failed-Reset branch's recreate): the closest
+    /// supported count <= sampleCount, and no count pending.
     void SetMSAASampleCount(uint8_t sampleCount);
+
+    /// A successful Reset's count (plWGPUPipeline::IResetDevice): the closest supported count <= sampleCount becomes
+    /// the pending count, and the device goes on drawing at fSampleCount until its pipelines are built
+    /// (SwitchSampleCount). A replaced or cleared pending count gives up its pending-only builds.
+    plWGPUSampleCountSwitch::Change RequestMSAASampleCount(uint8_t sampleCount);
+
+    /// The count the walks build the main target for: the pending count, or fSampleCount when none is pending.
+    uint32_t TargetSampleCount() const { return fCountSwitch.TargetCount(fSampleCount); }
+    uint8_t  PendingSampleCount() const { return fCountSwitch.PendingCount(); }
+    /// At a frame start between frames (plWGPUPipeline::BeginRender, before CreateNewCommandBuffer): take the pending
+    /// count once the walk conditions were recorded at it in this generation and none of its pending-only builds is
+    /// left (plWGPUSampleCountSwitch::Ready). The attachments, the pass's resolve and the draws' records all follow
+    /// fSampleCount, so they change together, at a command-buffer boundary. True if the count changed.
+    bool     SwitchSampleCount(bool conditionsSet, uint32_t walkedSamples, uint32_t walkedGeneration);
 
     WGPUSampler SampleStateForClampFlags(hsGMatState::hsGMatClampFlags sampleState) const;
 
@@ -310,8 +327,12 @@ public:
     /// Bumped when the device's objects are released (ReleaseAllDeviceObjects): the pipelines and the builds queued
     /// and in flight belong to one generation.
     uint32_t Generation() const { return fGeneration; }
-    /// The builds queued or in flight.
+    /// The builds queued or in flight, of every class (the load's and the arrival's progress-frame waits).
     size_t   PipelineBuildsPending() const { return fPipelineBuilds.size() + fPipelineQueued.size(); }
+    /// The builds a scene frame waits for (DrainPipelineBuilds): those of class kDrain, queued or in flight.
+    size_t   DrainBuildsPending() const;
+    /// The builds of a pending count only (kPendingOnly), queued or in flight.
+    size_t   PendingOnlyBuilds() const;
 
     /// The frame loop's yields (plEmscriptenFrameLoop's Yield): how long each suspended the client thread.
     static void NoteYield(double waitedMs);
@@ -440,6 +461,7 @@ private:
         uint32_t                             generation = 0;     // fGeneration at the start
         double                               startMs = 0.0;      // queued
         bool                                 duplicated = false; // a draw created the pipeline while this was in flight
+        plWGPUBuildClass                     cls = plWGPUBuildClass::kDrain;
 #ifdef PLASMA_TEST_HOOKS
         uint32_t serial = 0; // the trace's build number
 #endif
@@ -452,8 +474,9 @@ private:
     // one takes it out of fPipelineQueued (PipelineState); its entry in the order is then skipped.
     struct PipelineQueued
     {
-        uint32_t generation = 0; // fGeneration when queued
-        double   queuedMs = 0.0;
+        uint32_t         generation = 0; // fGeneration when queued
+        double           queuedMs = 0.0;
+        plWGPUBuildClass cls = plWGPUBuildClass::kDrain;
 #ifdef PLASMA_TEST_HOOKS
         uint32_t serial = 0;
 #endif
@@ -514,7 +537,22 @@ private:
     // already in flight). The record is the walk's target's (formats and sample count): the main target's outside a
     // render target the walk pushed. The build is queued with the record's own state (a clone, as
     // plMetalDevice::StartPipelineBuild builds from record.state, plMetalDevice.cpp:1095); PumpPipelineBuilds issues it.
+    // While a count is pending (fCountSwitch), a visit of the main target asks for both counts: the drawn count's
+    // record as kDrain, and the pending count's as kPendingOnly. A render target's visit asks for its own (1) only.
     bool PrewarmPipelineStateFor(plWGPUPipelineState* pipelineState);
+    // One record of a visit: the walk's target's formats (the main target's outside a walk) at sampleCount, of class
+    // cls. A record already queued or in flight keeps the higher class (plWGPUSampleCountSwitch::Merge).
+    bool IPrewarmRecord(plWGPUPipelineState* pipelineState, uint32_t sampleCount, plWGPUBuildClass cls);
+    // Whether this visit is of the main target while a count is pending.
+    bool IPrewarmPendingVisit() const
+    {
+        return fCountSwitch.Pending() && (!fPrewarmWalkActive || (fWalkTargetValid && fWalkTarget == nullptr));
+    }
+    // A pending count given up: its pending-only builds leave the queue or finish unwaited, with a pipeline.log line.
+    void IAbandonPendingBuilds(const char* why);
+
+    // The main target's pending sample count (RequestMSAASampleCount, SwitchSampleCount).
+    plWGPUSampleCountSwitch fCountSwitch;
 
     // The walk's target (BeginPrewarmWalk). fWalkTargetValid is false for a render target whose device ref is missing
     // or dirty: the walk makes no ref (MakeRenderTargetRef creates textures), so that target's draws build at the

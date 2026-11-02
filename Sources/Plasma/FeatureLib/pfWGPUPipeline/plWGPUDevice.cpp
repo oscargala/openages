@@ -389,16 +389,88 @@ void plWGPUDevice::SetMSAASampleCount(uint8_t sampleCount)
 {
     // As plMetalDevice::SetMSAASampleCount: the closest supported count <= the request, from the
     // mode's FSAA types (plDXPipeline::ICreateDevice).
-    while (sampleCount > 1) {
-        if (std::find(fFSAATypes.cbegin(), fFSAATypes.cend(), sampleCount) != fFSAATypes.cend()) {
-            break;
-        }
-        sampleCount--;
-    }
-    if (sampleCount == 0)
-        sampleCount = 1;
+    fSampleCount = plWGPUSampleCountSwitch::Resolve(sampleCount, fFSAATypes);
+    // Set at once: a count still pending is given up. On the failed-Reset branch the release has emptied the builds
+    // and the pipelines with the generation (ReleaseAllDeviceObjects), so there is no old set left to draw with.
+    if (fCountSwitch.Pending())
+        IAbandonPendingBuilds("the count is set at once");
+    fCountSwitch.Clear();
+}
 
-    fSampleCount = sampleCount;
+namespace
+{
+// The sample count's lines (RequestMSAASampleCount, IAbandonPendingBuilds, SwitchSampleCount): in pipeline.log, and on
+// the console with the device's other lifecycle lines (plWGPULog), whose time stamps place them among the frames.
+void CountLine(const ST::string& line)
+{
+    plStatusLog::AddLineS("pipeline.log", 0xff00ffff, line.c_str());
+    plWGPULog("{}", line);
+}
+} // namespace
+
+plWGPUSampleCountSwitch::Change plWGPUDevice::RequestMSAASampleCount(uint8_t sampleCount)
+{
+    // A WebGPU render pipeline carries its sample count (IPipelineDescriptor's multisample.count), where D3D9 binds
+    // its shaders and render state per draw, apart from the multisampled back buffer: its successful Reset compiles
+    // nothing (plDXPipeline::IResetDevice, plDXPipeline.cpp:1922-1965). The new count's pipelines are built by the
+    // walks while the frames go on at fSampleCount, with its attachments and pipelines (SwitchSampleCount).
+    const uint8_t                         resolved = plWGPUSampleCountSwitch::Resolve(sampleCount, fFSAATypes);
+    const uint8_t                         old = fCountSwitch.PendingCount();
+    const plWGPUSampleCountSwitch::Change change = fCountSwitch.Request(fSampleCount, resolved, emscripten_get_now());
+    switch (change) {
+        case plWGPUSampleCountSwitch::Change::kSet:
+            CountLine(ST::format("sample count {} pending (drawing at {})", resolved, fSampleCount));
+            break;
+        case plWGPUSampleCountSwitch::Change::kReplaced:
+            IAbandonPendingBuilds(ST::format("pending count {} abandoned for {}", old, resolved).c_str());
+            break;
+        case plWGPUSampleCountSwitch::Change::kCleared:
+            IAbandonPendingBuilds(ST::format("pending count {} cleared: back to the drawn {}", old, fSampleCount).c_str());
+            break;
+        default:
+            break;
+    }
+    return change;
+}
+
+void plWGPUDevice::IAbandonPendingBuilds(const char* why)
+{
+    // Queued pending-only builds leave fPipelineQueued (their entries in fPipelineQueue are then skipped by the pump);
+    // those in flight finish into the map unwaited (ICollectPipelineBuilds). Builds a drawn-count or render-target
+    // visit upgraded (kDrain) stay.
+    size_t dequeued = 0, released = 0;
+    plWGPUSampleCountSwitch::Abandon(fPipelineQueued, fPipelineBuilds, dequeued, released);
+    CountLine(ST::format("{}: {} queued pending-only builds dropped, {} in flight left to finish", why, dequeued,
+                         released));
+}
+
+bool plWGPUDevice::SwitchSampleCount(bool conditionsSet, uint32_t walkedSamples, uint32_t walkedGeneration)
+{
+    if (!fCountSwitch.Pending())
+        return false;
+    fCountSwitch.NoteFrameStart();
+    if (!fCountSwitch.Ready(conditionsSet, walkedSamples, walkedGeneration == fGeneration, PendingOnlyBuilds()))
+        return false;
+    // Builds the walk did not reach are built at their first draw, as after any reset or load (PipelineState).
+    const uint8_t old = fSampleCount;
+    fSampleCount = fCountSwitch.PendingCount();
+    CountLine(ST::format("sample count {} -> {} after {} builds, {.1f} ms since the reset, at frame start {} since it",
+                         old, fSampleCount, fCountSwitch.Builds(), emscripten_get_now() - fCountSwitch.StartMs(),
+                         fCountSwitch.FrameStarts()));
+    fCountSwitch.Clear();
+    return true;
+}
+
+size_t plWGPUDevice::DrainBuildsPending() const
+{
+    return plWGPUSampleCountSwitch::Count(fPipelineQueued, plWGPUBuildClass::kDrain) +
+           plWGPUSampleCountSwitch::Count(fPipelineBuilds, plWGPUBuildClass::kDrain);
+}
+
+size_t plWGPUDevice::PendingOnlyBuilds() const
+{
+    return plWGPUSampleCountSwitch::Count(fPipelineQueued, plWGPUBuildClass::kPendingOnly) +
+           plWGPUSampleCountSwitch::Count(fPipelineBuilds, plWGPUBuildClass::kPendingOnly);
 }
 
 void plWGPUDevice::ReleaseSamplerStates()
@@ -1810,6 +1882,19 @@ void plWGPUDevice::SetPipeline(WGPURenderPassEncoder pass, plWGPUPipelineState& 
 
 bool plWGPUDevice::PrewarmPipelineStateFor(plWGPUPipelineState* pipelineState)
 {
+    // The visit's record at the count the walk's target draws with, and while a count is pending, the main target's
+    // record at that count too, built from the same state: the shader and clear states read no sample count
+    // (IShaderKey takes the depth format only; plWGPUClearPipelineState its two flags). A fixed-function state's program
+    // depends on the count's pipeline key, so PrewarmFixedFunction makes one state per count.
+    bool started = IPrewarmRecord(pipelineState, fPrewarmWalkActive ? fWalkSampleCount : fSampleCount,
+                                  plWGPUBuildClass::kDrain);
+    if (IPrewarmPendingVisit())
+        started |= IPrewarmRecord(pipelineState, fCountSwitch.PendingCount(), plWGPUBuildClass::kPendingOnly);
+    return started;
+}
+
+bool plWGPUDevice::IPrewarmRecord(plWGPUPipelineState* pipelineState, uint32_t sampleCount, plWGPUBuildClass cls)
+{
     // plMetalDevice::PrewarmPipelineStateFor and StartPipelineBuild (plMetalDevice.cpp:1183-1201, :1083-1135): the
     // pipeline the draw would build, started asynchronously (newRenderPipelineStateWithDescriptor's completion handler
     // there, wgpuDeviceCreateRenderPipelineAsync here), on the main target. It is queued here and issued by
@@ -1824,7 +1909,7 @@ bool plWGPUDevice::PrewarmPipelineStateFor(plWGPUPipelineState* pipelineState)
             observer->OnPrewarmRequest(*this, *pipelineState, result);
     };
 #endif
-    plWGPUPipelineRecord record = {fDepthFormat, fFramebufferFormat, fSampleCount};
+    plWGPUPipelineRecord record = {fDepthFormat, fFramebufferFormat, sampleCount};
     if (fPrewarmWalkActive) {
         if (!fWalkTargetValid) {
 #ifdef PLASMA_TEST_HOOKS
@@ -1834,11 +1919,20 @@ bool plWGPUDevice::PrewarmPipelineStateFor(plWGPUPipelineState* pipelineState)
         }
         record.depthFormat = fWalkDepthFormat;
         record.colorFormat = fWalkColorFormat;
-        record.sampleCount = fWalkSampleCount;
     }
     record.state = std::shared_ptr<plWGPUPipelineState>(pipelineState->Clone());
-    if (fNewPipelineStateMap.find(record) != fNewPipelineStateMap.end() ||
-        fPipelineBuilds.find(record) != fPipelineBuilds.end() || fPipelineQueued.find(record) != fPipelineQueued.end()) {
+    // A record already queued or in flight keeps the higher class: a drawn-count or render-target visit of a
+    // pending-only record makes the scene frame wait for it (a 4 -> 1 change's main-target records can be a render
+    // target's, which are single-sampled), and a pending visit takes back a build a given-up count left in flight.
+    bool known = fNewPipelineStateMap.find(record) != fNewPipelineStateMap.end();
+    if (auto queued = fPipelineQueued.find(record); queued != fPipelineQueued.end()) {
+        queued->second.cls = plWGPUSampleCountSwitch::Merge(queued->second.cls, cls);
+        known = true;
+    } else if (auto build = fPipelineBuilds.find(record); build != fPipelineBuilds.end()) {
+        build->second.cls = plWGPUSampleCountSwitch::Merge(build->second.cls, cls);
+        known = true;
+    }
+    if (known) {
 #ifdef PLASMA_TEST_HOOKS
         note(plWGPUPipelineObserver::kRequestKnown);
 #endif
@@ -1853,6 +1947,9 @@ bool plWGPUDevice::PrewarmPipelineStateFor(plWGPUPipelineState* pipelineState)
     PipelineQueued queued;
     queued.generation = fGeneration;
     queued.queuedMs = t0;
+    queued.cls = cls;
+    if (cls == plWGPUBuildClass::kPendingOnly)
+        fCountSwitch.NoteQueued();
 #ifdef PLASMA_TEST_HOOKS
     queued.serial = ++fPipelineBuildSerial;
     if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
@@ -1904,6 +2001,7 @@ bool plWGPUDevice::IIssuePipelineBuild(const plWGPUPipelineRecord& record, const
     build.result = std::move(result);
     build.generation = queued.generation;
     build.startMs = queued.queuedMs;
+    build.cls = queued.cls;
 #ifdef PLASMA_TEST_HOOKS
     build.serial = queued.serial;
     if (plWGPUPipelineObserver* observer = plWGPUPipelineObserver::Get())
@@ -2019,27 +2117,34 @@ void plWGPUDevice::PumpPipelineBuilds()
 
 void plWGPUDevice::DrainPipelineBuilds(double& waitMs)
 {
-    // Every queued build is issued first: the drain stands for plMetalDevice::PipelineState's wait
-    // (plMetalDevice.cpp:1150-1180), which waits for what the draws need, whatever the pacing.
+    // Every queued build of class kDrain is issued first: the drain stands for plMetalDevice::PipelineState's wait
+    // (plMetalDevice.cpp:1150-1180), which waits for what the draws need, whatever the pacing. A pending count's builds
+    // (kPendingOnly) are needed by no draw of this frame: they stay queued, in order, for the pacing.
+    std::deque<plWGPUPipelineRecord> kept;
     while (!fPipelineQueue.empty()) {
         plWGPUPipelineRecord record = std::move(fPipelineQueue.front());
         fPipelineQueue.pop_front();
         auto it = fPipelineQueued.find(record);
         if (it == fPipelineQueued.end())
             continue;
+        if (it->second.cls != plWGPUBuildClass::kDrain) {
+            kept.push_back(std::move(record));
+            continue;
+        }
         const PipelineQueued queued = it->second;
         fPipelineQueued.erase(it);
         if (queued.generation == fGeneration)
             IIssuePipelineBuild(record, queued);
     }
+    fPipelineQueue.swap(kept);
 
-    // The futures are copied first: no iterator is held across a wait.
+    // The futures are copied first: no iterator is held across a wait. Only kDrain builds are waited for.
     if (fPipelineBuilds.empty())
         return;
     std::vector<WGPUFuture> futures;
     futures.reserve(fPipelineBuilds.size());
     for (const auto& [record, build] : fPipelineBuilds) {
-        if (!build.result->done)
+        if (!build.result->done && build.cls == plWGPUBuildClass::kDrain)
             futures.push_back(build.future);
     }
     if (!futures.empty()) {
@@ -2667,22 +2772,31 @@ bool plWGPUDevice::PrewarmFixedFunction(const FixedFunctionDraw& draw)
     plWGPUFixedFunctionKey key;
     plWGPUFixedState       fixed;
     IFixedFunctionKey(draw, key, fixed);
-    uint32_t               program = 0;
-    plWGPUFixedFragmentSig sig{};
-    if (fCanvasFormatKnown && (!fPrewarmWalkActive || fWalkTargetValid)) {
-        const bool       walk = fPrewarmWalkActive;
-        plWGPUFFUniforms u{};
+    const bool       canBuild = fCanvasFormatKnown && (!fPrewarmWalkActive || fWalkTargetValid);
+    const bool       walk = fPrewarmWalkActive;
+    plWGPUFFUniforms u{};
+    if (canBuild)
         IFixedFragmentUniforms(key, fWalkCube, u);
-        program = IFixedProgram(u, key,
-                                IFixedPipelineKey(key, fixed, walk ? fWalkColorFormat : fFramebufferFormat,
-                                                  walk ? fWalkDepthFormat : fDepthFormat,
-                                                  walk ? fWalkSampleCount : fSampleCount),
-                                sig);
-    }
-    WGPU_OBSERVE(OnFixedFunctionKey(*this, key, fixed, true, program, sig));
-    plWGPUFixedFunctionPipelineState state(this, key, fixed, program,
-                                           program ? fFixedProgramTexts[program - 1].c_str() : nullptr);
-    return PrewarmPipelineStateFor(&state);
+    // One state per count: the program is chosen for the count's own pipeline key, since a failed program is
+    // remembered per key (fFixedFailed) and the key holds the sample count (IFixedPipelineKey).
+    const auto prewarm = [&](uint32_t samples, plWGPUBuildClass cls) {
+        uint32_t               program = 0;
+        plWGPUFixedFragmentSig sig{};
+        if (canBuild)
+            program = IFixedProgram(u, key,
+                                    IFixedPipelineKey(key, fixed, walk ? fWalkColorFormat : fFramebufferFormat,
+                                                      walk ? fWalkDepthFormat : fDepthFormat, samples),
+                                    sig);
+        if (cls == plWGPUBuildClass::kDrain)
+            WGPU_OBSERVE(OnFixedFunctionKey(*this, key, fixed, true, program, sig));
+        plWGPUFixedFunctionPipelineState state(this, key, fixed, program,
+                                               program ? fFixedProgramTexts[program - 1].c_str() : nullptr);
+        return IPrewarmRecord(&state, samples, cls);
+    };
+    bool started = prewarm(walk ? fWalkSampleCount : fSampleCount, plWGPUBuildClass::kDrain);
+    if (IPrewarmPendingVisit())
+        started |= prewarm(fCountSwitch.PendingCount(), plWGPUBuildClass::kPendingOnly);
+    return started;
 }
 
 uint64_t plWGPUDevice::IFixedPipelineKey(const plWGPUFixedFunctionKey& key, const plWGPUFixedState& fixed,

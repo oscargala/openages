@@ -928,6 +928,9 @@ bool plWGPUPipeline::BeginRender()
     if (fInSceneDepth == 0) {
         IPrewarmFrameStart();
         fDevice.PumpPipelineBuilds();
+        // A pending sample count is taken here, between frames and before CreateNewCommandBuffer, once its pipelines are
+        // built: the attachments, the pass's resolve and the draws' records change together (plWGPUSampleCountSwitch).
+        fDevice.SwitchSampleCount(fPrewarmConditionsSet, fPrewarmSamples, fPrewarmGeneration);
     }
 
     // If this is the primary BeginRender, make sure we're really ready.
@@ -1202,7 +1205,8 @@ bool plWGPUPipeline::IResetDevice()
             return true;
         }
         if (webgpuLost || fPresentationLost || fForceDeviceReset) {
-            const double t0 = emscripten_get_now();
+            const double                    t0 = emscripten_get_now();
+            plWGPUSampleCountSwitch::Change countChange = plWGPUSampleCountSwitch::Change::kUnchanged;
             plStatusLog::AddLineS("pipeline.log", 0xffff0000, "Resetting Device");
             IReleaseDynDeviceObjects();
             // IFindDepthFormat: the depth formats exist on every WebGPU device.
@@ -1219,8 +1223,11 @@ bool plWGPUPipeline::IResetDevice()
             } else {
                 // Reset succeeds: the swap chain takes the present parameters, the device
                 // state returns to its defaults; textures, buffers, shaders and plates survive.
+                // The multisample type becomes the device's pending count: D3D9's shaders do not depend on it, but a
+                // WebGPU pipeline carries it, so the frames go on at the drawn count until the new count's pipelines
+                // are built (plWGPUDevice::RequestMSAASampleCount, SwitchSampleCount at BeginRender).
                 fDevice.fD3D.Reset();
-                fDevice.SetMSAASampleCount(uint8_t(std::max(fNumAASamples, 0)));
+                countChange = fDevice.RequestMSAASampleCount(uint8_t(std::max(fNumAASamples, 0)));
                 fDevice.SetMaxAnsiotropy(fSettings.fMaxAnisotropicSamples);
                 fDevice.ConfigureSurface(fPresentWidth, fPresentHeight);
             }
@@ -1233,8 +1240,13 @@ bool plWGPUPipeline::IResetDevice()
             plDeviceRecreateMsg* clean = new plDeviceRecreateMsg(this);
             clean->Send();
             fDisplayStats.lastResetMs = emscripten_get_now() - t0;
-            plWGPULog("IResetDevice: {} branch, {}x{} MSAA {}, {.1f} ms{}", webgpuLost ? "failed-Reset (lost device)" : "successful-Reset",
-                      fPresentWidth, fPresentHeight, fDevice.fSampleCount, fDisplayStats.lastResetMs,
+            // The drawn count and the count the reset resolved (pending until its pipelines are built).
+            static const char* const kCountChange[] = {"unchanged", "pending", "pending, replacing another",
+                                                       "pending, kept", "pending cleared"};
+            plWGPULog("IResetDevice: {} branch, {}x{} MSAA {} (resolved {}: {}), {.1f} ms{}",
+                      webgpuLost ? "failed-Reset (lost device)" : "successful-Reset", fPresentWidth, fPresentHeight,
+                      fDevice.fSampleCount, fDevice.TargetSampleCount(), kCountChange[size_t(countChange)],
+                      fDisplayStats.lastResetMs,
                       webgpuLost ? ST::format(", {.1f} ms after the loss", fDisplayStats.lastRecoveryMs)
                                  : ST::string());
             if (webgpuLost)
@@ -1464,6 +1476,9 @@ bool plWGPUPipeline::PrewarmBeforeScene(const std::vector<plRenderRequest*>& pre
         IPrewarmRequests(preRequests, postRequests, pageMgr);
         IPrewarmClearStandIns();
     }
+    // Builds of every class count here, a pending sample count's too: this wait, as plClient's progress-frame waits
+    // (IWaitPipelineBuilds, PrewarmPending), absorbs builds behind the progress frames C++ also draws at a load, so
+    // covering the pending set there adds no picture.
     if (mayDefer && fDevice.PipelineBuildsPending()) {
         // Not drawn, as a frame whose device is not ready: plDXPipeline::BeginRender returns true after IResetDevice
         // has cleared the shadow slaves (plDXPipeline.cpp:1909-1918, 2921-2926), and plClient::IDraw flushes the
@@ -1602,8 +1617,8 @@ void plWGPUPipeline::IPrewarmFrameStart()
     else if (fPrewarmGeneration != fDevice.Generation())
         cause = "device";
     else if (fPrewarmColor != fDevice.fFramebufferFormat || fPrewarmDepth != fDevice.fDepthFormat ||
-             fPrewarmSamples != fDevice.fSampleCount)
-        cause = "target";
+             fPrewarmSamples != fDevice.TargetSampleCount())
+        cause = "target"; // a pending sample count among them (plWGPUDevice::RequestMSAASampleCount)
     else if (fPrewarmFogType != fogType || fPrewarmFogDegenerate != fogDegenerate)
         cause = "fog";
     else if (fPrewarmArrival)
@@ -1620,7 +1635,7 @@ void plWGPUPipeline::IPrewarmFrameStart()
         fPrewarmGeneration = fDevice.Generation();
         fPrewarmColor = fDevice.fFramebufferFormat;
         fPrewarmDepth = fDevice.fDepthFormat;
-        fPrewarmSamples = fDevice.fSampleCount;
+        fPrewarmSamples = fDevice.TargetSampleCount();
         fPrewarmFogType = fogType;
         fPrewarmFogDegenerate = fogDegenerate;
         fPrewarmConditionsSet = true;
@@ -1716,10 +1731,11 @@ void plWGPUPipeline::IPrewarmFrameStart()
 
 void plWGPUPipeline::IPrewarmDrain()
 {
-    if (fInSceneDepth != 0 || !fDevice.PipelineBuildsPending())
+    if (fInSceneDepth != 0 || !fDevice.DrainBuildsPending())
         return;
-    // A scene frame: no draw of it finds a build queued or in flight.
-    const uint32_t inFlight = uint32_t(fDevice.PipelineBuildsPending());
+    // A scene frame: no draw of it finds a build queued or in flight. A pending sample count's builds are needed by no
+    // draw of it, and are not waited for (plWGPUDevice::DrainPipelineBuilds).
+    const uint32_t inFlight = uint32_t(fDevice.DrainBuildsPending());
     double         drainMs = 0.0;
     fDevice.DrainPipelineBuilds(drainMs);
 #ifdef PLASMA_TEST_HOOKS
