@@ -1878,6 +1878,21 @@ void plWGPUPipeline::IPrewarmBegin(PrewarmSaved& s, const char* seat)
     fPrewarmSeat = seat;
     fPrewarmTally = PrewarmTally();
     fForceMatHandle = true;
+    // The walk's material-state memory starts as BeginRender (plWGPUPipeline.cpp:976-977) leaves it for the frame's
+    // scene passes after a shadow cast or an outfit, through C++'s own refresh: plDXPipeline::IPushShadowCastState
+    // (plDXPipeline.cpp:10808, :10814, :10820) sets the blend memory of stages 0 and 1 to -1 and the texture-invalid
+    // flag, IPreprocessAvatarTextures (plDXPipeline.cpp:11748, :11751) the blend memory, and IInvalidateState
+    // (plDXPipeline.cpp:7083) the flag at every render-target switch (plDXDevice::SetRenderTarget, plDXDevice.cpp:150).
+    // Each walk pass then keys from its own flags, as every draw after a material pass or a refresh does, and not from
+    // what IInitDeviceState leaves after a Reset (a blend memory of 0 over ALPHABLENDENABLE FALSE and ALPHAFUNC
+    // GREATEREQUAL). The state is saved above and IPrewarmEnd restores it, so no draw sees the seed. No seed predicts
+    // the residual: a post-Reset frame with no successful cast (IPushShadowCastState, plDXPipeline.cpp:10715-10722) and
+    // no outfit (IPreprocessAvatarTextures, plDXPipeline.cpp:11700) draws its first passes in the IInitDeviceState
+    // regime (IInitDeviceState, plDXPipeline.cpp:690, :704-706), in C++ and in the port alike; those keys build at the
+    // draw (plWGPUDevice::PipelineState, plWGPUDevice.cpp:1813-1873).
+    fLayerState[0].fBlendFlags = uint32_t(-1);
+    fLayerState[1].fBlendFlags = uint32_t(-1);
+    fSettings.fVeryAnnoyingTextureInvalidFlag = true;
     fDevice.BeginPrewarmWalk();
 }
 
@@ -2018,7 +2033,10 @@ void plWGPUPipeline::IPrewarmTargets()
     // clothing composites (IPreprocessAvatarTextures), then the outfits' drawables as the frame's draws after the
     // compose see them (IPrewarmOutfits, whose stand-ins stay for IPrewarmRequests). They run under the walk with the
     // live device state, as the frame will: between here and IPreprocessShadows the frame's BeginRender sets only
-    // ZENABLE TRUE, which the port never sets FALSE. Every slave and outfit is walked every scene frame; the device's
+    // ZENABLE TRUE, which the port never sets FALSE. The seat starts from IPrewarmBegin's seed (the blend memory of
+    // stages 0 and 1 and the texture-invalid flag); IPushShadowCastState (plWGPUPipelineShadows.cpp:785-797) and
+    // IPreprocessAvatarTextures (plWGPUPipelineAvatar.cpp:129-132) overwrite those values before any read, so the
+    // casts' and the compose's keys are the frame's. Every slave and outfit is walked every scene frame; the device's
     // record lookup (PrewarmPipelineStateFor) is the only deduplication, since a cast pass's key takes state the cast
     // does not set (BLENDOP, kMiscTwoSided, the bound pixel shader) and per-span state (format, matrices, handedness),
     // and a caster's spans are collected again each frame.
