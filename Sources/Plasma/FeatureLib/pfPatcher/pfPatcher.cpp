@@ -67,6 +67,8 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 #include <cerrno>
 #include <cstdio>
 
+#include "pfPatcherDownloadCheck.h"
+
 // The browser storage budget the application sets (pfPatcher::SetStorageBudget), shared by every patcher. Without one,
 // no manifest is checked against the storage before its files are fetched.
 static pfPatcher::StorageBudgetFunc s_storageBudget;
@@ -142,6 +144,9 @@ struct pfPatcherQueuedFile
     uint32_t fFileSize;
     uint32_t fZipSize;
     uint32_t fFlags;
+#ifdef __EMSCRIPTEN__
+    std::string fCompressedMD5; // the manifest's md5compressed (pfPatcherDownloadCheck::ManifestMD5), or empty
+#endif
 
     pfPatcherQueuedFile(Type t, const NetCliFileManifestEntry& file)
         : fType(t), fClientPath(plFileName(ST::string::from_utf16(file.clientName)).Normalize()),
@@ -150,6 +155,9 @@ struct pfPatcherQueuedFile
     {
         ST::string temp(file.md5, std::size(file.md5));
         fChecksum.SetFromHexString(temp.c_str());
+#ifdef __EMSCRIPTEN__
+        fCompressedMD5 = pfPatcherDownloadCheck::ManifestMD5(file.md5compressed);
+#endif
     }
 
     pfPatcherQueuedFile(Type t, plFileName path, uint32_t flags=0)
@@ -273,6 +281,9 @@ public:
     {
 #ifdef __EMSCRIPTEN__
         fExpectedSize = file.fFileSize;
+        // a manifest file's download: the download check runs (an auth file's has no manifest MD5 and no file channel)
+        fCheckOn = true;
+        fCheck = pfPatcherDownloadCheck(file.fCompressedMD5);
 #ifdef PLASMA_TEST_HOOKS
         if (pfPatcher::fTestSizeDelta)
             fExpectedSize += pfPatcher::fTestSizeDelta(fFilename);
@@ -301,6 +312,8 @@ public:
     pfPatcherStream(pfPatcherWorker* parent, const pfPatcherStream& failed)
         : plZlibStream(), fParent(parent), fFilename(failed.fFilename), fFlags(failed.fFlags), fBytesWritten(), fDLStartTime(), fExpectedSize(failed.fExpectedSize), fDeliverSize(failed.fDeliverSize), fAttempt(failed.fAttempt + 1)
     {
+        fCheckOn = failed.fCheckOn;
+        fCheck = pfPatcherDownloadCheck(failed.fCheck.ManifestMD5Hex());
     }
 #endif
 
@@ -309,6 +322,10 @@ public:
         fDLStartTime = hsTimer::GetSeconds<float>();
 #ifdef __EMSCRIPTEN__
         fWriteFailuresAtBegin = s_writeFailures ? s_writeFailures(fFilename) : 0;
+        if (fCheckOn) {
+            fWrittenMD5.Start();
+            fMD5Started = true;
+        }
 #endif
         if (!fOutput)
             Open(fFilename, "wb");
@@ -343,11 +360,21 @@ public:
         // tick whatever progress bar we have
         IUpdateProgress(count);
 
+#ifdef __EMSCRIPTEN__
+        // the download check: this chunk's arrival record, before any test fault
+        IChunkArrived(count);
+#endif
+
 #if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
         // the harness's tail fault (pfPatcher::fTestTailFault) may drop the last payload or change its bytes
         if (pfPatcher::fTestTailFault && fBytesWritten >= fDeliverSize &&
             !(buf = pfPatcher::fTestTailFault(fFilename, fAttempt, buf, count)))
             return count;
+#endif
+
+#ifdef __EMSCRIPTEN__
+        // and the bytes about to be written: their CRC-32 against the arrival record, and the download's MD5
+        IChunkWritten(count, buf);
 #endif
 
         // write the appropriate blargs
@@ -387,6 +414,48 @@ public:
     uint32_t fAttempt = 0;              // 0 for the first download, then 1 per retry
     uint32_t fWriteFailuresAtBegin = 0; // the failed writes of this file before Begin (s_writeFailures)
     int64_t  fInflatedOut = -1;         // a zipped file's inflated bytes (z_stream total_out) at Close, -1 for none
+
+    // The download check (pfPatcherDownloadCheck.h), log only: on for a manifest file's download, its chunks' arrival
+    // and write CRC-32s with the manifest's MD5, and the MD5 of the bytes written from Begin (fHashedBytes of them)
+    bool                   fCheckOn = false;
+    pfPatcherDownloadCheck fCheck;
+    plChecksum             fWrittenMD5{plChecksum::Type::kMD5};
+    bool                   fMD5Started = false;
+    uint64_t               fHashedBytes = 0;
+
+    void IChunkArrived(uint32_t count)
+    {
+        uint32_t crc;
+        if (fCheckOn && NetCliFileChunkArrivalCrc(this, crc))
+            fCheck.Arrived(crc, count);
+    }
+
+    void IChunkWritten(uint32_t count, const void* buf)
+    {
+        if (!fCheckOn || !fMD5Started)
+            return;
+        fCheck.Written(buf, count);
+        fWrittenMD5.AddTo(count, static_cast<const uint8_t*>(buf));
+        fHashedBytes += count;
+    }
+
+    // After Close of a completed download: one line to the patcher log and the console when the written bytes' MD5 is
+    // not the manifest's md5compressed, or a chunk changed between its arrival and its write. Nothing else changes.
+    void LogDownloadCheck()
+    {
+        if (!fCheckOn || !fMD5Started)
+            return;
+        fMD5Started = false;
+        fWrittenMD5.Finish();
+        const std::string md5 = fWrittenMD5.GetAsHexString().c_str();
+        if (!fCheck.Mismatch(md5))
+            return;
+        const std::string line = fCheck.Line(fFilename.AsString().c_str(), fAttempt, md5, fHashedBytes,
+                                             fBytesWritten, fDeliverSize, fExpectedSize);
+        PatcherLogRed("\t{}", line.c_str());
+        std::printf("patcher: %s\n", line.c_str());
+        std::fflush(stdout);
+    }
 
     // The file's size on disk now, or -1 with the stat errno
     int64_t SizeOnDisk(int& error) const
@@ -562,6 +631,10 @@ void pfPatcherWorker::IFileThingDownloadCB(ENetError result, const plFileName& f
     // the message that ends the patch if this download failed
     ST::string failure = filename.AsString();
 #ifdef __EMSCRIPTEN__
+    // The download check of a completed download: a line when its bytes or a chunk do not match, and nothing more
+    if (IS_NET_SUCCESS(result))
+        stream->LogDownloadCheck();
+
     // A download the file server completed whose file is not at the manifest size (pfPatcherStream above): a failed
     // write fails it for storage, a download that arrived complete is kept as native, and any other is fetched again.
     // A failed download keeps native's branch below. Each mismatch writes one line to the patcher log and the console.

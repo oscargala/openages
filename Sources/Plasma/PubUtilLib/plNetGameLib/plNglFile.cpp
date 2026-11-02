@@ -65,6 +65,10 @@ You can contact Cyan Worlds, Inc. by email legal@cyan.com
 
 #include "Intern.h"
 
+#ifdef __EMSCRIPTEN__
+#include <zlib.h>
+#endif
+
 // Define this if the file servers are running behind load-balancing hardware.
 // It changes the logic by which the decision to attempt a reconnect is made.
 #define LOAD_BALANCER_HARDWARE
@@ -226,6 +230,9 @@ struct RcvdFileDownloadChunkTrans : NetNotifyTrans {
     unsigned    bytes;
     uint8_t *      data;
     hsStream *  writer;
+#ifdef __EMSCRIPTEN__
+    uint32_t arrivalCrc = 0; // the CRC-32 of the chunk's bytes in the receive buffer (DownloadRequestTrans::Recv)
+#endif
 
     RcvdFileDownloadChunkTrans()
         : NetNotifyTrans(kFileRcvdFileDownloadChunkTrans),
@@ -256,6 +263,16 @@ static unsigned                     s_connectBuildId;
 static unsigned                     s_serverType;
 
 static FNetCliFileBuildIdUpdateCallback s_buildIdCallback;
+
+#ifdef __EMSCRIPTEN__
+// The chunk RcvdFileDownloadChunkTrans::Post is handing to its writer, on the thread that runs Post
+struct ChunkWrite
+{
+    const hsStream* writer = nullptr;
+    uint32_t        arrivalCrc = 0;
+};
+static thread_local ChunkWrite s_chunkWrite;
+#endif
 
 const unsigned kMinValidConnectionMs                = 25 * 1000;
 
@@ -1134,6 +1151,12 @@ bool DownloadRequestTrans::Recv (
 
     uint32_t byteCount = reply.byteCount;
     const uint8_t* data = reply.fileData;
+#if defined(__EMSCRIPTEN__) && defined(PLASMA_TEST_HOOKS)
+    // the harness's wire fault (NetCliFileTestChunkHook) may change the chunk's bytes before their arrival CRC-32
+    if (NetCliFileTestChunkHook && byteCount > 0)
+        data = NetCliFileTestChunkHook(m_filename, data, byteCount,
+                                       m_totalBytesReceived + byteCount >= reply.totalFileSize);
+#endif
 
     // tell the server we got the data
     Cli2File_FileDownloadChunkAck fileAck;
@@ -1159,6 +1182,11 @@ bool DownloadRequestTrans::Recv (
         writeTrans->bytes   = byteCount;
         writeTrans->data    = (uint8_t *)malloc(byteCount);
         memcpy(writeTrans->data, data, byteCount);
+#ifdef __EMSCRIPTEN__
+        // the download check's arrival record: the chunk's bytes where the file connection framed them
+        // (CliFileConn::AsyncNotifySocketRead -> Dispatch -> Recv_FileDownloadReply -> here, on the socket thread)
+        writeTrans->arrivalCrc = uint32_t(crc32(0L, data, byteCount));
+#endif
         NetTransSend(writeTrans);
     }
     m_totalBytesReceived += byteCount;
@@ -1184,7 +1212,14 @@ RcvdFileDownloadChunkTrans::~RcvdFileDownloadChunkTrans () {
 
 //============================================================================
 void RcvdFileDownloadChunkTrans::Post () {
+#ifdef __EMSCRIPTEN__
+    // the arrival record of the chunk this Write hands over (NetCliFileChunkArrivalCrc)
+    s_chunkWrite = {writer, arrivalCrc};
+#endif
     writer->Write(bytes, data);
+#ifdef __EMSCRIPTEN__
+    s_chunkWrite = {};
+#endif
     m_result = kNetSuccess;
     m_state  = kTransStateComplete;
 }
@@ -1368,3 +1403,14 @@ void NetCliFileDownloadRequest (
     );
     NetTransSend(trans);
 }
+
+#ifdef __EMSCRIPTEN__
+//============================================================================
+bool NetCliFileChunkArrivalCrc(const hsStream* writer, uint32_t& crc)
+{
+    if (!writer || s_chunkWrite.writer != writer)
+        return false;
+    crc = s_chunkWrite.arrivalCrc;
+    return true;
+}
+#endif

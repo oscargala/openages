@@ -42,6 +42,11 @@ target_link_libraries(
         pnUUID
         plVault
 )
+if(EMSCRIPTEN)
+    # the browser's download check takes each file chunk's CRC-32 where it arrives (DownloadRequestTrans::Recv), so
+    # plNglFile.cpp includes zlib.h
+    target_link_libraries(plNetGameLib PRIVATE ZLIB::ZLIB)
+endif()
 
 source_group("Header Files" FILES ${plNetGameLib_HEADERS})
 source_group("Source Files" FILES ${plNetGameLib_SOURCES})

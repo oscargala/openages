@@ -119,4 +119,25 @@ void NetCliFileDownloadRequest (
     FNetCliFileDownloadRequestCallback  callback
 );
 
+#ifdef __EMSCRIPTEN__
+#include <cstdint>
+
+//============================================================================
+// Browser builds: the download check's arrival record (pfPatcherDownloadCheck.h)
+//============================================================================
+// While RcvdFileDownloadChunkTrans::Post hands a file download's chunk to its writer (hsStream::Write), the CRC-32
+// (zlib's crc32) of that chunk's bytes as DownloadRequestTrans::Recv found them in the file connection's receive
+// buffer, the first place where the chunk exists as a unit. False outside such a Write, or for another writer.
+bool NetCliFileChunkArrivalCrc(const hsStream* writer, uint32_t& crc);
+
+#ifdef PLASMA_TEST_HOOKS
+// Harness builds only: a function DownloadRequestTrans::Recv hands each chunk of a file download (the download's
+// server path, the chunk's bytes, and whether it completes the download) before it takes the chunk's arrival CRC-32,
+// and which returns the bytes to go on with: the chunk's own, or others of its size. The test harness's patcher fault
+// sets it (PLASMA_TEST_PATCHER_CORRUPT_WIRE); null otherwise.
+inline const uint8_t* (*NetCliFileTestChunkHook)(const plFileName& download, const uint8_t* data, unsigned bytes,
+                                                 bool last) = nullptr;
+#endif
+#endif
+
 #endif // PLASMA20_SOURCES_PLASMA_PUBUTILLIB_PLNETGAMELIB_PLNGLFILE_H
