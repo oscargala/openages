@@ -41,15 +41,18 @@
 # *==LICENSE==*/
 
 # pfWGPUPipeline is built only for Emscripten. Its units that hold no WebGPU type (the D3D9 device
-# state, the pipeline keys, the D3D9 texture levels and formats, the fixed-function fragment programs)
+# state, the pipeline keys, the D3D9 texture levels and formats, the fixed-function fragment programs, the sample count
+# across an anti-aliasing change)
 # are built here from their sources, so that they are tested natively.
 set(pfWGPUPipelineTest_SOURCES
     test_plWGPUD3DDevice.cpp
     test_plWGPUFixedFragment.cpp
     test_plWGPUPipelineKey.cpp
+    test_plWGPUSampleCountSwitch.cpp
     test_plWGPUTextureFormat.cpp
     ${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUD3DDevice.cpp
     ${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUFixedFragment.cpp
+    ${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUSampleCountSwitch.cpp
     ${PLASMA_SOURCE_ROOT}/FeatureLib/pfWGPUPipeline/plWGPUTextureFormat.cpp
 )
 
