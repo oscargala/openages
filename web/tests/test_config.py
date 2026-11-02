@@ -1397,6 +1397,109 @@ check(
 )
 
 
+# The page's half of the render scale: a fixture client that reads the page's window report as the
+# client does, through the client's own page library (plEmscriptenDisplay.js plDisplayWatchWindow, which writes the report
+# into the client's memory under its sequence lock: ten doubles, the render scale last), and sets the backing as the
+# client does when it resets its display (plDisplayCanvasBacking, the call plEmscriptenDisplay.cpp's ResizePlayer makes).
+GAME_MODE_CLIENT = (
+    "var plDisplayLib = {};\n"
+    "var addToLibrary = (o) => Object.assign(plDisplayLib, o);\n"
+    + (ROOT / "Sources/Plasma/Apps/plClient/emscripten/plEmscriptenDisplay.js").read_text()
+    + "\nvar HEAP32 = new Int32Array(Module.wasmMemory.buffer), HEAPF64 = new Float64Array(Module.wasmMemory.buffer);\n"
+    # the sequence at byte 0, the fields at byte 64 (HEAPF64[8..17]: dpr, css w h, device w h, fullscreen, screen w h,
+    # cap, render scale)
+    "plDisplayLib.plDisplayWatchWindow(0, 64);\n"
+    "globalThis.fixtureDisplay = {\n"
+    "  report: () => ({seq: Atomics.load(HEAP32, 0), devW: HEAPF64[11], devH: HEAPF64[12], scale: HEAPF64[17]}),\n"
+    "  backing: (w, h) => plDisplayLib.plDisplayCanvasBacking(w, h),\n"
+    "};\n"
+    "Module.onRuntimeInitialized();\n"
+)
+
+
+def render_scale_game_mode():
+    # The page owns the render scale, the game owns its mode. The game's options menu resets the display to a mode of
+    # its own on Resume URU (xOptionsMenu WriteVideoControls(1) -> PtSetGraphicsOptions -> plClient::ResetDisplayDevice),
+    # whose new backing reaches the page through canvasBacking. The sequence: the player picks Supersample 2x; a game
+    # mode change sets the backing to the game's mode (the window's own size, as graphics.ini's mode on a 1x window),
+    # then to the supersampled size (the client keeping the page's choice, plEmscriptenDisplay.cpp ModeFraction): the
+    # page still shows 2x, keeps it saved and reports 2 to the client, and sends no new report. Then the player picks
+    # Standard: shown, saved and reported 1. (The client half, the backing the client then sizes, is in
+    # plEmscriptenDisplay.cpp, which this suite does not run: an online run through the options menu proves it.)
+    build = fixture("game-mode", GAME_MODE_CLIENT)
+    cfg.web_root = str(PAGE_DIR)
+    cfg.build_dir = str(build)
+    publish(document)
+    ctx = browser.new_context(viewport={"width": 1152, "height": 720}, device_scale_factor=1)
+    pg = ctx.new_page()
+    msgs = []
+    pg.on("console", lambda m: msgs.append(m.text))
+    page_state = """()=>({seq:plasma.display.metrics.seq,scale:plasma.display.metrics.scale,chosen:plasma.display.metrics.scaleChosen,
+      shown:document.querySelector('#render-scale [aria-checked="true"]')?.dataset.scale??null,
+      saved:localStorage.getItem('plasma.renderScale'),client:fixtureDisplay.report()})"""
+
+    def pick(v):  # a trusted click on the scale's button, then the page's report (seq) and the client's copy of it
+        s0 = pg.evaluate("()=>plasma.display.metrics.seq")
+        pg.click(f'#render-scale button[data-scale="{v}"]')
+        pg.wait_for_function(
+            "n=>plasma.display.metrics.seq>n&&fixtureDisplay.report().seq%2===0", arg=s0, timeout=15000
+        )
+        pg.wait_for_timeout(200)
+        return pg.evaluate(page_state)
+
+    def backing(w, h):  # the client's reset to a w x h backing
+        n = len(msgs)
+        pg.evaluate("([w,h])=>fixtureDisplay.backing(w,h)", [w, h])
+        pg.wait_for_timeout(500)
+        equal(
+            [m for m in msgs[n:] if m.startswith("[page] canvas backing")],
+            [f"[page] canvas backing {w}x{h} (player mode, the window)"],
+        )
+        return pg.evaluate(page_state)
+
+    try:
+        pg.goto(f"http://127.0.0.1:{server.server_port}/")
+        pg.wait_for_function("()=>globalThis.fixtureDisplay&&fixtureDisplay.report().seq>=2", timeout=30000)
+        st0 = pg.evaluate(page_state)
+        dev = (int(st0["client"]["devW"]), int(st0["client"]["devH"]))
+        equal((st0["shown"], st0["scale"], st0["saved"], st0["client"]["scale"]), ("1", 1, None, 1))
+        st2 = pick(2)
+        equal((st2["shown"], st2["scale"], st2["chosen"], st2["saved"], st2["client"]["scale"]), ("2", 2, 2, "2", 2))
+        reports = st2["client"]["seq"]
+        seen = {"device": "%dx%d" % dev, "picked 2x": st2["client"]["scale"]}
+        for label, (w, h) in (("game mode", dev), ("client keeps 2x", (2 * dev[0], 2 * dev[1]))):
+            st = backing(w, h)
+            # the choice stands through the game's mode: shown, saved and reported 2, and no new report to the client
+            equal(
+                (
+                    label,
+                    st["shown"],
+                    st["scale"],
+                    st["chosen"],
+                    st["saved"],
+                    st["client"]["scale"],
+                    st["client"]["seq"],
+                    st["seq"],
+                ),
+                (label, "2", 2, 2, "2", 2, reports, st2["seq"]),
+            )
+            seen[label] = st["client"]["scale"]
+        st1 = pick(1)
+        equal((st1["shown"], st1["scale"], st1["chosen"], st1["saved"], st1["client"]["scale"]), ("1", 1, 1, "1", 1))
+        ok(st1["client"]["seq"] > reports, st1)
+        seen["picked 1x"] = st1["client"]["scale"]
+    finally:
+        ctx.close()
+        cfg.build_dir = str(web)
+    return seen
+
+
+check(
+    "the page's render-scale choice survives a game mode change: 2x, the game's mode, still 2x shown and reported; then 1x",
+    render_scale_game_mode,
+)
+
+
 def asset_origin_pins():
     # One pin limit, config.mjs ASSET_ORIGIN_PINS (5), which the client build turns into asset-origin-pins.js (plClient
     # CMakeLists.txt). A document whose four roots (data, fonts, sound and the texture packs) name four origins yields
